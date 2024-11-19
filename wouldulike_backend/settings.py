@@ -73,10 +73,16 @@ WSGI_APPLICATION = 'wouldulike_backend.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/5.1/ref/settings/#databases
 
+from decouple import config
+
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': config('DB_NAME'),        # 수정
+        'USER': config('DB_USER'),        # 수정
+        'PASSWORD': config('DB_PASSWORD'),  # 수정
+        'HOST': config('DB_HOST'),        # 수정
+        'PORT': config('DB_PORT'),        # 수정
     }
 }
 
