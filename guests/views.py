@@ -3,6 +3,7 @@ from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from .models import GuestUser
 import uuid
+import json
 
 def get_or_create_guest_user(request):
     # 클라이언트에서 UUID를 전달받는다고 가정
@@ -34,3 +35,23 @@ def update_guest_preferences(request):
         guest_user.save()
 
     return JsonResponse({'message': 'Preferences updated successfully'})
+
+def save_survey_response(request):
+    if request.method == 'POST':
+        # 클라이언트에서 UUID와 설문 응답 데이터를 전송한다고 가정
+        guest_uuid = request.COOKIES.get('guest_uuid')
+        guest_user = get_object_or_404(GuestUser, uuid=guest_uuid)
+
+        # 설문 응답 데이터 받기
+        try:
+            survey_data = json.loads(request.body)  # 요청 본문에서 JSON 데이터 가져오기
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON format'}, status=400)
+
+        # 설문 데이터를 저장 (방법 1: GuestUser 모델 사용)
+        guest_user.survey_responses = survey_data
+        guest_user.save()
+
+        return JsonResponse({'message': 'Survey response saved successfully'})
+
+    return JsonResponse({'error': 'Invalid request method'}, status=405)

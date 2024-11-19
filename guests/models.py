@@ -7,6 +7,7 @@ class GuestUser(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     preferences = models.JSONField(null=True, blank=True)  # 사용자 선호도 저장 예시
+    survey_responses = models.JSONField(null=True, blank=True)  # 설문 응답 추가
 
     def __str__(self):
         return str(self.uuid)
