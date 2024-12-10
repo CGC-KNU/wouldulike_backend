@@ -31,6 +31,9 @@ def update_guest_preferences(request):
     # 클라이언트에서 데이터를 전달받아 업데이트
     preferences = request.POST.get('preferences')  # JSON 데이터 예시
     if preferences:
+        # 기존 선호도 삭제
+        guest_user.preferences = None
+        # 새로운 선호도 저장
         guest_user.preferences = preferences
         guest_user.save()
 
@@ -48,7 +51,9 @@ def save_survey_response(request):
         except json.JSONDecodeError:
             return JsonResponse({'error': 'Invalid JSON format'}, status=400)
 
-        # 설문 데이터를 저장 (방법 1: GuestUser 모델 사용)
+        # 기존 설문 응답 삭제
+        guest_user.survey_responses = None
+        # 새로운 설문 응답 저장
         guest_user.survey_responses = survey_data
         guest_user.save()
 
