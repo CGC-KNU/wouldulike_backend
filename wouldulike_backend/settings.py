@@ -28,7 +28,8 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
-
+# settings.py
+AUTHENTICATION_FORM = 'guests.forms.CustomAuthenticationForm'
 # Application definition
 
 INSTALLED_APPS = [
@@ -42,6 +43,9 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'trends',
+    'type_description',
+    'food_by_type',
+    'restaurants',
 ]
 
 MIDDLEWARE = [
@@ -52,7 +56,15 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
 ]
+
+CORS_ALLOW_ALL_ORIGINS = True # 개발 중 모든 도메인 허용
+# 배포 시 특정 도메인만 허용
+# CORS_ALLOWED_ORIGINS = [
+#     "http://localhost:3000",
+#     "http://127.0.0.1:3000",
+# ]
 
 ROOT_URLCONF = 'wouldulike_backend.urls'
 
@@ -82,14 +94,42 @@ from decouple import config
 
 DATABASES = {
     'default': {
+        # 사용자 데이터베이스
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('DB_NAME'),        # 수정
-        'USER': config('DB_USER'),        # 수정
-        'PASSWORD': config('DB_PASSWORD'),  # 수정
-        'HOST': config('DB_HOST'),        # 수정
-        'PORT': config('DB_PORT'),        # 수정
+        'NAME': config('DB_NAME'),
+        'USER': config('DB_USER'),
+        'PASSWORD': config('DB_PASSWORD'),
+        'HOST': config('DB_HOST'),
+        'PORT': config('DB_PORT'),
+    },
+    'redshift': {
+        # 음식점 데이터베이스
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'dev',
+        'USER': 'admin',
+        'PASSWORD': 'Redshiftadmin1!',
+        'HOST': 'default-workgroup.626635447510.ap-northeast-2.redshift-serverless.amazonaws.com',
+        'PORT': '5439',
+        'OPTIONS': {
+            'options': '-c client_encoding=utf8',
+        },
+    },
+    'rds': {
+        # 유형 데이터베이스
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'wouldulike_rds',
+        'USER': 'postgres',
+        'PASSWORD': 'Rdspostgres1!',
+        'HOST': 'wouldulike-rds.ctc6w0k0wr24.ap-northeast-2.rds.amazonaws.com',
+        'PORT': '5432',
+        'OPTIONS': {
+            'options': '-c client_encoding=utf8',
+        },
     }
 }
+
+
+DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
 
 
 # Password validation
@@ -135,3 +175,5 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+AUTH_USER_MODEL = 'auth.User'  # 기본 Django User 모델 사용
