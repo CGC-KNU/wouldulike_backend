@@ -23,9 +23,11 @@ SECRET_KEY = get_secret("SECRET_KEY")
 
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
-ALLOWED_HOSTS = ['deliberate-lenette-coggiri-5ee7b85e.koyeb.app']
+ALLOWED_HOSTS = ['*']
+
+# ALLOWED_HOSTS = ['deliberate-lenette-coggiri-5ee7b85e.koyeb.app']
 
 # settings.py
 AUTHENTICATION_FORM = 'guests.forms.CustomAuthenticationForm'
@@ -57,6 +59,8 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
     'corsheaders.middleware.CorsMiddleware',
 ]
+
+MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
 
 CORS_ALLOW_ALL_ORIGINS = True # 개발 중 모든 도메인 허용
 # 배포 시 특정 도메인만 허용
@@ -179,3 +183,23 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'auth.User'  # 기본 Django User 모델 사용
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'DEBUG',
+    },
+}
