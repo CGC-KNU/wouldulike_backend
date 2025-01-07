@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import TrendListView, TrendDetailView
+from trends.views import TrendListView, TrendDetailView
 
 urlpatterns = [
     path('trend_list/', TrendListView.as_view(), name='trend-list'), # 트렌드 리스트 조회
