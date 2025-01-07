@@ -1,7 +1,9 @@
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from .models import TypeDescription
+from django.views.decorators.csrf import csrf_exempt
 
+@csrf_exempt
 def get_type_descriptions(request, type_code):
     # 유형 코드를 기반으로 데이터를 가져옴
     type_descriptions = get_object_or_404(TypeDescription, type_code=type_code)

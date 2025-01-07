@@ -2,7 +2,9 @@
 from django.http import JsonResponse
 from .models import GuestUser
 import json
+from django.views.decorators.csrf import csrf_exempt
 
+@csrf_exempt
 def retrieve_guest_user(request):
     uuid = request.GET.get('uuid') # 요청에서 UUID 가져오기
     if not uuid:
@@ -21,6 +23,7 @@ def retrieve_guest_user(request):
         # db에 게스트 사용자가 없는 경우
         return JsonResponse({'status': 'error', 'message': 'Guest user not found'}, status=404)
 
+@csrf_exempt
 def update_guest_user_type_code(request):
     # 유형 코드 업데이트
     data = request.GET  # GET 요청으로 데이터 받음

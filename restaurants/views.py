@@ -3,7 +3,9 @@ from .models import Restaurant
 from food_by_type.models import FoodTasteType
 from guests.models import GuestUser
 import random
+from django.views.decorators.csrf import csrf_exempt
 
+@csrf_exempt
 def get_restaurants_by_foods(request, user_uuid):
     # 사용자 uuid로 유형 코드 가져오기
     try:

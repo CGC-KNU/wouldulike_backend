@@ -4,7 +4,9 @@ from rest_framework import status
 from .models import Trend
 from .serializers import TrendSerializer
 from rest_framework.generics import RetrieveAPIView
+from django.views.decorators.csrf import csrf_exempt
 
+@csrf_exempt
 class TrendListView(APIView):
     def get(self, request):
         trends = Trend.objects.all().order_by('-created_at')  # 최신순 정렬
@@ -12,6 +14,7 @@ class TrendListView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 # id별로 트렌드 상세 정보를 반환하는 뷰
+@csrf_exempt
 class TrendDetailView(RetrieveAPIView):
     queryset = Trend.objects.all()  # 모든 Trend 객체를 대상으로
     serializer_class = TrendSerializer  # Serializer 사용
