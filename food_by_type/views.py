@@ -14,7 +14,7 @@ def get_type_code_from_uuid(user_uuid):
 
 @csrf_exempt
 def get_random_foods(request, user_uuid):
-    # guests 앱에서 uuid를 사용해 유형 코드를 가져오는 로직
+    # guests 앱에서 uuid를 사용해 유형 코드를 가져오는 로직임
     try:
         type_code = get_type_code_from_uuid(user_uuid)
     except Exception as e:
@@ -41,4 +41,3 @@ def get_random_foods(request, user_uuid):
         return JsonResponse({'error_code': 'FOOD_SAMPLING_ERROR', 'message': f'Error sampling foods: {str(e)}'}, status=400)
     except Exception as e:
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
-
