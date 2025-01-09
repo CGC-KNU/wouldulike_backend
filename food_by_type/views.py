@@ -36,7 +36,7 @@ def get_random_foods(request, user_uuid):
     # type_code_id로 food_id들을 가져오기 (type_code_foods 테이블에서)
     try:
         # `type_code` 필드를 참조하여 food_id 가져오기
-        food_ids = TypeCodeFood.objects.filter(type_code=type_code_obj).values_list('food_id', flat=True)
+        food_ids = TypeCodeFood.objects.filter(type_code_id=type_code_obj).values_list('food_id', flat=True)
     except Exception as e:
         return JsonResponse({'error_code': 'FOOD_ID_RETRIEVAL_ERROR', 'message': f'Error retrieving food IDs: {str(e)}'}, status=500)
 

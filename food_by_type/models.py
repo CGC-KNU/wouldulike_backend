@@ -22,9 +22,11 @@ class TypeCode(models.Model):
 
 # TypeCodeFood 테이블 모델
 class TypeCodeFood(models.Model):
-    id = models.AutoField(primary_key=True)
-    food_id = models.ForeignKey(Food, on_delete=models.CASCADE)
-    
+    id = models.IntegerField(primary_key=True)  # id 필드는 기본키와 함께 사용
+    food_id = models.IntegerField()  # food_id 필드
+
+    # 복합 기본 키 설정
     class Meta:
         db_table = 'type_code_foods'  # 테이블 이름
         managed = False  # Django가 이 테이블을 관리하지 않도록 설정
+        unique_together = ('id', 'food_id')  # id와 food_id가 복합 기본 키로 작동하도록 설정
