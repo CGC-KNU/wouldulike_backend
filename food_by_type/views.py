@@ -26,7 +26,7 @@ def get_random_foods(request, user_uuid):
 
     # 유형 코드로 food_type_id를 가져오기
     try:
-        type_code_obj = TypeCode.objects.get(type_code=type_code)
+        type_code_obj = TypeCode.objects.get(type_code_id=type_code)
     except TypeCode.DoesNotExist:
         return JsonResponse({'error_code': 'TYPE_CODE_NOT_FOUND', 'message': 'Type code not found in database'}, status=404)
     except Exception as e:
