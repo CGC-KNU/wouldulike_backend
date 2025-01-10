@@ -19,5 +19,5 @@ class Restaurant(models.Model):
     attribute_4 = models.CharField(max_length=5, null=True, blank=True)  # 속성 4
 
     class Meta:
-        db_table = 'restaurant_table'  # 데이터베이스 테이블 이름
+        db_table = 'food_attribute'  # 데이터베이스 테이블 이름
         managed = False  # Django가 테이블을 관리하지 않도록 설정
