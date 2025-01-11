@@ -236,7 +236,9 @@ if DEBUG:
 else:
     # 배포 환경
     AWS_S3_CUSTOM_DOMAIN = f'wouldulike-bucket.s3.amazonaws.com'
-    STATIC_URL = f"http://wouldulike-default-bucket.s3-website.ap-northeast-2.amazonaws.com/static/"
-    MEDIA_URL = f"http://wouldulike-default-bucket.s3-website.ap-northeast-2.amazonaws.com/media/"
+    STATIC_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/static/"
+    MEDIA_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/media/"
     STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
     DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+
+    # https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/%EA%B0%80%EB%82%98+50%EC%A3%BC%EB%85%84+%EA%B8%B0%EB%85%90.jpg
