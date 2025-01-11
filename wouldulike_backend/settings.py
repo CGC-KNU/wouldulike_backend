@@ -143,10 +143,8 @@ DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
 # AWS S3 설정
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-AWS_STORAGE_BUCKET_NAME = 'wouldulike-bucket'
+AWS_STORAGE_BUCKET_NAME = 'wouldulike-default-bucket'
 AWS_S3_REGION_NAME = 'ap-northeast-2'  # 예: 'ap-northeast-2' (서울)
-
-AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
 
 # STATIC_URL = "http://%s/static/" % AWS_S3_CUSTOM_DOMAIN
 # STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
