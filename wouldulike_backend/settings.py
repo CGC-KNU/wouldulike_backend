@@ -235,7 +235,7 @@ if DEBUG:
     MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 else:
     # 배포 환경
-    AWS_S3_CUSTOM_DOMAIN = f'wouldulike-bucket.s3.amazonaws.com'
+    AWS_S3_CUSTOM_DOMAIN = f'https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com'
     STATIC_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/static/"
     MEDIA_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/media/"
     STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
