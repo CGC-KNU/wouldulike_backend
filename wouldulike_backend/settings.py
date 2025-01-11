@@ -22,10 +22,7 @@ def get_secret(setting):
 SECRET_KEY = get_secret("SECRET_KEY")
 
 
-<<<<<<< HEAD
-=======
-# SECURITY WARNING: don't run with debug turned on in production!
->>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
+
 DEBUG = False
 
 ALLOWED_HOSTS = ['*']
@@ -50,10 +47,7 @@ INSTALLED_APPS = [
     'type_description',
     'food_by_type',
     'restaurants',
-<<<<<<< HEAD
     'storages',
-=======
->>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
 ]
 
 MIDDLEWARE = [
@@ -82,11 +76,7 @@ ROOT_URLCONF = 'wouldulike_backend.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-<<<<<<< HEAD
         'DIRS': [BASE_DIR / 'templates'],
-=======
-        'DIRS': [],
->>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -108,7 +98,7 @@ WSGI_APPLICATION = 'wouldulike_backend.wsgi.application'
 from decouple import config
 
 DATABASES = {
-    'default': {
+    'default': {   
         # 사용자 데이터베이스
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': config('default_db_name'),
@@ -119,11 +109,7 @@ DATABASES = {
     },
     'redshift': {
         # 음식점 데이터베이스
-<<<<<<< HEAD
-        'ENGINE': 'db_backends.redshift',
-=======
-        'ENGINE': 'django.db.backends.postgresql',
->>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
+        'ENGINE': 'db_backends.redshift',  
         'NAME': config('redshift_db_name'),
         'USER': config('redshift_db_user'),
         'PASSWORD': config('redshift_db_password'),
@@ -151,7 +137,6 @@ DATABASES = {
 DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
 
 
-<<<<<<< HEAD
 # AWS S3 설정
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -168,8 +153,6 @@ MEDIA_URL = "http://%s/media/" % AWS_S3_CUSTOM_DOMAIN
 DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
 
-=======
->>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
 # Password validation
 # https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
 
@@ -204,8 +187,6 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/5.1/howto/static-files/
 
-<<<<<<< HEAD
-=======
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 STATIC_URL = '/static/'
@@ -215,7 +196,6 @@ STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
->>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
