@@ -5,8 +5,8 @@ class TypeDescriptionRouter:
         """
         if model._meta.app_label in {'type_description', 'food_by_type'}:
             return 'rds'  # type_description, food_by_type은 rds에서 읽음
-        elif model._meta.app_label == 'restaurants':
-            return 'redshift'
+        # elif model._meta.app_label == 'restaurants':
+        #     return 'redshift'
         return 'default'  # 나머지는 기본 데이터베이스 사용
 
     def db_for_write(self, model, **hints):
@@ -15,8 +15,8 @@ class TypeDescriptionRouter:
         """
         if model._meta.app_label in {'type_description', 'food_by_type'}:
             return 'rds'  # type_description, food_by_type은 rds에 씀
-        elif model._meta.app_label == 'restaurants':
-            return 'redshift'
+        # elif model._meta.app_label == 'restaurants':
+        #     return 'redshift'
         return 'default'  # 나머지는 기본 데이터베이스 사용
 
     def allow_relation(self, obj1, obj2, **hints):
@@ -31,6 +31,6 @@ class TypeDescriptionRouter:
         """
         if app_label in {'type_description', 'food_by_type'}:
             return db == 'rds'  # type_description은 rds에만 마이그레이션
-        elif app_label == 'restaurants':
-            return db == 'redshift'
+        # elif app_label == 'restaurants':
+        #     return db == 'redshift'
         return db == 'default'  # 나머지는 기본 데이터베이스에 마이그레이션

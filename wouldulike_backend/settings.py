@@ -23,7 +23,7 @@ SECRET_KEY = get_secret("SECRET_KEY")
 
 
 
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
@@ -107,18 +107,21 @@ DATABASES = {
         'HOST': config('default_db_host'),
         'PORT': config('default_db_port'),
     },
-    'redshift': {
-        # 음식점 데이터베이스
-        'ENGINE': 'db_backends.redshift',  
-        'NAME': config('redshift_db_name'),
-        'USER': config('redshift_db_user'),
-        'PASSWORD': config('redshift_db_password'),
-        'HOST': config('redshift_db_host'),
-        'PORT': config('redshift_db_port'),
-        'OPTIONS': {
-            'options': '-c client_encoding=utf8',
-        },
-    },
+    # 'redshift': {
+    #     # 음식점 데이터베이스
+    #     'ENGINE': 'db_backends.redshift',  
+    #     'NAME': config('redshift_db_name'),
+    #     'USER': config('redshift_db_user'),
+    #     'PASSWORD': config('redshift_db_password'),
+    #     'HOST': config('redshift_db_host'),
+    #     'PORT': config('redshift_db_port'),
+    #     'OPTIONS': {
+    #         'options': '-c client_encoding=utf8',
+    #     },
+    #     'TEST': {
+    #         'MIRROR': 'redshift'
+    #     },
+    # },
     'rds': {
         # 유형 데이터베이스
         'ENGINE': 'django.db.backends.postgresql',

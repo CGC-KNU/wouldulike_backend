@@ -1,10 +1,14 @@
-from django.contrib import admin
-from .models import Restaurant
+from django.test import TestCase
+from restaurants.models import Restaurant
 
-# Register your models here.
-admin.site.register(Restaurant)
+class RestaurantTestCase(TestCase):
+    databases = {'default', 'redshift'}  # Redshift 데이터베이스 허용
 
-# 데이터 가져오기 테스트
-restaurants = Restaurant.objects.using('redshift').all()[:10]
-for restaurant in restaurants:
-    print(restaurant)
+    def test_fetch_restaurants(self):
+        try:
+            # Redshift에서 데이터 가져오기
+            restaurants = Restaurant.objects.using('redshift').all()[:10]
+            self.assertGreater(len(restaurants), 0, "No restaurants fetched!")
+            print("Fetched Restaurants:", restaurants)
+        except Exception as e:
+            self.fail(f"Fetching restaurants failed with error: {e}")
