@@ -26,16 +26,9 @@ def get_random_restaurants(request):
         # JSON 응답 반환
         return JsonResponse({'random_restaurants': list(random_restaurants)}, status=200)
 
-<<<<<<< HEAD
     except json.JSONDecodeError:
         return JsonResponse({'error_code': 'INVALID_JSON', 'message': 'Request body must be valid JSON'}, status=400)
     except ValueError as e:
         return JsonResponse({'error_code': 'RANDOM_SAMPLING_ERROR', 'message': f'Error sampling restaurants: {str(e)}'}, status=400)
     except Exception as e:
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
-=======
-    except ValueError as e:
-        return JsonResponse({'error_code': 'RANDOM_SAMPLING_ERROR', 'message': f'Error sampling restaurants: {str(e)}'}, status=400)
-    except Exception as e:
-        return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
->>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd

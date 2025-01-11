@@ -1,13 +1,4 @@
 class TypeDescriptionRouter:
-<<<<<<< HEAD
-=======
-    """
-    라우터 설정:
-    - type_description 앱은 rds 데이터베이스를 사용
-    - 다른 앱은 기본 데이터베이스(default)를 사용
-    """
->>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
-
     def db_for_read(self, model, **hints):
         """
         데이터 읽기 시 어떤 데이터베이스를 사용할지 결정
@@ -28,18 +19,6 @@ class TypeDescriptionRouter:
             return 'redshift'
         return 'default'  # 나머지는 기본 데이터베이스 사용
 
-<<<<<<< HEAD
-=======
-    # def allow_relation(self, obj1, obj2, **hints):
-    #     """
-    #     두 모델 간의 관계를 허용할지 결정
-    #     """
-    #     db_set = {'rds', 'default', 'redshift'}
-    #     if obj1._state.db in db_set and obj2._state.db in db_set:
-    #         return True
-    #     return None
-
->>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
     def allow_relation(self, obj1, obj2, **hints):
         """
         모든 데이터베이스 간의 관계를 허용
