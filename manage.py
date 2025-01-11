@@ -4,9 +4,12 @@ import os
 import sys
 
 
+<<<<<<< HEAD
 # 프로젝트 루트를 sys.path에 추가
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+=======
+>>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
 def main():
     """Run administrative tasks."""
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'wouldulike_backend.settings')

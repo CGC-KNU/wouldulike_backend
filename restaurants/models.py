@@ -1,7 +1,10 @@
 from django.db import models
 
 class Restaurant(models.Model):
+<<<<<<< HEAD
     id = models.IntegerField(primary_key=True)
+=======
+>>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
     name = models.CharField(max_length=255)  # 음식점 이름
     status = models.CharField(max_length=50)  # 상태
     address_zip_code = models.CharField(max_length=50, null=True, blank=True)  # 우편번호
@@ -19,9 +22,14 @@ class Restaurant(models.Model):
     attribute_3 = models.CharField(max_length=5, null=True, blank=True)  # 속성 3
     attribute_4 = models.CharField(max_length=5, null=True, blank=True)  # 속성 4
 
+<<<<<<< HEAD
     def __str__(self):
         return self.name
 
     class Meta:
         db_table = 'restaurant_new'  # 데이터베이스 테이블 이름
+=======
+    class Meta:
+        db_table = 'food_attribute'  # 데이터베이스 테이블 이름
+>>>>>>> e298dbcddba9311027e3c04bcc0c5d062bd49cdd
         managed = False  # Django가 테이블을 관리하지 않도록 설정
