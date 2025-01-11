@@ -148,12 +148,12 @@ AWS_S3_REGION_NAME = 'ap-northeast-2'  # 예: 'ap-northeast-2' (서울)
 
 AWS_S3_CUSTOM_DOMAIN = f'{AWS_STORAGE_BUCKET_NAME}.s3.amazonaws.com'
 
-STATIC_URL = "http://%s/static/" % AWS_S3_CUSTOM_DOMAIN
-STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+# STATIC_URL = "http://%s/static/" % AWS_S3_CUSTOM_DOMAIN
+# STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
-# 미디어 파일 저장소 설정
-MEDIA_URL = "http://%s/media/" % AWS_S3_CUSTOM_DOMAIN
-DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+# # 미디어 파일 저장소 설정
+# MEDIA_URL = "http://%s/media/" % AWS_S3_CUSTOM_DOMAIN
+# DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
 
 # Password validation
@@ -192,12 +192,12 @@ USE_TZ = True
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-STATIC_URL = '/static/'
-STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')  # 정적 파일을 수집할 디렉토리
-STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+# STATIC_URL = '/static/'
+# STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')  # 정적 파일을 수집할 디렉토리
+# STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
-MEDIA_URL = '/media/'
-MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+# MEDIA_URL = '/media/'
+# MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
@@ -225,3 +225,18 @@ LOGGING = {
         'level': 'DEBUG',
     },
 }
+
+if DEBUG:
+    # 개발 환경
+    STATIC_URL = '/static/'
+    STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+    MEDIA_URL = '/media/'
+    MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
+else:
+    # 배포 환경
+    AWS_S3_CUSTOM_DOMAIN = f'wouldulike-bucket.s3.amazonaws.com'
+    STATIC_URL = f"http://wouldulike-default-bucket.s3-website.ap-northeast-2.amazonaws.com/static/"
+    MEDIA_URL = f"http://wouldulike-default-bucket.s3-website.ap-northeast-2.amazonaws.com/media/"
+    STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
