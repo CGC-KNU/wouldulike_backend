@@ -1,9 +1,10 @@
 from pathlib import Path
 import os, json
 from django.core.exceptions import ImproperlyConfigured
+from decouple import config
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-
 
 secret_file = os.path.join(BASE_DIR, 'secrets.json')  # secrets.json 파일 위치를 명시
 
@@ -18,20 +19,25 @@ def get_secret(setting):
         error_msg = "Set the {} environment variable".format(setting)
         raise ImproperlyConfigured(error_msg)
 
-
 SECRET_KEY = get_secret("SECRET_KEY")
-
 
 
 DEBUG = False
 
-ALLOWED_HOSTS = ['*']
 
+ALLOWED_HOSTS = ['*']
 # ALLOWED_HOSTS = ['deliberate-lenette-coggiri-5ee7b85e.koyeb.app']
 
-# settings.py
+CORS_ALLOW_ALL_ORIGINS = True # 개발 중 모든 도메인 허용
+# 배포 시 특정 도메인만 허용
+# CORS_ALLOWED_ORIGINS = [
+#     "http://localhost:3000",
+#     "http://127.0.0.1:3000",
+# ]
+
+
 AUTHENTICATION_FORM = 'guests.forms.CustomAuthenticationForm'
-# Application definition
+
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -41,14 +47,15 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'guests',
-    'rest_framework',
-    'corsheaders',
     'trends',
     'type_description',
     'food_by_type',
     'restaurants',
+    'rest_framework',
+    'corsheaders',
     'storages',
 ]
+
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -64,14 +71,9 @@ MIDDLEWARE = [
 
 MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
 
-CORS_ALLOW_ALL_ORIGINS = True # 개발 중 모든 도메인 허용
-# 배포 시 특정 도메인만 허용
-# CORS_ALLOWED_ORIGINS = [
-#     "http://localhost:3000",
-#     "http://127.0.0.1:3000",
-# ]
 
 ROOT_URLCONF = 'wouldulike_backend.urls'
+
 
 TEMPLATES = [
     {
@@ -89,13 +91,9 @@ TEMPLATES = [
     },
 ]
 
+
 WSGI_APPLICATION = 'wouldulike_backend.wsgi.application'
 
-
-# Database
-# https://docs.djangoproject.com/en/5.1/ref/settings/#databases
-
-from decouple import config
 
 DATABASES = {
     'default': {   
@@ -144,7 +142,8 @@ DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_STORAGE_BUCKET_NAME = 'wouldulike-default-bucket'
-AWS_S3_REGION_NAME = 'ap-northeast-2'  # 예: 'ap-northeast-2' (서울)
+AWS_S3_REGION_NAME = 'ap-northeast-2'
+
 
 # STATIC_URL = "http://%s/static/" % AWS_S3_CUSTOM_DOMAIN
 # STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
@@ -153,9 +152,6 @@ AWS_S3_REGION_NAME = 'ap-northeast-2'  # 예: 'ap-northeast-2' (서울)
 # MEDIA_URL = "http://%s/media/" % AWS_S3_CUSTOM_DOMAIN
 # DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
-
-# Password validation
-# https://docs.djangoproject.com/en/5.1/ref/settings/#auth-password-validators
 
 AUTH_PASSWORD_VALIDATORS = [
     {
@@ -172,9 +168,6 @@ AUTH_PASSWORD_VALIDATORS = [
     },
 ]
 
-
-# Internationalization
-# https://docs.djangoproject.com/en/5.1/topics/i18n/
 
 LANGUAGE_CODE = 'en-us'
 
@@ -233,10 +226,9 @@ if DEBUG:
     MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 else:
     # 배포 환경
-    AWS_S3_CUSTOM_DOMAIN = f'https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com'
+    AWS_S3_CUSTOM_DOMAIN = f'https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/'
     STATIC_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/static/"
     MEDIA_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/media/"
     STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
     DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-
     # https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/%EA%B0%80%EB%82%98+50%EC%A3%BC%EB%85%84+%EA%B8%B0%EB%85%90.jpg
