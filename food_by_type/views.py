@@ -43,7 +43,7 @@ def get_random_foods(request):
 
     # food_ids로 foods 테이블에서 food_name과 description을 가져오기
     try:
-        foods = Food.objects.filter(food_id__in=food_ids).values('food_id', 'food_name', 'description')
+        foods = Food.objects.filter(food_id__in=food_ids).values('food_id', 'food_name', 'description', 'food_image_url')
     except Exception as e:
         return JsonResponse({'error_code': 'FOODS_RETRIEVAL_ERROR', 'message': f'Error retrieving food details: {str(e)}'}, status=500)
 
