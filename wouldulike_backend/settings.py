@@ -12,7 +12,6 @@ with open(secret_file) as f:
     secrets = json.loads(f.read())
 
 def get_secret(setting):
-    """비밀 변수를 가져오거나 명시적 예외를 반환한다."""
     try:
         return secrets[setting]
     except KeyError:
@@ -138,19 +137,11 @@ DATABASES = {
 DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
 
 
-# AWS S3 설정
+# AWS S3 설정 (개인)
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_STORAGE_BUCKET_NAME = 'wouldulike-default-bucket'
 AWS_S3_REGION_NAME = 'ap-northeast-2'
-
-
-# STATIC_URL = "http://%s/static/" % AWS_S3_CUSTOM_DOMAIN
-# STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-
-# # 미디어 파일 저장소 설정
-# MEDIA_URL = "http://%s/media/" % AWS_S3_CUSTOM_DOMAIN
-# DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
 
 
 AUTH_PASSWORD_VALIDATORS = [
@@ -178,20 +169,8 @@ USE_I18N = True
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.1/howto/static-files/
-
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# STATIC_URL = '/static/'
-# STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')  # 정적 파일을 수집할 디렉토리
-# STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
-
-# MEDIA_URL = '/media/'
-# MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
-
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.1/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
