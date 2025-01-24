@@ -22,6 +22,7 @@ def get_all_type_descriptions(request, type_code):
     type_descriptions = get_object_or_404(TypeDescription, type_code=type_code)
     data = {
         "type_code": type_descriptions.type_code,
+        "type_name": type_descriptions.type_name,
         "description_detail": type_descriptions.description_detail, # 유형 설명
         "menu_and_mbti": type_descriptions.menu_and_mbti, # 어울리는 메뉴와 MBTI
         "meal_example": type_descriptions.meal_example, # 식사 경우 (예시)

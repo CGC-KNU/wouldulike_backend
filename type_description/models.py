@@ -16,6 +16,7 @@ from django.db import models
 class TypeDescription(models.Model):
     id = models.AutoField(primary_key=True)
     type_code = models.CharField(max_length=4, null=False)
+    type_name = models.CharField(max_length=255, null=False)
     description = models.TextField(null=False)
     # image = models.CharField(max_length=255, blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
