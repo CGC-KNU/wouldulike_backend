@@ -49,7 +49,7 @@ def get_random_foods(request):
 
     # 랜덤으로 3개 음식 선택
     try:
-        random_foods = random.sample(list(foods), min(len(foods), 3))  # 최대 3개 음식
+        random_foods = random.sample(list(foods), min(len(foods), 5))  # 최대 5개 음식
         return JsonResponse({'random_foods': random_foods})
     except ValueError as e:
         return JsonResponse({'error_code': 'FOOD_SAMPLING_ERROR', 'message': f'Error sampling foods: {str(e)}'}, status=400)

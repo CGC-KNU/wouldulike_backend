@@ -77,8 +77,8 @@ def get_random_restaurants(request):
         if not restaurants:
             return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
 
-        # 랜덤으로 5개 음식점 선택
-        random_restaurants = random.sample(restaurants, min(len(restaurants), 5))
+        # 랜덤으로 15개 음식점 선택
+        random_restaurants = random.sample(restaurants, min(len(restaurants), 15))
 
         # JSON 응답 반환
         return JsonResponse({'random_restaurants': [
