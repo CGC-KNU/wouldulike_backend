@@ -26,21 +26,21 @@ def get_secret(setting):
         error_msg = "Set the {} environment variable".format(setting)
         raise ImproperlyConfigured(error_msg)
 
-SECRET_KEY = get_secret("SECRET_KEY")
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 
 DEBUG = False
 
 
-ALLOWED_HOSTS = ['*']
-# ALLOWED_HOSTS = ['deliberate-lenette-coggiri-5ee7b85e.koyeb.app']
+# ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = ['deliberate-lenette-coggiri-5ee7b85e.koyeb.app', 'localhost', '127.0.0.1']
 
-CORS_ALLOW_ALL_ORIGINS = True # 개발 중 모든 도메인 허용
-# 배포 시 특정 도메인만 허용
-# CORS_ALLOWED_ORIGINS = [
-#     "http://localhost:3000",
-#     "http://127.0.0.1:3000",
-# ]
+# CORS_ALLOW_ALL_ORIGINS = True # 개발 중 모든 도메인 허용
+# # 배포 시 특정 도메인만 허용
+# # CORS_ALLOWED_ORIGINS = [
+# #     "http://localhost:3000",
+# #     "http://127.0.0.1:3000",
+# # ]
 
 
 AUTHENTICATION_FORM = 'guests.forms.CustomAuthenticationForm'
@@ -106,11 +106,11 @@ DATABASES = {
     'default': {   
         # 사용자 데이터베이스
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('default_db_name'),
-        'USER': config('default_db_user'),
-        'PASSWORD': config('default_db_password'),
-        'HOST': config('default_db_host'),
-        'PORT': config('default_db_port'),
+        'NAME': os.getenv('default_db_name'),
+        'USER': os.getenv('default_db_user'),
+        'PASSWORD': os.getenv('default_db_password'),
+        'HOST': os.getenv('default_db_host'),
+        'PORT': os.getenv('default_db_port'),
     },
     # 'redshift': {
     #     # 음식점 데이터베이스
@@ -130,11 +130,11 @@ DATABASES = {
     'rds': {
         # 유형 데이터베이스
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': config('rds_db_name'),
-        'USER': config('rds_db_user'),
-        'PASSWORD': config('rds_db_password'),
-        'HOST': config('rds_db_host'),
-        'PORT': config('rds_db_port'),
+        'NAME': os.getenv('rds_db_name'),
+        'USER': os.getenv('rds_db_user'),
+        'PASSWORD': os.getenv('rds_db_password'),
+        'HOST': os.getenv('rds_db_host'),
+        'PORT': os.getenv('rds_db_port'),
         'OPTIONS': {
             'options': '-c client_encoding=utf8',
         },
