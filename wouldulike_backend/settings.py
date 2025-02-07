@@ -1,10 +1,18 @@
 from pathlib import Path
-import os, json
+import os, json, environ
 from django.core.exceptions import ImproperlyConfigured
 from decouple import config
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+# .env 파일 로드
+env = environ.Env()
+environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
+
+REDIS_URL = env("REDIS_URL")
+
 
 secret_file = os.path.join(BASE_DIR, 'secrets.json')  # secrets.json 파일 위치를 명시
 
@@ -135,6 +143,21 @@ DATABASES = {
 
 
 DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
+
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": os.getenv("REDIS_URL"),
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}
+
+# Redis 연결 정보
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = os.getenv("REDIS_PORT")
 
 
 # AWS S3 설정 (개인)
