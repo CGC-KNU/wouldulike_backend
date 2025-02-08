@@ -60,13 +60,17 @@ def get_random_foods(request):
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
     
 
-    # Redis 클라이언트 설정 (Django settings에 Redis 설정 필요)
+# Redis 클라이언트 설정 (Django settings에 Redis 설정 필요)
 redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True)
 
 def get_unique_random_foods(request):
     try:
         data = request.GET
         user_uuid = data.get('uuid')
+
+        # 디버깅: UUID 확인
+        print(f"Received UUID: {user_uuid}")
+
         if not user_uuid:
             return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'UUID is required'}, status=400)
         
@@ -74,42 +78,114 @@ def get_unique_random_foods(request):
         try:
             guest_user = GuestUser.objects.get(uuid=user_uuid)
             type_code = guest_user.type_code
+            print(f"GuestUser found: {guest_user}, TypeCode: {type_code}")
         except ObjectDoesNotExist:
+            print(f"GuestUser with UUID {user_uuid} not found!")
             return JsonResponse({'error_code': 'TYPE_CODE_NOT_FOUND', 'message': 'Invalid UUID or no type code found'}, status=404)
         
         # 유형 코드로 type_code_id 조회
         try:
             type_code_obj = TypeCode.objects.get(type_code=type_code)
             type_code_id = type_code_obj.type_code_id
+            print(f"TypeCode found: {type_code_obj}, TypeCodeID: {type_code_id}")
         except TypeCode.DoesNotExist:
+            print(f"TypeCode {type_code} not found in database!")
             return JsonResponse({'error_code': 'TYPE_CODE_NOT_FOUND', 'message': 'Type code not found in database'}, status=404)
         
         # type_code_id로 food_id 목록 가져오기
         food_ids = list(TypeCodeFood.objects.filter(type_code_id=type_code_id).values_list('food_id', flat=True))
-        
+        print(f"Food IDs for TypeCodeID {type_code_id}: {food_ids}")
+
         # food_ids로 foods 테이블에서 food 정보 가져오기
         foods = list(Food.objects.filter(food_id__in=food_ids).values('food_id', 'food_name', 'description', 'food_image_url'))
+        print(f"Foods retrieved: {foods}")
         
         if not foods:
+            print(f"No foods available for TypeCodeID {type_code_id}")
             return JsonResponse({'error_code': 'NO_FOOD_FOUND', 'message': 'No food available for this type code'}, status=404)
         
         # 캐시 키 설정 (UUID 기반)
         cache_key = f'user:{user_uuid}:foods'
         cached_foods = redis_client.lrange(cache_key, 0, -1)  # 기존 캐시된 음식 목록 가져오기
-        
+        print(f"Cached foods for {user_uuid}: {cached_foods}")
+
         # 중복되지 않도록 음식 필터링
         available_foods = [food for food in foods if food['food_name'] not in cached_foods]
+        print(f"Available foods after filtering cached foods: {available_foods}")
+        
+        if not available_foods:
+            print(f"No unique foods available for UUID {user_uuid}")
+            return JsonResponse({'error_code': 'NOT_ENOUGH_FOOD', 'message': 'No unique food options available'}, status=404)
         
         # 랜덤으로 10개 선택
         random_foods = random.sample(available_foods, min(len(available_foods), 10))
+        print(f"Random foods selected: {random_foods}")
         
         # 새로운 음식명을 캐시에 추가 (최대 80개 유지)
         new_food_names = [food['food_name'] for food in random_foods]
-        redis_client.rpush(cache_key, *new_food_names)  # 음식명 추가
-        redis_client.ltrim(cache_key, -80, -1)  # 최근 80개 유지
-        redis_client.expire(cache_key, 600)  # 10분(600초) 후 만료
+        if new_food_names:
+            redis_client.rpush(cache_key, *new_food_names)  # 음식명 추가
+            redis_client.ltrim(cache_key, -80, -1)  # 최근 80개 유지
+            redis_client.expire(cache_key, 600)  # 10분(600초) 후 만료
+            print(f"Updated cache for {user_uuid}: {redis_client.lrange(cache_key, 0, -1)}")
         
         return JsonResponse({'random_foods': random_foods})
     
     except Exception as e:
+        print(f"Unexpected error: {str(e)}")
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
+
+
+#     # Redis 클라이언트 설정 (Django settings에 Redis 설정 필요)
+# redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True)
+
+# def get_unique_random_foods(request):
+#     try:
+#         data = request.GET
+#         user_uuid = data.get('uuid')
+#         if not user_uuid:
+#             return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'UUID is required'}, status=400)
+        
+#         # UUID로 GuestUser 조회 및 type_code 가져오기
+#         try:
+#             guest_user = GuestUser.objects.get(uuid=user_uuid)
+#             type_code = guest_user.type_code
+#         except ObjectDoesNotExist:
+#             return JsonResponse({'error_code': 'TYPE_CODE_NOT_FOUND', 'message': 'Invalid UUID or no type code found'}, status=404)
+        
+#         # 유형 코드로 type_code_id 조회
+#         try:
+#             type_code_obj = TypeCode.objects.get(type_code=type_code)
+#             type_code_id = type_code_obj.type_code_id
+#         except TypeCode.DoesNotExist:
+#             return JsonResponse({'error_code': 'TYPE_CODE_NOT_FOUND', 'message': 'Type code not found in database'}, status=404)
+        
+#         # type_code_id로 food_id 목록 가져오기
+#         food_ids = list(TypeCodeFood.objects.filter(type_code_id=type_code_id).values_list('food_id', flat=True))
+        
+#         # food_ids로 foods 테이블에서 food 정보 가져오기
+#         foods = list(Food.objects.filter(food_id__in=food_ids).values('food_id', 'food_name', 'description', 'food_image_url'))
+        
+#         if not foods:
+#             return JsonResponse({'error_code': 'NO_FOOD_FOUND', 'message': 'No food available for this type code'}, status=404)
+        
+#         # 캐시 키 설정 (UUID 기반)
+#         cache_key = f'user:{user_uuid}:foods'
+#         cached_foods = redis_client.lrange(cache_key, 0, -1)  # 기존 캐시된 음식 목록 가져오기
+        
+#         # 중복되지 않도록 음식 필터링
+#         available_foods = [food for food in foods if food['food_name'] not in cached_foods]
+        
+#         # 랜덤으로 10개 선택
+#         random_foods = random.sample(available_foods, min(len(available_foods), 10))
+        
+#         # 새로운 음식명을 캐시에 추가 (최대 80개 유지)
+#         new_food_names = [food['food_name'] for food in random_foods]
+#         redis_client.rpush(cache_key, *new_food_names)  # 음식명 추가
+#         redis_client.ltrim(cache_key, -80, -1)  # 최근 80개 유지
+#         redis_client.expire(cache_key, 600)  # 10분(600초) 후 만료
+        
+#         return JsonResponse({'random_foods': random_foods})
+    
+#     except Exception as e:
+#         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
