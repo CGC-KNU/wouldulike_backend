@@ -32,8 +32,8 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 DEBUG = False
 
 
-# ALLOWED_HOSTS = ['*']
-ALLOWED_HOSTS = ['deliberate-lenette-coggiri-5ee7b85e.koyeb.app', 'localhost', '127.0.0.1']
+ALLOWED_HOSTS = ['*']
+# ALLOWED_HOSTS = ['deliberate-lenette-coggiri-5ee7b85e.koyeb.app', 'localhost', '127.0.0.1']
 
 # CORS_ALLOW_ALL_ORIGINS = True # 개발 중 모든 도메인 허용
 # # 배포 시 특정 도메인만 허용
@@ -231,6 +231,11 @@ else:
     AWS_S3_CUSTOM_DOMAIN = f'https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/'
     STATIC_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/static/"
     MEDIA_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/"
-    STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
-    DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    AWS_QUERYSTRING_AUTH = False  # S3에서 URL에 인증 정보 포함 안 함 (더 깔끔한 URL)
+    AWS_S3_OBJECT_PARAMETERS = {
+        'CacheControl': 'max-age=86400',  # 정적 파일 캐싱 (24시간)
+    }
+
+    # STATICFILES_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
+    # DEFAULT_FILE_STORAGE = 'storages.backends.s3boto3.S3Boto3Storage'
     # https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/%EA%B0%80%EB%82%98+50%EC%A3%BC%EB%85%84+%EA%B8%B0%EB%85%90.jpg
