@@ -94,30 +94,50 @@ def get_unique_random_foods(request):
         if not foods:
             return JsonResponse({'error_code': 'NO_FOOD_FOUND', 'message': 'No food available for this type code'}, status=404)
 
+        # Redis 캐시 확인
         cache_key = f'user:{user_uuid}:foods'
-        cached_foods = redis_client.lrange(cache_key, 0, -1)
-        print(f"Cached foods: {cached_foods}")
+        try:
+            cached_foods = redis_client.lrange(cache_key, 0, -1)
+            print(f"Step 1: Cached foods retrieved for key {cache_key}: {cached_foods}")
+        except Exception as e:
+            print(f"Step 1 Error: Failed to retrieve cached foods for key {cache_key}: {e}")
+            return JsonResponse({'error_code': 'CACHE_READ_ERROR', 'message': f'Error reading cache: {str(e)}'}, status=500)
 
-        available_foods = [food for food in foods if food['food_name'] not in cached_foods]
-        if not available_foods:
-            return JsonResponse({'error_code': 'NOT_ENOUGH_FOOD', 'message': 'No unique food options available'}, status=404)
+        # 중복되지 않는 음식 필터링
+        try:
+            available_foods = [food for food in foods if food['food_name'] not in cached_foods]
+            print(f"Step 2: Available foods after filtering cached foods: {available_foods}")
+            if not available_foods:
+                return JsonResponse({'error_code': 'NOT_ENOUGH_FOOD', 'message': 'No unique food options available'}, status=404)
+        except Exception as e:
+            print(f"Step 2 Error: Error filtering available foods: {e}")
+            return JsonResponse({'error_code': 'FOOD_FILTER_ERROR', 'message': f'Error filtering foods: {str(e)}'}, status=500)
 
-        random_foods = random.sample(available_foods, min(len(available_foods), 10))
-        print(f"Random foods selected: {random_foods}")
+        # 랜덤으로 10개 선택
+        try:
+            random_foods = random.sample(available_foods, min(len(available_foods), 10))
+            print(f"Step 3: Random foods selected: {random_foods}")
+        except Exception as e:
+            print(f"Step 3 Error: Error selecting random foods: {e}")
+            return JsonResponse({'error_code': 'RANDOM_SELECTION_ERROR', 'message': f'Error selecting random foods: {str(e)}'}, status=500)
 
-        new_food_names = [food['food_name'] for food in random_foods]
-        if new_food_names:
-            redis_client.rpush(cache_key, *new_food_names)
-            redis_client.ltrim(cache_key, -80, -1)
-            redis_client.expire(cache_key, 600)
-            print(f"Updated cache: {redis_client.lrange(cache_key, 0, -1)}")
+        # Redis 캐시 갱신
+        try:
+            new_food_names = [food['food_name'] for food in random_foods]
+            if new_food_names:
+                redis_client.rpush(cache_key, *new_food_names)
+                redis_client.ltrim(cache_key, -80, -1)
+                redis_client.expire(cache_key, 600)
+                print(f"Step 4: Updated cache for key {cache_key}: {redis_client.lrange(cache_key, 0, -1)}")
+        except Exception as e:
+            print(f"Step 4 Error: Failed to update cache for key {cache_key}: {e}")
+            return JsonResponse({'error_code': 'CACHE_UPDATE_ERROR', 'message': f'Error updating cache: {str(e)}'}, status=500)
 
         return JsonResponse({'random_foods': random_foods})
     
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
-
 
 
 #     # Redis 클라이언트 설정 (Django settings에 Redis 설정 필요)
