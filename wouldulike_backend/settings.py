@@ -11,8 +11,6 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env()
 environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
-REDIS_URL = env("REDIS_URL")
-
 
 secret_file = os.path.join(BASE_DIR, 'secrets.json')  # secrets.json 파일 위치를 명시
 
@@ -151,6 +149,7 @@ CACHES = {
         "LOCATION": os.getenv("REDIS_URL"),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "PASSWORD": os.getenv("REDIS_PASSWORD"),
         }
     }
 }
@@ -158,6 +157,7 @@ CACHES = {
 # Redis 연결 정보
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
 
 # AWS S3 설정 (개인)

@@ -4,7 +4,7 @@ from .models import TypeCode, TypeCodeFood, Food
 from guests.models import GuestUser
 from django.core.exceptions import ObjectDoesNotExist
 from django.views.decorators.csrf import csrf_exempt
-import redis
+from redis import Redis
 from django.conf import settings
 from django.core.cache import cache
 
@@ -62,7 +62,14 @@ def get_random_foods(request):
     
 
 # Redis 클라이언트 설정 (Django settings에 Redis 설정 필요)
-redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True)
+# redis_client = redis.Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT, db=0, decode_responses=True)
+redis_client = Redis(
+    host=settings.REDIS_HOST,
+    port=settings.REDIS_PORT,
+    db=0,
+    password=settings.REDIS_PASSWORD,  # 비밀번호 추가
+    decode_responses=True,
+)
 
 def get_unique_random_foods(request):
     try:
