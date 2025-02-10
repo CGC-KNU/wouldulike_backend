@@ -9,7 +9,7 @@ def get_type_descriptions(request, type_code):
     type_descriptions = get_object_or_404(TypeDescription, type_code=type_code)
     data = {
             "type_code": type_descriptions.type_code,
-            "description": type_descriptions.description,
+            "description": type_descriptions.description_detail,
             # "image": type_descriptions.image,
             "created_at": type_descriptions.created_at,
             "updated_at": type_descriptions.updated_at,
