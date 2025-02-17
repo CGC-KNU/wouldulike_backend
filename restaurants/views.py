@@ -73,8 +73,8 @@ def get_random_restaurants(request):
         data = json.loads(request.body)
         food_names = data.get('food_names', [])
 
-        if not food_names:
-            return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'Food names are required'}, status=400)
+        if not food_names or not all(isinstance(f, str) for f in food_names):
+            return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'Food names must be a list of strings'}, status=400)
 
         # Redshift 연결 설정
         conn = psycopg2.connect(
@@ -95,7 +95,7 @@ def get_random_restaurants(request):
             ORDER BY RANDOM()
             LIMIT 15
         """
-        cur.execute(query, food_names)
+        cur.execute(query, food_names)  # food_names 리스트를 그대로 사용 (콤마로 나뉘지 않음)
         restaurants = cur.fetchall()
 
         # Redshift 연결 종료
@@ -117,4 +117,4 @@ def get_random_restaurants(request):
         return JsonResponse({'error_code': 'DATABASE_ERROR', 'message': f'Database error: {str(e)}'}, status=500)
     except Exception as e:
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
-
+    
