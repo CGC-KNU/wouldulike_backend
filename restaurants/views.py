@@ -89,7 +89,7 @@ def get_random_restaurants(request):
         # SQL에서 직접 랜덤 샘플링 수행
         placeholders = ', '.join(['%s'] * len(food_names))
         query = f"""
-            SELECT name, road_address, category_2
+            SELECT name, road_address, category_1, category_2
             FROM restaurant_new
             WHERE category_2 IN ({placeholders})
             ORDER BY RANDOM()
@@ -108,7 +108,7 @@ def get_random_restaurants(request):
 
         # JSON 응답 반환
         return JsonResponse({'random_restaurants': [
-            {'name': r[0], 'road_address': r[1], 'category_2': r[2]} for r in restaurants
+            {'name': r[0], 'road_address': r[1], 'category_1': r[2], 'category_2': r[3]} for r in restaurants
         ]}, status=200)
 
     except json.JSONDecodeError:
@@ -117,3 +117,4 @@ def get_random_restaurants(request):
         return JsonResponse({'error_code': 'DATABASE_ERROR', 'message': f'Database error: {str(e)}'}, status=500)
     except Exception as e:
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
+
