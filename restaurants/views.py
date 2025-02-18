@@ -76,6 +76,9 @@ def get_random_restaurants(request):
         if not food_names or not all(isinstance(f, str) for f in food_names):
             return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'Food names must be a list of strings'}, status=400)
 
+        # **띄어쓰기 제거 후 새로운 리스트 생성**
+        processed_food_names = [food.replace(" ", "") for food in food_names]
+
         # Redshift 연결 설정
         conn = psycopg2.connect(
             dbname=config('REDSHIFT_DB_NAME'),
@@ -86,25 +89,16 @@ def get_random_restaurants(request):
         )
         cur = conn.cursor()
 
-        # 로그 추가 (데이터 확인)
-        print("Received food_names:", food_names)
-
-        # LIKE 검색을 위해 각 food_name을 %로 감싸기
-        like_patterns = [f"%{food}%" for food in food_names]
-
-        # SQL에서 여러 개의 LIKE 조건을 동적으로 생성
-        like_conditions = " OR ".join([f"category_2 LIKE %s" for _ in like_patterns])
-
+        # SQL에서 직접 랜덤 샘플링 수행
+        placeholders = ', '.join(['%s'] * len(processed_food_names))
         query = f"""
             SELECT name, road_address, category_1, category_2
             FROM restaurant_new
-            WHERE {like_conditions}
+            WHERE category_2 IN ({placeholders})
             ORDER BY RANDOM()
             LIMIT 15
         """
-
-        # SQL 실행
-        cur.execute(query, like_patterns)
+        cur.execute(query, processed_food_names)  # 가공된 food_names 리스트 전달
         restaurants = cur.fetchall()
 
         # Redshift 연결 종료
