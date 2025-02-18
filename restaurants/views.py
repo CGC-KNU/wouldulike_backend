@@ -86,16 +86,22 @@ def get_random_restaurants(request):
         )
         cur = conn.cursor()
 
-        # SQL에서 직접 랜덤 샘플링 수행
-        placeholders = ', '.join(['%s'] * len(food_names))
+        # 로그 추가 (데이터 확인)
+        print("Received food_names:", food_names)
+
+        # LIKE 검색을 위해 각 food_name을 %로 감싸기
+        like_patterns = [f"%{food}%" for food in food_names]
+
+        # SQL에서 LIKE ANY 사용하여 부분 일치 검색
+        placeholders = ', '.join(['%s'] * len(like_patterns))
         query = f"""
             SELECT name, road_address, category_1, category_2
             FROM restaurant_new
-            WHERE category_2 IN ({placeholders})
+            WHERE category_2 LIKE ANY (array[{placeholders}])
             ORDER BY RANDOM()
             LIMIT 15
         """
-        cur.execute(query, food_names)  # food_names 리스트를 그대로 사용 (콤마로 나뉘지 않음)
+        cur.execute(query, like_patterns)
         restaurants = cur.fetchall()
 
         # Redshift 연결 종료
@@ -117,4 +123,3 @@ def get_random_restaurants(request):
         return JsonResponse({'error_code': 'DATABASE_ERROR', 'message': f'Database error: {str(e)}'}, status=500)
     except Exception as e:
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
-    
