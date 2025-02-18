@@ -92,15 +92,18 @@ def get_random_restaurants(request):
         # LIKE 검색을 위해 각 food_name을 %로 감싸기
         like_patterns = [f"%{food}%" for food in food_names]
 
-        # SQL에서 LIKE ANY 사용하여 부분 일치 검색
-        placeholders = ', '.join(['%s'] * len(like_patterns))
+        # SQL에서 여러 개의 LIKE 조건을 동적으로 생성
+        like_conditions = " OR ".join([f"category_2 LIKE %s" for _ in like_patterns])
+
         query = f"""
             SELECT name, road_address, category_1, category_2
             FROM restaurant_new
-            WHERE category_2 LIKE ANY (array[{placeholders}])
+            WHERE {like_conditions}
             ORDER BY RANDOM()
             LIMIT 15
         """
+
+        # SQL 실행
         cur.execute(query, like_patterns)
         restaurants = cur.fetchall()
 
