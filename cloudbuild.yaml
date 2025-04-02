@@ -1,0 +1,11 @@
+steps:
+  - name: 'gcr.io/cloud-builders/gcloud'
+    args:
+      [
+        'run', 'deploy', 'wouldulike-backend',
+        '--source=.',
+        '--region=asia-northeast3',
+        '--platform=managed',
+        '--allow-unauthenticated'
+      ]
+timeout: 900s
