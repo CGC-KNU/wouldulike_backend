@@ -1,3 +1,6 @@
+options:
+  logging: CLOUD_LOGGING_ONLY  # ✅ 로그를 콘솔로만 출력
+
 steps:
   - name: 'gcr.io/cloud-builders/gcloud'
     args:
@@ -8,4 +11,5 @@ steps:
         '--platform=managed',
         '--allow-unauthenticated'
       ]
+
 timeout: 900s
