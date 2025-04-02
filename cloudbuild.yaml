@@ -1,5 +1,6 @@
 options:
-  logging: CLOUD_LOGGING_ONLY  # ✅ 로그를 콘솔로만 출력
+  logging: CLOUD_LOGGING_ONLY
+  defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 
 steps:
   - name: 'gcr.io/cloud-builders/gcloud'
@@ -7,7 +8,7 @@ steps:
       [
         'run', 'deploy', 'wouldulike-backend',
         '--source=.',
-        '--region=asia-northeast3',
+        '--region=asia-northeast3',  # Cloud Run 리전은 서울 유지
         '--platform=managed',
         '--allow-unauthenticated'
       ]
