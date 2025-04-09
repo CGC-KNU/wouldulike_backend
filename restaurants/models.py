@@ -23,5 +23,5 @@ class Restaurant(models.Model):
         return self.name
 
     class Meta:
-        db_table = 'restaurant_new'  # 데이터베이스 테이블 이름
+        db_table = 'daegu_restaurants'  # 데이터베이스 테이블 이름
         managed = False  # Django가 테이블을 관리하지 않도록 설정
