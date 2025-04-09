@@ -110,21 +110,6 @@ DATABASES = {
         'HOST': os.getenv('default_db_host'),
         'PORT': os.getenv('default_db_port'),
     },
-    # 'redshift': {
-    #     # 음식점 데이터베이스
-    #     'ENGINE': 'db_backends.redshift',  
-    #     'NAME': config('redshift_db_name'),
-    #     'USER': config('redshift_db_user'),
-    #     'PASSWORD': config('redshift_db_password'),
-    #     'HOST': config('redshift_db_host'),
-    #     'PORT': config('redshift_db_port'),
-    #     'OPTIONS': {
-    #         'options': '-c client_encoding=utf8',
-    #     },
-    #     'TEST': {
-    #         'MIRROR': 'redshift'
-    #     },
-    # },
     'rds': {
         # 유형 데이터베이스
         'ENGINE': 'django.db.backends.postgresql',
@@ -136,6 +121,14 @@ DATABASES = {
         'OPTIONS': {
             'options': '-c client_encoding=utf8',
         },
+    },
+    'cloudsql': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': os.getenv('cloudsql_db_name'),
+        'USER': os.getenv('cloudsql_db_user'),
+        'PASSWORD': os.getenv('cloudsql_db_password'),
+        'HOST': os.getenv('cloudsql_db_host'),
+        'PORT': os.getenv('cloudsql_db_port'),
     }
 }
 
