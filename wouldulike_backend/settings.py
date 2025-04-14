@@ -139,18 +139,31 @@ DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": os.getenv("REDIS_URL"),
+        "LOCATION": os.getenv("REDIS_URL"),  # redis://username:password@host:port/db 형태로 입력되어야 함
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
-            "PASSWORD": os.getenv("REDIS_PASSWORD"),
         }
     }
 }
+
+# CACHES = {
+#     "default": {
+#         "BACKEND": "django_redis.cache.RedisCache",
+#         "LOCATION": os.getenv("REDIS_URL"),
+#         "OPTIONS": {
+#             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+#             "PASSWORD": os.getenv("REDIS_PASSWORD"),
+#         }
+#     }
+# }
 
 # Redis 연결 정보
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+
+print("REDIS_URL:", os.getenv("REDIS_URL"))
+print("REDIS_PASSWORD:", os.getenv("REDIS_PASSWORD"))
 
 
 # AWS S3 설정 (개인)
