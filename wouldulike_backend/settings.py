@@ -139,9 +139,10 @@ DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": os.getenv("REDIS_URL"),  # redis://username:password@host:port/db 형태로 입력되어야 함
+        "LOCATION": os.getenv("REDIS_URL"),  # 유저/비번 포함된 redis://username:password@host:port/0
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "USERNAME": "django-cache-user",  # 👈 여기 추가!
         }
     }
 }
