@@ -86,15 +86,21 @@ def get_random_restaurants(request):
         if not sampled:
             return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
 
+        # return JsonResponse({
+        #     'random_restaurants': [
+        #         {
+        #             'name': r.name,
+        #             'road_address': r.road_address,
+        #             'category_1': r.category_1,
+        #             'category_2': r.category_2
+        #         } for r in sampled
+        #     ]
+        # }, status=200)
+
         return JsonResponse({
-            'random_restaurants': [
-                {
-                    'name': r.name,
-                    'road_address': r.road_address,
-                    'category_1': r.category_1,
-                    'category_2': r.category_2
-                } for r in sampled
-            ]
+            'random_restaurants': list(
+                sampled.values('name', 'road_address', 'category_1', 'category_2')
+            )
         }, status=200)
 
     except json.JSONDecodeError:
