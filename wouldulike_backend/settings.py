@@ -3,6 +3,8 @@ import os, json, environ
 from django.core.exceptions import ImproperlyConfigured
 from decouple import config
 
+import urllib.parse
+
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -163,7 +165,7 @@ REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
 print("REDIS_URL:", os.getenv("REDIS_URL"))
-print("REDIS_PASSWORD:", os.getenv("REDIS_PASSWORD"))
+print("REDIS_URL (decoded):", urllib.parse.unquote(os.getenv("REDIS_URL")))
 
 
 # AWS S3 설정 (개인)
