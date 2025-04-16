@@ -112,6 +112,7 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.db import connections  # 데이터베이스 alias 사용
 import json
+import random
 
 @csrf_exempt
 def get_random_restaurants(request):
@@ -125,21 +126,32 @@ def get_random_restaurants(request):
         # 띄어쓰기 제거
         processed_food_names = [food.replace(" ", "") for food in food_names]
 
-        # DB 커서 사용 (cloudsql 연결)
         with connections['cloudsql'].cursor() as cursor:
+            # Step 1: 총 개수 조회
             placeholders = ', '.join(['%s'] * len(processed_food_names))
+            count_query = f"""
+                SELECT COUNT(*)
+                FROM daegu_restaurants
+                WHERE REPLACE(category_2, ' ', '') IN ({placeholders})
+            """
+            cursor.execute(count_query, processed_food_names)
+            total_count = cursor.fetchone()[0]
+
+            if total_count == 0:
+                return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
+
+            # Step 2: 랜덤 offset 계산
+            offset = max(0, random.randint(0, max(0, total_count - 15)))
+
+            # Step 3: 랜덤 추출
             query = f"""
                 SELECT name, road_address, category_1, category_2
                 FROM daegu_restaurants
                 WHERE REPLACE(category_2, ' ', '') IN ({placeholders})
-                ORDER BY id DESC
-                LIMIT 15;
+                OFFSET %s LIMIT 15
             """
-            cursor.execute(query, processed_food_names)
+            cursor.execute(query, processed_food_names + [offset])
             rows = cursor.fetchall()
-
-        if not rows:
-            return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
 
         return JsonResponse({
             'random_restaurants': [
