@@ -59,16 +59,63 @@
 #     except Exception as e:
 #         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
 
+# from django.http import JsonResponse
+# from django.views.decorators.csrf import csrf_exempt
+# from django.db.models.functions import Random  # 🔸 랜덤 정렬을 위한 ORM 함수
+# from restaurants.models import Restaurant
+# import json
+
+# @csrf_exempt
+# def get_random_restaurants(request):
+#     try:
+#         # 요청 데이터 파싱
+#         data = json.loads(request.body)
+#         food_names = data.get('food_names', [])
+
+#         if not food_names or not all(isinstance(f, str) for f in food_names):
+#             return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'Food names must be a list of strings'}, status=400)
+
+#         # 띄어쓰기 제거
+#         processed_food_names = [food.replace(" ", "") for food in food_names]
+
+#         # Cloud SQL(DB)에서 랜덤 추출 15개 (cloudsql DB alias 사용)
+#         sampled = Restaurant.objects.using('cloudsql') \
+#             .filter(category_2__in=processed_food_names) \
+#             .order_by(Random())[:15]
+
+#         if not sampled:
+#             return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
+
+#         # return JsonResponse({
+#         #     'random_restaurants': [
+#         #         {
+#         #             'name': r.name,
+#         #             'road_address': r.road_address,
+#         #             'category_1': r.category_1,
+#         #             'category_2': r.category_2
+#         #         } for r in sampled
+#         #     ]
+#         # }, status=200)
+
+#         return JsonResponse({
+#             'random_restaurants': list(
+#                 sampled.values('name', 'road_address', 'category_1', 'category_2')
+#             )
+#         }, status=200)
+
+#     except json.JSONDecodeError:
+#         return JsonResponse({'error_code': 'INVALID_JSON', 'message': 'Request body must be valid JSON'}, status=400)
+#     except Exception as e:
+#         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
+
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.db.models.functions import Random  # 🔸 랜덤 정렬을 위한 ORM 함수
-from restaurants.models import Restaurant
+from django.db import connections  # 데이터베이스 alias 사용
 import json
 
 @csrf_exempt
 def get_random_restaurants(request):
     try:
-        # 요청 데이터 파싱
         data = json.loads(request.body)
         food_names = data.get('food_names', [])
 
@@ -78,29 +125,31 @@ def get_random_restaurants(request):
         # 띄어쓰기 제거
         processed_food_names = [food.replace(" ", "") for food in food_names]
 
-        # Cloud SQL(DB)에서 랜덤 추출 15개 (cloudsql DB alias 사용)
-        sampled = Restaurant.objects.using('cloudsql') \
-            .filter(category_2__in=processed_food_names) \
-            .order_by(Random())[:15]
+        # DB 커서 사용 (cloudsql 연결)
+        with connections['cloudsql'].cursor() as cursor:
+            placeholders = ', '.join(['%s'] * len(processed_food_names))
+            query = f"""
+                SELECT name, road_address, category_1, category_2
+                FROM daegu_restaurants
+                WHERE REPLACE(category_2, ' ', '') IN ({placeholders})
+                ORDER BY RANDOM()
+                LIMIT 15;
+            """
+            cursor.execute(query, processed_food_names)
+            rows = cursor.fetchall()
 
-        if not sampled:
+        if not rows:
             return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
 
-        # return JsonResponse({
-        #     'random_restaurants': [
-        #         {
-        #             'name': r.name,
-        #             'road_address': r.road_address,
-        #             'category_1': r.category_1,
-        #             'category_2': r.category_2
-        #         } for r in sampled
-        #     ]
-        # }, status=200)
-
         return JsonResponse({
-            'random_restaurants': list(
-                sampled.values('name', 'road_address', 'category_1', 'category_2')
-            )
+            'random_restaurants': [
+                {
+                    'name': r[0],
+                    'road_address': r[1],
+                    'category_1': r[2],
+                    'category_2': r[3]
+                } for r in rows
+            ]
         }, status=200)
 
     except json.JSONDecodeError:
