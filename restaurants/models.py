@@ -1,6 +1,7 @@
 from django.db import models
 
 class Restaurant(models.Model):
+    id = models.BigAutoField(primary_key=True)
     name = models.CharField(max_length=255)
     status = models.CharField(max_length=50)
     address_zip_code = models.CharField(max_length=50, null=True, blank=True)
