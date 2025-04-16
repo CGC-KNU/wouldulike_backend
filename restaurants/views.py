@@ -132,7 +132,7 @@ def get_random_restaurants(request):
                 SELECT name, road_address, category_1, category_2
                 FROM daegu_restaurants
                 WHERE REPLACE(category_2, ' ', '') IN ({placeholders})
-                ORDER BY RANDOM()
+                ORDER BY id DESC
                 LIMIT 15;
             """
             cursor.execute(query, processed_food_names)
