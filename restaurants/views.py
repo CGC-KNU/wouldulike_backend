@@ -123,7 +123,7 @@ def get_random_restaurants(request):
         if not food_names or not all(isinstance(f, str) for f in food_names):
             return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'Food names must be a list of strings'}, status=400)
 
-        # 띄어쓰기 제거
+        # 🔸 프론트에서 받은 음식명의 공백 제거 (DB에는 공백이 없다고 가정)
         processed_food_names = [food.replace(" ", "") for food in food_names]
 
         with connections['cloudsql'].cursor() as cursor:
@@ -132,7 +132,7 @@ def get_random_restaurants(request):
             count_query = f"""
                 SELECT COUNT(*)
                 FROM daegu_restaurants
-                WHERE REPLACE(category_2, ' ', '') IN ({placeholders})
+                WHERE category_2 IN ({placeholders})
             """
             cursor.execute(count_query, processed_food_names)
             total_count = cursor.fetchone()[0]
@@ -147,7 +147,7 @@ def get_random_restaurants(request):
             query = f"""
                 SELECT name, road_address, category_1, category_2
                 FROM daegu_restaurants
-                WHERE REPLACE(category_2, ' ', '') IN ({placeholders})
+                WHERE category_2 IN ({placeholders})
                 OFFSET %s LIMIT 15
             """
             cursor.execute(query, processed_food_names + [offset])
