@@ -108,11 +108,75 @@
 #     except Exception as e:
 #         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
 
+# from django.http import JsonResponse
+# from django.views.decorators.csrf import csrf_exempt
+# from django.db import connections  # 데이터베이스 alias 사용
+# import json
+# import random
+
+# @csrf_exempt
+# def get_random_restaurants(request):
+#     try:
+#         data = json.loads(request.body)
+#         food_names = data.get('food_names', [])
+
+#         if not food_names or not all(isinstance(f, str) for f in food_names):
+#             return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'Food names must be a list of strings'}, status=400)
+
+#         # 🔸 프론트에서 받은 음식명의 공백 제거 (DB에는 공백이 없다고 가정)
+#         processed_food_names = [food.replace(" ", "") for food in food_names]
+
+#         with connections['cloudsql'].cursor() as cursor:
+#             # Step 1: 총 개수 조회
+#             placeholders = ', '.join(['%s'] * len(processed_food_names))
+#             count_query = f"""
+#                 SELECT COUNT(*)
+#                 FROM daegu_restaurants
+#                 WHERE category_2 IN ({placeholders})
+#             """
+#             cursor.execute(count_query, processed_food_names)
+#             total_count = cursor.fetchone()[0]
+
+#             if total_count == 0:
+#                 return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
+
+#             # Step 2: 랜덤 offset 계산
+#             offset = max(0, random.randint(0, max(0, total_count - 15)))
+
+#             # Step 3: 랜덤 추출
+#             query = f"""
+#                 SELECT name, road_address, category_1, category_2
+#                 FROM daegu_restaurants
+#                 WHERE category_2 IN ({placeholders})
+#                 OFFSET %s LIMIT 15
+#             """
+#             cursor.execute(query, processed_food_names + [offset])
+#             rows = cursor.fetchall()
+
+#         return JsonResponse({
+#             'random_restaurants': [
+#                 {
+#                     'name': r[0],
+#                     'road_address': r[1],
+#                     'category_1': r[2],
+#                     'category_2': r[3]
+#                 } for r in rows
+#             ]
+#         }, status=200)
+
+#     except json.JSONDecodeError:
+#         return JsonResponse({'error_code': 'INVALID_JSON', 'message': 'Request body must be valid JSON'}, status=400)
+#     except Exception as e:
+#         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
+
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.db import connections  # 데이터베이스 alias 사용
+from django.db import connections
 import json
 import random
+import logging
+
+logger = logging.getLogger(__name__)  # 로그 기록용
 
 @csrf_exempt
 def get_random_restaurants(request):
@@ -120,38 +184,51 @@ def get_random_restaurants(request):
         data = json.loads(request.body)
         food_names = data.get('food_names', [])
 
+        logger.info(f"Received food_names: {food_names}")
+
         if not food_names or not all(isinstance(f, str) for f in food_names):
             return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'Food names must be a list of strings'}, status=400)
 
-        # 🔸 프론트에서 받은 음식명의 공백 제거 (DB에는 공백이 없다고 가정)
+        # 1️⃣ 음식명 전처리
         processed_food_names = [food.replace(" ", "") for food in food_names]
+        logger.info(f"Processed food_names: {processed_food_names}")
+
+        all_candidates = []
 
         with connections['cloudsql'].cursor() as cursor:
-            # Step 1: 총 개수 조회
-            placeholders = ', '.join(['%s'] * len(processed_food_names))
-            count_query = f"""
-                SELECT COUNT(*)
-                FROM daegu_restaurants
-                WHERE category_2 IN ({placeholders})
-            """
-            cursor.execute(count_query, processed_food_names)
-            total_count = cursor.fetchone()[0]
+            for food in processed_food_names:
+                logger.info(f"Processing category: {food}")
 
-            if total_count == 0:
-                return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
+                # Step 1: 해당 카테고리 음식점 수 조회
+                cursor.execute(
+                    "SELECT COUNT(*) FROM daegu_restaurants WHERE category_2 = %s", [food]
+                )
+                total = cursor.fetchone()[0]
+                logger.info(f"Total count for {food}: {total}")
 
-            # Step 2: 랜덤 offset 계산
-            offset = max(0, random.randint(0, max(0, total_count - 15)))
+                if total == 0:
+                    continue
 
-            # Step 3: 랜덤 추출
-            query = f"""
-                SELECT name, road_address, category_1, category_2
-                FROM daegu_restaurants
-                WHERE category_2 IN ({placeholders})
-                OFFSET %s LIMIT 15
-            """
-            cursor.execute(query, processed_food_names + [offset])
-            rows = cursor.fetchall()
+                # Step 2: 랜덤 offset 계산
+                offset = max(0, random.randint(0, max(0, total - 2)))
+                logger.info(f"Offset for {food}: {offset}")
+
+                # Step 3: 부분 샘플 가져오기
+                cursor.execute("""
+                    SELECT name, road_address, category_1, category_2
+                    FROM daegu_restaurants
+                    WHERE category_2 = %s
+                    OFFSET %s LIMIT 2
+                """, [food, offset])
+                rows = cursor.fetchall()
+                all_candidates.extend(rows)
+
+        logger.info(f"Total candidates collected: {len(all_candidates)}")
+
+        if not all_candidates:
+            return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
+
+        selected = random.sample(all_candidates, min(15, len(all_candidates)))
 
         return JsonResponse({
             'random_restaurants': [
@@ -160,11 +237,12 @@ def get_random_restaurants(request):
                     'road_address': r[1],
                     'category_1': r[2],
                     'category_2': r[3]
-                } for r in rows
+                } for r in selected
             ]
         }, status=200)
 
     except json.JSONDecodeError:
         return JsonResponse({'error_code': 'INVALID_JSON', 'message': 'Request body must be valid JSON'}, status=400)
     except Exception as e:
+        logger.exception("Unexpected error")
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
