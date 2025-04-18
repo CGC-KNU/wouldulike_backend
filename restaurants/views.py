@@ -195,35 +195,45 @@ def get_random_restaurants(request):
 
         all_candidates = []
 
+        logger.info("🔗 Attempting to connect to Cloud SQL")
         with connections['cloudsql'].cursor() as cursor:
+            logger.info("✅ Connected to Cloud SQL")
+
             for food in processed_food_names:
-                logger.info(f"Processing category: {food}")
+                logger.info(f"🍽 Processing category: {food}")
 
                 # Step 1: 해당 카테고리 음식점 수 조회
-                cursor.execute(
-                    "SELECT COUNT(*) FROM daegu_restaurants WHERE category_2 = %s", [food]
-                )
+                count_query = "SELECT COUNT(*) FROM daegu_restaurants WHERE category_2 = %s"
+                logger.info(f"🟡 Running count query: {count_query}")
+                logger.info(f"🟡 With param: {food}")
+                cursor.execute(count_query, [food])
+
                 total = cursor.fetchone()[0]
-                logger.info(f"Total count for {food}: {total}")
+                logger.info(f"🔢 Total count for '{food}': {total}")
 
                 if total == 0:
                     continue
 
                 # Step 2: 랜덤 offset 계산
                 offset = max(0, random.randint(0, max(0, total - 2)))
-                logger.info(f"Offset for {food}: {offset}")
+                logger.info(f"🎲 Random offset for '{food}': {offset}")
 
                 # Step 3: 부분 샘플 가져오기
-                cursor.execute("""
+                select_query = """
                     SELECT name, road_address, category_1, category_2
                     FROM daegu_restaurants
                     WHERE category_2 = %s
                     OFFSET %s LIMIT 2
-                """, [food, offset])
+                """
+                logger.info(f"🟢 Running select query: {select_query}")
+                logger.info(f"🟢 With params: [{food}, {offset}]")
+                cursor.execute(select_query, [food, offset])
                 rows = cursor.fetchall()
+
+                logger.info(f"📦 Retrieved {len(rows)} rows for '{food}'")
                 all_candidates.extend(rows)
 
-        logger.info(f"Total candidates collected: {len(all_candidates)}")
+        logger.info(f"🎯 Total candidates collected: {len(all_candidates)}")
 
         if not all_candidates:
             return JsonResponse({'error_code': 'NO_RESTAURANTS_FOUND', 'message': 'No restaurants found for the given food names'}, status=404)
@@ -242,7 +252,8 @@ def get_random_restaurants(request):
         }, status=200)
 
     except json.JSONDecodeError:
+        logger.exception("❌ JSON parsing failed")
         return JsonResponse({'error_code': 'INVALID_JSON', 'message': 'Request body must be valid JSON'}, status=400)
     except Exception as e:
-        logger.exception("Unexpected error")
+        logger.exception("❗️Unexpected error")
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
