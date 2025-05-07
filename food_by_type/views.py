@@ -101,19 +101,20 @@ def get_unique_random_foods(request):
         if not foods:
             return JsonResponse({'error_code': 'NO_FOOD_FOUND', 'message': 'No food available for this type code'}, status=404)
 
-        # Redis 캐시 확인
+        # Redis 캐시 확인 (food_id 기준)
         cache_key = f'user:{user_uuid}:foods'
         try:
-            cached_foods = redis_client.lrange(cache_key, 0, -1)
-            print(f"Step 1: Cached foods retrieved for key {cache_key}: {cached_foods}")
+            cached_food_ids = redis_client.lrange(cache_key, 0, -1)
+            cached_food_ids_set = set(cached_food_ids)  # 중복 제거용
+            print(f"Step 1: Cached food_ids retrieved for key {cache_key}: {cached_food_ids}")
         except Exception as e:
-            print(f"Step 1 Error: Failed to retrieve cached foods for key {cache_key}: {e}")
+            print(f"Step 1 Error: Failed to retrieve cached food_ids for key {cache_key}: {e}")
             return JsonResponse({'error_code': 'CACHE_READ_ERROR', 'message': f'Error reading cache: {str(e)}'}, status=500)
 
         # 중복되지 않는 음식 필터링
         try:
-            available_foods = [food for food in foods if food['food_name'] not in cached_foods]
-            print(f"Step 2: Available foods after filtering cached foods: {available_foods}")
+            available_foods = [food for food in foods if str(food['food_id']) not in cached_food_ids_set]
+            print(f"Step 2: Available foods after filtering cached food_ids: {available_foods}")
             if not available_foods:
                 return JsonResponse({'error_code': 'NOT_ENOUGH_FOOD', 'message': 'No unique food options available'}, status=404)
         except Exception as e:
@@ -128,11 +129,11 @@ def get_unique_random_foods(request):
             print(f"Step 3 Error: Error selecting random foods: {e}")
             return JsonResponse({'error_code': 'RANDOM_SELECTION_ERROR', 'message': f'Error selecting random foods: {str(e)}'}, status=500)
 
-        # Redis 캐시 갱신
+        # Redis 캐시 갱신 (food_id 저장)
         try:
-            new_food_names = [food['food_name'] for food in random_foods]
-            if new_food_names:
-                redis_client.rpush(cache_key, *new_food_names)
+            new_food_ids = [str(food['food_id']) for food in random_foods]
+            if new_food_ids:
+                redis_client.rpush(cache_key, *new_food_ids)
                 redis_client.ltrim(cache_key, -80, -1)
                 redis_client.expire(cache_key, 600)
                 print(f"Step 4: Updated cache for key {cache_key}: {redis_client.lrange(cache_key, 0, -1)}")
