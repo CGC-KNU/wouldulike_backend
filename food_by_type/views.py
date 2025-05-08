@@ -94,55 +94,58 @@ def get_unique_random_foods(request):
         except TypeCode.DoesNotExist:
             return JsonResponse({'error_code': 'TYPE_CODE_NOT_FOUND', 'message': 'Type code not found in database'}, status=404)
 
+        # Step 1: 전체 food_id 조회 (음식 정보는 나중에)
         food_ids = list(TypeCodeFood.objects.filter(type_code_id=type_code_id).values_list('food_id', flat=True))
-        foods = list(Food.objects.filter(food_id__in=food_ids).values('food_id', 'food_name', 'description', 'food_image_url'))
-        print(f"Foods retrieved: {foods}")
+        print(f"Food IDs retrieved: {food_ids}")
 
-        if not foods:
+        if not food_ids:
             return JsonResponse({'error_code': 'NO_FOOD_FOUND', 'message': 'No food available for this type code'}, status=404)
 
-        # Redis 캐시 확인 (food_id 기준)
+        # Step 2: 캐시에서 이전에 추천된 food_id 확인
         cache_key = f'user:{user_uuid}:foods'
         try:
             cached_food_ids = redis_client.lrange(cache_key, 0, -1)
-            cached_food_ids_set = set(cached_food_ids)  # 중복 제거용
-            print(f"Step 1: Cached food_ids retrieved for key {cache_key}: {cached_food_ids}")
+            cached_food_ids_set = set(cached_food_ids)
+            print(f"Cached food_ids: {cached_food_ids}")
         except Exception as e:
-            print(f"Step 1 Error: Failed to retrieve cached food_ids for key {cache_key}: {e}")
+            print(f"Cache read error: {e}")
             return JsonResponse({'error_code': 'CACHE_READ_ERROR', 'message': f'Error reading cache: {str(e)}'}, status=500)
 
-        # 중복되지 않는 음식 필터링
-        try:
-            available_foods = [food for food in foods if str(food['food_id']) not in cached_food_ids_set]
-            print(f"Step 2: Available foods after filtering cached food_ids: {available_foods}")
-            if not available_foods:
-                return JsonResponse({'error_code': 'NOT_ENOUGH_FOOD', 'message': 'No unique food options available'}, status=404)
-        except Exception as e:
-            print(f"Step 2 Error: Error filtering available foods: {e}")
-            return JsonResponse({'error_code': 'FOOD_FILTER_ERROR', 'message': f'Error filtering foods: {str(e)}'}, status=500)
+        # Step 3: 중복 제거된 food_id만 필터링
+        available_food_ids = [fid for fid in food_ids if str(fid) not in cached_food_ids_set]
+        print(f"Available food_ids after filtering: {available_food_ids}")
 
-        # 랜덤으로 10개 선택
+        if not available_food_ids:
+            return JsonResponse({'error_code': 'NOT_ENOUGH_FOOD', 'message': 'No unique food options available'}, status=404)
+
+        # Step 4: 랜덤으로 최대 10개의 food_id 선택
         try:
-            random_foods = random.sample(available_foods, min(len(available_foods), 10))
-            print(f"Step 3: Random foods selected: {random_foods}")
+            selected_food_ids = random.sample(available_food_ids, min(len(available_food_ids), 10))
+            print(f"Randomly selected food_ids: {selected_food_ids}")
         except Exception as e:
-            print(f"Step 3 Error: Error selecting random foods: {e}")
+            print(f"Random selection error: {e}")
             return JsonResponse({'error_code': 'RANDOM_SELECTION_ERROR', 'message': f'Error selecting random foods: {str(e)}'}, status=500)
 
-        # Redis 캐시 갱신 (food_id 저장)
+        # Step 5: 최종 선택된 food_id들에 대한 음식 정보 조회
         try:
-            new_food_ids = [str(food['food_id']) for food in random_foods]
-            if new_food_ids:
-                redis_client.rpush(cache_key, *new_food_ids)
-                redis_client.ltrim(cache_key, -80, -1)
-                redis_client.expire(cache_key, 600)
-                print(f"Step 4: Updated cache for key {cache_key}: {redis_client.lrange(cache_key, 0, -1)}")
+            random_foods = list(Food.objects.filter(food_id__in=selected_food_ids).values('food_id', 'food_name', 'description', 'food_image_url'))
+            print(f"Food info retrieved for selected foods: {random_foods}")
         except Exception as e:
-            print(f"Step 4 Error: Failed to update cache for key {cache_key}: {e}")
+            print(f"Food info query error: {e}")
+            return JsonResponse({'error_code': 'FOOD_INFO_QUERY_ERROR', 'message': f'Error retrieving food info: {str(e)}'}, status=500)
+
+        # Step 6: 캐시 업데이트
+        try:
+            redis_client.rpush(cache_key, *map(str, selected_food_ids))
+            redis_client.ltrim(cache_key, -80, -1)
+            redis_client.expire(cache_key, 600)
+            print(f"Updated cache: {redis_client.lrange(cache_key, 0, -1)}")
+        except Exception as e:
+            print(f"Cache update error: {e}")
             return JsonResponse({'error_code': 'CACHE_UPDATE_ERROR', 'message': f'Error updating cache: {str(e)}'}, status=500)
 
         return JsonResponse({'random_foods': random_foods})
-    
+
     except Exception as e:
         print(f"Unexpected error: {str(e)}")
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
