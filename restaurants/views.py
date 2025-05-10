@@ -38,7 +38,7 @@ def get_random_restaurants(request):
                 logger.info(f"Offset for {food}: {offset}")
 
                 cursor.execute("""
-                    SELECT name, road_address, category_1, category_2
+                    SELECT name, road_address, category_1, category_2, x, y
                     FROM daegu_restaurants
                     WHERE category_2 = %s
                     OFFSET %s LIMIT 100
@@ -92,7 +92,9 @@ def get_random_restaurants(request):
                     'name': r[0],
                     'road_address': r[1],
                     'category_1': r[2],
-                    'category_2': r[3]
+                    'category_2': r[3],
+                    'x': r[4],
+                    'y': r[5]
                 } for r in unique_by_name.values()
             ]
         }, status=200)
