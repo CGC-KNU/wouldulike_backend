@@ -104,3 +104,78 @@ def get_random_restaurants(request):
     except Exception as e:
         logger.exception("Unexpected error")
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
+
+
+@csrf_exempt
+def get_nearby_restaurants(request):
+    """Return up to 15 restaurants within 1km of given coordinates filtered by food names."""
+    try:
+        data = json.loads(request.body)
+        food_names = data.get('food_names', [])
+        user_lat = data.get('latitude')
+        user_lon = data.get('longitude')
+
+        if user_lat is None or user_lon is None:
+            return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'Latitude and longitude are required'}, status=400)
+
+        if not food_names or not all(isinstance(f, str) for f in food_names):
+            return JsonResponse({'error_code': 'INVALID_REQUEST', 'message': 'Food names must be a list of strings'}, status=400)
+
+        processed_food_names = [food.replace(" ", "") for food in food_names]
+
+        candidates = []
+        with connections['cloudsql'].cursor() as cursor:
+            for food in processed_food_names:
+                cursor.execute(
+                    """
+                    SELECT name, road_address, category_1, category_2, x, y
+                    FROM daegu_restaurants
+                    WHERE category_2 = %s
+                      AND y BETWEEN %s - 0.009 AND %s + 0.009
+                      AND x BETWEEN %s - 0.009 AND %s + 0.009
+                    """,
+                    [food, user_lat, user_lat, user_lon, user_lon]
+                )
+                rows = cursor.fetchall()
+                candidates.extend(rows)
+
+        # remove duplicate restaurants by name
+        unique_by_name = {}
+        for r in candidates:
+            if r[0] not in unique_by_name:
+                unique_by_name[r[0]] = r
+
+        import math, random
+
+        def haversine(lat1, lon1, lat2, lon2):
+            R = 6371
+            d_lat = math.radians(lat2 - lat1)
+            d_lon = math.radians(lon2 - lon1)
+            a = math.sin(d_lat / 2) ** 2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(d_lon / 2) ** 2
+            c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+            return R * c
+
+        filtered = [r for r in unique_by_name.values() if haversine(user_lat, user_lon, r[5], r[4]) < 1]
+
+        random.shuffle(filtered)
+        selected = filtered[:15]
+
+        return JsonResponse({
+            'restaurants': [
+                {
+                    'name': r[0],
+                    'road_address': r[1],
+                    'category_1': r[2],
+                    'category_2': r[3],
+                    'x': r[4],
+                    'y': r[5],
+                }
+                for r in selected
+            ]
+        }, status=200)
+
+    except json.JSONDecodeError:
+        return JsonResponse({'error_code': 'INVALID_JSON', 'message': 'Request body must be valid JSON'}, status=400)
+    except Exception as e:
+        logger.exception("Unexpected error")
+        return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
