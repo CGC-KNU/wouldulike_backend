@@ -19,6 +19,8 @@ urlpatterns = [
     path('food-by-type/', include('food_by_type.urls')),
 
     path('restaurants/', include('restaurants.urls')),
+
+    path('notifications/', include('notifications.urls')),
 ]
 
 if settings.DEBUG:
