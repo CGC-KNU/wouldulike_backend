@@ -21,7 +21,7 @@ class GuestUserAdminForm(forms.ModelForm):
 
 class GuestUserAdmin(admin.ModelAdmin):
     form = GuestUserAdminForm
-    list_display = ('uuid', 'type_code', 'display_favorite_restaurants', 'created_at')
+    list_display = ('uuid', 'type_code', 'display_favorite_restaurants', 'fcm_token', 'created_at')
 
     def display_favorite_restaurants(self, obj):
         """JSON 문자열을 리스트로 변환하여 표시"""

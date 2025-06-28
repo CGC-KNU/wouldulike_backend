@@ -10,6 +10,7 @@ class GuestUser(models.Model):
     uuid = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)  # 고유 사용자 ID (자동 생성, 고유, 수정 불가)
     type_code = models.CharField(max_length=4, null=True, blank=True)  # 유형 코드 (영어 4자리, 비어있을 수 있음)
     favorite_restaurants = models.TextField(null=True, blank=True)  # 찜한 음식점 이름 (JSON 형식, 비어있을 수 있음)
+    fcm_token = models.CharField(max_length=255, null=True, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
