@@ -230,18 +230,19 @@ LOGGING = {
     },
 }
 
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
 if DEBUG:
     # 개발 환경
     STATIC_URL = '/static/'
-    STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
-    STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
     MEDIA_URL = ''
     MEDIA_ROOT = ''
 else:
     # 배포 환경
-    AWS_S3_CUSTOM_DOMAIN = f'https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/'
-    STATIC_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/static/"
-    MEDIA_URL = f"https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/"
+    AWS_S3_CUSTOM_DOMAIN = 'https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/'
+    STATIC_URL = f"{AWS_S3_CUSTOM_DOMAIN}static/"
+    MEDIA_URL = AWS_S3_CUSTOM_DOMAIN
     AWS_QUERYSTRING_AUTH = False  # S3에서 URL에 인증 정보 포함 안 함 (더 깔끔한 URL)
     AWS_S3_OBJECT_PARAMETERS = {
         'CacheControl': 'max-age=86400',  # 정적 파일 캐싱 (24시간)
