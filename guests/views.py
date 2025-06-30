@@ -100,6 +100,34 @@ def update_guest_user_favorite_restaurants(request):
         guest_user.save()
 
         return JsonResponse({'status': 'success', 'message': '게스트 사용자 찜 음식점 업데이트 성공', 'favorites': favorite_restaurants})
+    
+    except GuestUser.DoesNotExist:
+        return JsonResponse({'status': 'error', 'message': '게스트 사용자를 찾을 수 없습니다.'}, status=404)
+    except json.JSONDecodeError:
+        return JsonResponse({'status': 'error', 'message': '잘못된 JSON 데이터입니다.'}, status=400)
+    except Exception as e:
+        return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+
+@csrf_exempt
+def update_guest_user_fcm_token(request):
+    """Update the FCM token for a guest user."""
+    if request.method != 'POST':
+        return JsonResponse({'status': 'error', 'message': 'POST 요청만 허용됩니다.'}, status=405)
+
+    try:
+        data = json.loads(request.body)
+        uuid = data.get('uuid')
+        fcm_token = data.get('fcm_token')
+
+        if not uuid or not fcm_token:
+            return JsonResponse({'status': 'error', 'message': '필수 파라미터가 누락되었습니다.'}, status=400)
+
+        guest_user = GuestUser.objects.get(uuid=uuid)
+        guest_user.fcm_token = fcm_token
+        guest_user.save(update_fields=['fcm_token'])
+
+        return JsonResponse({'status': 'success', 'message': 'FCM 토큰 업데이트 성공'})
 
     except GuestUser.DoesNotExist:
         return JsonResponse({'status': 'error', 'message': '게스트 사용자를 찾을 수 없습니다.'}, status=404)
