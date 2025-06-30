@@ -29,7 +29,7 @@ def get_secret(setting):
 SECRET_KEY = os.getenv("SECRET_KEY")
 
 
-DEBUG = False
+DEBUG = config('DEBUG', default=True, cast=bool)
 
 
 ALLOWED_HOSTS = ['*']
