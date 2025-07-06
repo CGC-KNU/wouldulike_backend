@@ -1,6 +1,7 @@
 # 게스트 사용자 뷰
 from django.http import JsonResponse
 from .models import GuestUser
+from restaurants.models import Restaurant
 from django.core.exceptions import ValidationError
 import json
 from django.views.decorators.csrf import csrf_exempt
@@ -76,24 +77,32 @@ def update_guest_user_favorite_restaurants(request):
     try:
         data = json.loads(request.body)  # 요청 본문에서 JSON 데이터 파싱
         uuid = data.get('uuid')  # 게스트 사용자의 UUID
-        restaurant = data.get('restaurant')  # 음식점 이름
+        restaurant_name = data.get('restaurant')  # 음식점 이름
         action = data.get('action')  # 동작 ('add' 또는 'remove')
 
-        if not uuid or not restaurant or action not in ['add', 'remove']:
+        if not uuid or not restaurant_name or action not in ['add', 'remove']:
             return JsonResponse({'status': 'error', 'message': '필수 파라미터가 누락되었습니다.'}, status=400)
 
         guest_user = GuestUser.objects.get(uuid=uuid)
+        restaurant_obj = Restaurant.objects.filter(name=restaurant_name).first()
+        if not restaurant_obj:
+            return JsonResponse({'status': 'error', 'message': '음식점을 찾을 수 없습니다.'}, status=404)
 
         favorite_restaurants = json.loads(guest_user.favorite_restaurants or '[]')
 
         if action == 'add':
             # 음식점 추가
-            if restaurant not in favorite_restaurants:
-                favorite_restaurants.append(restaurant)
+            if restaurant_name not in favorite_restaurants:
+                favorite_restaurants.append(restaurant_name)
+                restaurant_obj.liked_count = (restaurant_obj.liked_count or 0) + 1
+                restaurant_obj.save(update_fields=['liked_count'])
         elif action == 'remove':
             # 음식점 제거
-            if restaurant in favorite_restaurants:
-                favorite_restaurants.remove(restaurant)
+            if restaurant_name in favorite_restaurants:
+                favorite_restaurants.remove(restaurant_name)
+                if restaurant_obj.liked_count and restaurant_obj.liked_count > 0:
+                    restaurant_obj.liked_count -= 1
+                    restaurant_obj.save(update_fields=['liked_count'])
 
         # 업데이트된 리스트를 JSON 형식으로 저장
         guest_user.favorite_restaurants = json.dumps(favorite_restaurants)
