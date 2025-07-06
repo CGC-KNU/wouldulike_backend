@@ -96,6 +96,9 @@ def update_guest_user_favorite_restaurants(request):
                 favorite_restaurants.append(restaurant_name)
                 restaurant_obj.liked_count = (restaurant_obj.liked_count or 0) + 1
                 restaurant_obj.save(update_fields=['liked_count'])
+                print(
+                    f"Liked count for {restaurant_obj.name} increased to {restaurant_obj.liked_count}"
+                )
         elif action == 'remove':
             # 음식점 제거
             if restaurant_name in favorite_restaurants:
@@ -103,6 +106,9 @@ def update_guest_user_favorite_restaurants(request):
                 if restaurant_obj.liked_count and restaurant_obj.liked_count > 0:
                     restaurant_obj.liked_count -= 1
                     restaurant_obj.save(update_fields=['liked_count'])
+                    print(
+                        f"Liked count for {restaurant_obj.name} decreased to {restaurant_obj.liked_count}"
+                    )
 
         # 업데이트된 리스트를 JSON 형식으로 저장
         guest_user.favorite_restaurants = json.dumps(favorite_restaurants)
