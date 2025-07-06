@@ -18,6 +18,7 @@ class Restaurant(models.Model):
     attribute_2 = models.CharField(max_length=5, null=True, blank=True)
     attribute_3 = models.CharField(max_length=5, null=True, blank=True)
     attribute_4 = models.CharField(max_length=5, null=True, blank=True)
+    liked_count = models.IntegerField(default=0)
 
     def __str__(self):
         return self.name
