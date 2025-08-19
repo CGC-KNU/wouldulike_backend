@@ -21,6 +21,8 @@ urlpatterns = [
     path('restaurants/', include('restaurants.urls')),
 
     path('notifications/', include('notifications.urls')),
+
+    path('api/auth/', include('accounts.urls')),
 ]
 
 if settings.DEBUG:

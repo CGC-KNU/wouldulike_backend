@@ -62,6 +62,8 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'storages',
+    'accounts',
+    'rest_framework_simplejwt.token_blacklist',
 ]
 
 
@@ -165,8 +167,10 @@ REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
-print("REDIS_URL:", os.getenv("REDIS_URL"))
-print("REDIS_URL (decoded):", urllib.parse.unquote(os.getenv("REDIS_URL")))
+REDIS_URL = os.getenv("REDIS_URL")
+print("REDIS_URL:", REDIS_URL)
+if REDIS_URL:
+    print("REDIS_URL (decoded):", urllib.parse.unquote(REDIS_URL))
 
 
 # AWS S3 설정 (개인)
@@ -208,7 +212,23 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
-AUTH_USER_MODEL = 'auth.User'  # 기본 Django User 모델 사용
+AUTH_USER_MODEL = 'accounts.User'
+
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': (
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+}
+
+from datetime import timedelta
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),
+    'BLACKLIST_AFTER_ROTATION': True,
+}
+
+KAKAO_ADMIN_KEY = os.getenv('KAKAO_ADMIN_KEY')
 
 LOGGING = {
     'version': 1,
