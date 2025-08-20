@@ -168,9 +168,6 @@ REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
 REDIS_URL = os.getenv("REDIS_URL")
-print("REDIS_URL:", REDIS_URL)
-if REDIS_URL:
-    print("REDIS_URL (decoded):", urllib.parse.unquote(REDIS_URL))
 
 
 # AWS S3 설정 (개인)
