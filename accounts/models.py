@@ -25,9 +25,6 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser, PermissionsMixin):
     kakao_id = models.BigIntegerField(unique=True, db_index=True)
-    email = models.EmailField(null=True, blank=True)
-    nickname = models.CharField(max_length=255, null=True, blank=True)
-    profile_image_url = models.URLField(null=True, blank=True)
     type_code = models.CharField(max_length=4, null=True, blank=True)
     favorite_restaurants = models.TextField(null=True, blank=True)
     fcm_token = models.CharField(max_length=255, null=True, blank=True)
