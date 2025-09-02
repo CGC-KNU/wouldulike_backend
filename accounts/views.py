@@ -7,52 +7,66 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import User
-from .serializers import UserSerializer
 from .jwt_utils import generate_tokens_for_user
 from .utils import merge_guest_data
 
 
 class KakaoLoginView(APIView):
+    # Kakao 로그인은 로그인 전 엔드포인트이므로 JWT 인증 비적용
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
-        access_token = request.data.get('access_token')
+        # 요청 스펙: JSON body로 access_token(필수), guest_uuid(선택)
+        access_token = request.data.get('access_token') or request.data.get('accessToken')
         guest_uuid = request.data.get('guest_uuid')
         if not access_token:
             return Response({'detail': 'access_token is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        headers = {'Authorization': f'Bearer {access_token}'}
-        kakao_response = requests.get('https://kapi.kakao.com/v2/user/me', headers=headers)
+        # 1) Kakao 프로필 조회
+        try:
+            kakao_response = requests.get(
+                'https://kapi.kakao.com/v2/user/me',
+                headers={'Authorization': f'Bearer {access_token}'},
+                timeout=10,
+            )
+        except Exception:
+            return Response({'detail': 'kakao_api_error'}, status=status.HTTP_502_BAD_GATEWAY)
 
-        if kakao_response.status_code == 401:
-            return Response({'detail': 'Invalid or expired token'}, status=status.HTTP_401_UNAUTHORIZED)
         if kakao_response.status_code != 200:
-            return Response({'detail': 'Kakao API error'}, status=status.HTTP_502_BAD_GATEWAY)
+            return Response({'detail': 'kakao_token_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
 
         data = kakao_response.json()
         kakao_id = data.get('id')
-        kakao_account = data.get('kakao_account', {})
-        profile = kakao_account.get('profile', {})
+        kakao_account = data.get('kakao_account') or {}
+        profile = kakao_account.get('profile') or {}
+        nickname = profile.get('nickname') or ''
+        profile_image_url = profile.get('profile_image_url') or ''
 
-        email = kakao_account.get('email')
-        nickname = profile.get('nickname')
-        profile_image_url = profile.get('profile_image_url')
+        if not kakao_id:
+            return Response({'detail': 'kakao_profile_invalid'}, status=status.HTTP_400_BAD_REQUEST)
 
-        user, created = User.objects.update_or_create(
-            kakao_id=kakao_id,
-            defaults={
-                'email': email,
-                'nickname': nickname,
-                'profile_image_url': profile_image_url,
-            }
-        )
+        # 2) 사용자 매핑/생성: kakao_id 기준
+        user, created = User.objects.get_or_create(kakao_id=kakao_id)
 
+        # guest_uuid가 있으면 게스트 데이터 귀속 (선택 구현)
         if guest_uuid:
             merge_guest_data(guest_uuid, user)
 
+        # 3) JWT 발급
         tokens = generate_tokens_for_user(user)
-        serializer = UserSerializer(user)
-        return Response({'token': tokens, 'user': serializer.data, 'is_new': created})
+
+        # 응답 스키마: token/access+refresh, user/id+nickname+profile_image_url
+        resp = {
+            'token': tokens,
+            'user': {
+                'id': user.id,
+                'nickname': nickname,
+                'profile_image_url': profile_image_url,
+            },
+            'is_new': created,
+        }
+        return Response(resp, status=status.HTTP_200_OK)
 
 
 class LogoutView(APIView):

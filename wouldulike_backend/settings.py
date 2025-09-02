@@ -35,6 +35,9 @@ DEBUG = config('DEBUG', default=True, cast=bool)
 ALLOWED_HOSTS = ['*']
 # ALLOWED_HOSTS = ['deliberate-lenette-coggiri-5ee7b85e.koyeb.app', 'localhost', '127.0.0.1']
 
+# URL 룰에서 트레일링 슬래시 자동 보정
+APPEND_SLASH = True
+
 # CORS_ALLOW_ALL_ORIGINS = True # 개발 중 모든 도메인 허용
 # # 배포 시 특정 도메인만 허용
 # # CORS_ALLOWED_ORIGINS = [

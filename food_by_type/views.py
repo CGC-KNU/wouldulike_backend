@@ -108,8 +108,9 @@ def get_unique_random_foods(request):
             cached_food_ids_set = set(cached_food_ids)
             print(f"Cached food_ids: {cached_food_ids}")
         except Exception as e:
-            print(f"Cache read error: {e}")
-            return JsonResponse({'error_code': 'CACHE_READ_ERROR', 'message': f'Error reading cache: {str(e)}'}, status=500)
+            # 캐시 문제 시 중복제거 기능을 비활성화하고 계속 진행
+            print(f"Cache read error (fallback to no-cache): {e}")
+            cached_food_ids_set = set()
 
         # Step 3: 중복 제거된 food_id만 필터링
         available_food_ids = [fid for fid in food_ids if str(fid) not in cached_food_ids_set]
@@ -141,8 +142,8 @@ def get_unique_random_foods(request):
             redis_client.expire(cache_key, 600)
             print(f"Updated cache: {redis_client.lrange(cache_key, 0, -1)}")
         except Exception as e:
-            print(f"Cache update error: {e}")
-            return JsonResponse({'error_code': 'CACHE_UPDATE_ERROR', 'message': f'Error updating cache: {str(e)}'}, status=500)
+            # 캐시 업데이트 실패 시에도 추천은 반환
+            print(f"Cache update error (ignored): {e}")
 
         return JsonResponse({'random_foods': random_foods})
 
