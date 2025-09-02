@@ -41,31 +41,55 @@ def retrieve_guest_user(request):
 
 @csrf_exempt
 def update_guest_user_type_code(request):
-    # 유형 코드 업데이트
-    data = request.GET  # GET 요청으로 데이터 받음
-    uuid = data.get('uuid')  # 요청에서 UUID 가져오기
-    type_code = data.get('type_code')  # 유형 코드 받아오기
+    """Update guest user's type_code.
 
-    # 요청 데이터 검증
-    if not uuid:
-        return JsonResponse({'status': 'error', 'message': 'UUID가 제공되지 않았습니다.'}, status=400)
-    if not type_code:
-        return JsonResponse({'status': 'error', 'message': '유형 코드가 제공되지 않았습니다.'}, status=400)
+    Accepts:
+    - GET: query params `uuid`, `type_code`
+    - POST: JSON body { uuid, type_code } or form-encoded fields
+    """
+
+    uuid = None
+    type_code = None
 
     try:
-        # 게스트 사용자 검색
-        guest_user = GuestUser.objects.get(uuid=uuid)
+        if request.method == 'GET':
+            data = request.GET
+            uuid = data.get('uuid')
+            type_code = data.get('type_code')
+        elif request.method == 'POST':
+            # Try JSON first
+            try:
+                body = request.body.decode('utf-8') or ''
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                payload = {}
+
+            uuid = payload.get('uuid') or request.POST.get('uuid')
+            type_code = payload.get('type_code') or request.POST.get('type_code')
+        else:
+            return JsonResponse({'status': 'error', 'message': '허용되지 않은 메서드입니다.'}, status=405)
+
+        # 요청 데이터 검증
+        if not uuid:
+            return JsonResponse({'status': 'error', 'message': 'UUID가 제공되지 않았습니다.'}, status=400)
+        if not type_code:
+            return JsonResponse({'status': 'error', 'message': '유형 코드가 제공되지 않았습니다.'}, status=400)
+
+        # 게스트 사용자 검색 및 업데이트
         try:
-            # 유형 코드 업데이트
+            guest_user = GuestUser.objects.get(uuid=uuid)
+        except GuestUser.DoesNotExist:
+            return JsonResponse({'status': 'error', 'message': '게스트 사용자 없음'}, status=404)
+
+        try:
             guest_user.type_code = type_code
-            guest_user.save()
+            guest_user.save(update_fields=['type_code'])
             return JsonResponse({'status': 'success', 'message': '게스트 사용자 유형 코드 업데이트 성공'})
         except ValidationError as e:
             return JsonResponse({'status': 'error', 'message': f'유형 코드 업데이트 실패: {str(e)}'}, status=400)
         except Exception as e:
             return JsonResponse({'status': 'error', 'message': f'유형 코드 업데이트 중 오류 발생: {str(e)}'}, status=500)
-    except GuestUser.DoesNotExist:
-        return JsonResponse({'status': 'error', 'message': '게스트 사용자 없음'}, status=404)
+
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': f'알 수 없는 오류 발생: {str(e)}'}, status=500)
 
