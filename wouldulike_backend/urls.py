@@ -23,6 +23,7 @@ urlpatterns = [
     path('notifications/', include('notifications.urls')),
 
     path('api/auth/', include('accounts.urls')),
+    path('api/', include('coupons.api.urls')),
 ]
 
 if settings.DEBUG:
