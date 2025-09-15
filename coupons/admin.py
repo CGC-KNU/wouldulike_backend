@@ -1,5 +1,14 @@
 from django.contrib import admin
-from .models import Campaign, CouponType, Coupon, InviteCode, Referral
+from .models import (
+    Campaign,
+    CouponType,
+    Coupon,
+    InviteCode,
+    Referral,
+    MerchantPin,
+    StampWallet,
+    StampEvent,
+)
 
 
 @admin.register(Campaign)
@@ -46,3 +55,23 @@ class ReferralAdmin(admin.ModelAdmin):
         "referrer__kakao_id",
         "referee__kakao_id",
     )
+
+
+@admin.register(MerchantPin)
+class MerchantPinAdmin(admin.ModelAdmin):
+    list_display = ("restaurant_id", "algo", "last_rotated_at")
+    list_filter = ("algo",)
+    search_fields = ("restaurant_id",)
+
+
+@admin.register(StampWallet)
+class StampWalletAdmin(admin.ModelAdmin):
+    list_display = ("user", "restaurant_id", "stamps", "updated_at")
+    search_fields = ("user__kakao_id", "restaurant_id")
+
+
+@admin.register(StampEvent)
+class StampEventAdmin(admin.ModelAdmin):
+    list_display = ("user", "restaurant_id", "delta", "source", "created_at")
+    list_filter = ("source",)
+    search_fields = ("user__kakao_id", "restaurant_id")

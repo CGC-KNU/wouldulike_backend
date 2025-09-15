@@ -23,6 +23,11 @@ class Command(BaseCommand):
                 "rules_json": {"quota_daily": 500},
             },
         )
+        # Stamp reward campaign
+        Campaign.objects.get_or_create(
+            code="STAMP_REWARD",
+            defaults={"name": "Stamp Reward", "type": "STAMP", "active": True},
+        )
 
         CouponType.objects.get_or_create(
             code="WELCOME_3000",
@@ -56,6 +61,17 @@ class Command(BaseCommand):
                 "title": "Flash ₩3,000",
                 "benefit_json": {"type": "fixed", "value": 3000},
                 "valid_days": 3,
+            },
+        )
+
+        # Stamp reward coupon type
+        CouponType.objects.get_or_create(
+            code="STAMP_REWARD_8",
+            defaults={
+                "title": "Stamp Reward (8)",
+                "benefit_json": {"type": "fixed", "value": 3000},
+                "valid_days": 14,
+                "per_user_limit": 999,
             },
         )
 

@@ -10,6 +10,9 @@ from ..service import (
     accept_referral,
     qualify_referral_and_grant,
     claim_flash_drop,
+    add_stamp,
+    get_stamp_status,
+    check_and_expire_coupon,
 )
 from .serializers import CouponSerializer, InviteCodeSerializer
 
@@ -44,8 +47,22 @@ class RedeemView(APIView):
     def post(self, request):
         code = request.data.get("coupon_code")
         restaurant_id = request.data.get("restaurant_id")
-        c = redeem_coupon(request.user, code, restaurant_id)
+        pin = request.data.get("pin")
+        if not code or not restaurant_id or not pin:
+            return Response({"detail": "coupon_code, restaurant_id and pin required"}, status=400)
+        c = redeem_coupon(request.user, code, int(restaurant_id), pin)
         return Response({"ok": True, "coupon_code": c.code})
+
+
+class CheckCouponView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        code = request.data.get("coupon_code")
+        if not code:
+            return Response({"detail": "coupon_code required"}, status=400)
+        data = check_and_expire_coupon(request.user, code)
+        return Response(data)
 
 
 class MyInviteCodeView(APIView):
@@ -86,3 +103,27 @@ class FlashClaimView(APIView):
             request.user, campaign_code="FLASH_8PM", idem_key=idem_key
         )
         return Response({"coupon_code": code}, status=201)
+
+
+class AddStampView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        restaurant_id = request.data.get("restaurant_id")
+        pin = request.data.get("pin")
+        idem_key = request.headers.get("Idempotency-Key") or request.data.get("idem_key")
+        if not restaurant_id or not pin:
+            return Response({"detail": "restaurant_id and pin required"}, status=400)
+        data = add_stamp(request.user, int(restaurant_id), pin, idem_key)
+        return Response(data, status=201 if data.get("reward_coupon_code") else 200)
+
+
+class MyStampStatusView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        restaurant_id = request.query_params.get("restaurant_id")
+        if not restaurant_id:
+            return Response({"detail": "restaurant_id required"}, status=400)
+        data = get_stamp_status(request.user, int(restaurant_id))
+        return Response(data)

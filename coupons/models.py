@@ -43,7 +43,12 @@ class Coupon(models.Model):
         ("CANCELED", "CANCELED"),
     )
     code = models.CharField(max_length=20, unique=True)
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="coupons")
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="coupons",
+        db_constraint=False,
+    )
     coupon_type = models.ForeignKey(CouponType, on_delete=models.PROTECT)
     campaign = models.ForeignKey(Campaign, on_delete=models.PROTECT, null=True, blank=True)
     status = models.CharField(max_length=10, choices=STATUS, default="ISSUED")
@@ -69,7 +74,7 @@ class Coupon(models.Model):
 
 class InviteCode(models.Model):
     user = models.OneToOneField(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="invite_code"
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="invite_code", db_constraint=False
     )
     code = models.CharField(max_length=16, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -82,10 +87,10 @@ class Referral(models.Model):
         ("REJECTED", "REJECTED"),
     )
     referrer = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="referrals_made"
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="referrals_made", db_constraint=False
     )
     referee = models.OneToOneField(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="referral_from"
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="referral_from", db_constraint=False
     )
     code_used = models.CharField(max_length=16)
     status = models.CharField(max_length=12, choices=STATUS, default="PENDING")
@@ -95,3 +100,53 @@ class Referral(models.Model):
         constraints = [
             models.UniqueConstraint(fields=["referrer", "referee"], name="uq_ref_pair")
         ]
+
+
+class MerchantPin(models.Model):
+    restaurant_id = models.IntegerField(db_index=True, unique=True)
+    # STATIC | TOTP
+    algo = models.CharField(max_length=10, default="STATIC")
+    # STATIC 핀 or TOTP 시드
+    secret = models.CharField(max_length=128)
+    # TOTP 주기(초)
+    period_sec = models.PositiveIntegerField(default=30)
+    last_rotated_at = models.DateTimeField(null=True, blank=True)
+
+    def __str__(self):
+        return f"PIN:{self.restaurant_id}({self.algo})"
+
+
+class StampWallet(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="stamp_wallets", db_constraint=False
+    )
+    restaurant_id = models.IntegerField(db_index=True)
+    # 현재 라운드 누적
+    stamps = models.PositiveIntegerField(default=0)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "restaurant_id"], name="uq_stamp_wallet_user_restaurant"
+            )
+        ]
+
+    def __str__(self):
+        return f"Wallet:{self.user_id}:{self.restaurant_id}={self.stamps}"
+
+
+class StampEvent(models.Model):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="stamp_events", db_constraint=False
+    )
+    restaurant_id = models.IntegerField(db_index=True)
+    # +1 적립, -1 정정
+    delta = models.SmallIntegerField(default=+1)
+    # PIN/QR/OTP 등
+    source = models.CharField(max_length=10, default="PIN")
+    created_at = models.DateTimeField(default=timezone.now)
+    metadata_json = models.JSONField(default=dict, blank=True)
+
+    def __str__(self):
+        return f"StampEvent u={self.user_id} r={self.restaurant_id} d={self.delta} @ {self.created_at:%Y-%m-%d %H:%M:%S}"
