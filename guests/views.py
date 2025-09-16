@@ -93,6 +93,9 @@ def update_guest_user_type_code(request):
     except Exception as e:
         return JsonResponse({'status': 'error', 'message': f'알 수 없는 오류 발생: {str(e)}'}, status=500)
 
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
 def update_guest_user_favorite_restaurants(request):
     # 찜 음식점 업데이트
     if request.method != 'POST':

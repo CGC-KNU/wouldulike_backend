@@ -5,6 +5,10 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+import os
 
 from .models import User
 from .jwt_utils import generate_tokens_for_user
@@ -70,6 +74,7 @@ class KakaoLoginView(APIView):
 
 
 class LogoutView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -85,6 +90,7 @@ class LogoutView(APIView):
 
 
 class UnlinkView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
@@ -96,3 +102,71 @@ class UnlinkView(APIView):
             return Response({'detail': 'Failed to unlink from Kakao'}, status=status.HTTP_502_BAD_GATEWAY)
         user.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@method_decorator(csrf_exempt, name="dispatch")
+class DevLoginView(APIView):
+    """Development-only login to mint JWT for a given user.
+
+    Pre-conditions (env or .env loaded in settings):
+      - ALLOW_DEV_LOGIN=1
+      - DEV_LOGIN_SECRET=<shared secret>
+
+    Request (POST):
+      Headers (prefer):
+        - X-Dev-Login-Secret: <secret>
+      or Body JSON:
+        - secret: <secret>
+        - kakao_id: <int> (required if user_id not provided)
+        - user_id: <int> (optional alternative; DB pk)
+
+    Response: { token: {access, refresh}, user: {id, nickname, profile_image_url}, is_new }
+    """
+
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        if os.getenv("ALLOW_DEV_LOGIN") not in ("1", "true", "True"):  # safety gate
+            return Response({"detail": "dev login not allowed"}, status=status.HTTP_403_FORBIDDEN)
+
+        configured_secret = os.getenv("DEV_LOGIN_SECRET")
+        provided_secret = (
+            request.headers.get("X-Dev-Login-Secret")
+            or request.data.get("secret")
+            or request.query_params.get("secret")
+        )
+        if not configured_secret or not provided_secret or provided_secret != configured_secret:
+            return Response({"detail": "invalid dev secret"}, status=status.HTTP_401_UNAUTHORIZED)
+
+        # Identify target user
+        user_id = request.data.get("user_id") or request.query_params.get("user_id")
+        kakao_id = request.data.get("kakao_id") or request.query_params.get("kakao_id")
+
+        user = None
+        created = False
+        try:
+            if user_id:
+                user = User.objects.get(id=int(user_id))
+            elif kakao_id:
+                kakao_id_int = int(kakao_id)
+                user, created = User.objects.get_or_create(kakao_id=kakao_id_int)
+            else:
+                return Response({"detail": "kakao_id or user_id required"}, status=status.HTTP_400_BAD_REQUEST)
+        except User.DoesNotExist:
+            return Response({"detail": "user not found"}, status=status.HTTP_404_NOT_FOUND)
+        except ValueError:
+            return Response({"detail": "invalid id format"}, status=status.HTTP_400_BAD_REQUEST)
+
+        tokens = generate_tokens_for_user(user)
+        resp = {
+            "token": tokens,
+            "user": {
+                "id": user.id,
+                # Dev login has no Kakao profile; provide minimal placeholders
+                "nickname": f"dev-{user.kakao_id}",
+                "profile_image_url": "",
+            },
+            "is_new": created,
+        }
+        return Response(resp, status=status.HTTP_200_OK)

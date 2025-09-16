@@ -1,6 +1,7 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.authentication import JWTAuthentication
 
 from ..models import Coupon
 from ..service import (
@@ -18,6 +19,7 @@ from .serializers import CouponSerializer, InviteCodeSerializer
 
 
 class MyCouponsView(generics.ListAPIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     serializer_class = CouponSerializer
 
@@ -30,6 +32,7 @@ class MyCouponsView(generics.ListAPIView):
 
 
 class SignupCompleteView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -42,6 +45,7 @@ class SignupCompleteView(APIView):
 
 
 class RedeemView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -55,6 +59,7 @@ class RedeemView(APIView):
 
 
 class CheckCouponView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -66,6 +71,7 @@ class CheckCouponView(APIView):
 
 
 class MyInviteCodeView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -74,6 +80,7 @@ class MyInviteCodeView(APIView):
 
 
 class AcceptReferralView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -84,6 +91,7 @@ class AcceptReferralView(APIView):
 
 
 class QualifyReferralView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -93,6 +101,7 @@ class QualifyReferralView(APIView):
 
 
 class FlashClaimView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -106,6 +115,7 @@ class FlashClaimView(APIView):
 
 
 class AddStampView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
@@ -119,6 +129,7 @@ class AddStampView(APIView):
 
 
 class MyStampStatusView(APIView):
+    authentication_classes = [JWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
