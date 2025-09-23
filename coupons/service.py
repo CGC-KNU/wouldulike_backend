@@ -1,3 +1,4 @@
+import uuid
 from datetime import date, datetime
 from django.db import transaction, IntegrityError, router
 from utils.db_locks import locked_get
@@ -31,12 +32,24 @@ def _expires_at(ct: CouponType):
 def ensure_invite_code(user: User) -> InviteCode:
     if hasattr(user, "invite_code"):
         return user.invite_code
-    # 간단 충돌 회피
-    for _ in range(5):
-        code = make_coupon_code()[:8].upper()
-        if not InviteCode.objects.filter(code=code).exists():
+
+    max_attempts = 32
+    for attempt in range(max_attempts):
+        length = 12 if attempt >= 8 else 8
+        code = make_coupon_code(length).upper()
+        if InviteCode.objects.filter(code=code).exists():
+            continue
+        try:
             return InviteCode.objects.create(user=user, code=code)
-    raise RuntimeError("invite code collision")
+        except IntegrityError:
+            continue
+
+    fallback_code = f"INV{user.id:06d}{uuid.uuid4().hex[:4].upper()}"
+    invite, _ = InviteCode.objects.update_or_create(
+        user=user,
+        defaults={"code": fallback_code[:16]},
+    )
+    return invite
 
 
 def issue_signup_coupon(user: User):
