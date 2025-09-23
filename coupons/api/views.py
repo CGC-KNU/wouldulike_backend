@@ -1,3 +1,5 @@
+from django.core.exceptions import ValidationError as DjangoValidationError
+from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -51,11 +53,33 @@ class RedeemView(APIView):
     def post(self, request):
         code = request.data.get("coupon_code")
         restaurant_id = request.data.get("restaurant_id")
-        pin = request.data.get("pin")
+        pin = request.data.get("pin") or request.data.get("pin_code")
         if not code or not restaurant_id or not pin:
             return Response({"detail": "coupon_code, restaurant_id and pin required"}, status=400)
-        c = redeem_coupon(request.user, code, int(restaurant_id), pin)
-        return Response({"ok": True, "coupon_code": c.code})
+        try:
+            restaurant_id_int = int(restaurant_id)
+        except (TypeError, ValueError):
+            return Response({"detail": "restaurant_id must be numeric"}, status=400)
+
+        try:
+            c = redeem_coupon(request.user, code, restaurant_id_int, pin)
+            return Response({"ok": True, "coupon_code": c.code})
+        except Coupon.DoesNotExist:
+            return Response({"detail": "not found"}, status=404)
+        except DjangoValidationError as e:
+            msg = str(e)
+            if "invalid merchant" in msg:
+                return Response({"detail": msg}, status=403)
+            if "expired" in msg:
+                return Response({"detail": msg}, status=410)
+            if "already used" in msg:
+                return Response({"detail": msg}, status=409)
+            return Response({"detail": msg}, status=400)
+        except Exception as e:
+            if request.query_params.get("_diag") == "1":
+                import traceback
+                return Response({"detail": "internal error", "error": str(e), "trace": traceback.format_exc().splitlines()[-5:]}, status=500)
+            return Response({"detail": "internal error"}, status=500)
 
 
 class CheckCouponView(APIView):
@@ -66,8 +90,18 @@ class CheckCouponView(APIView):
         code = request.data.get("coupon_code")
         if not code:
             return Response({"detail": "coupon_code required"}, status=400)
-        data = check_and_expire_coupon(request.user, code)
-        return Response(data)
+        try:
+            data = check_and_expire_coupon(request.user, code)
+            return Response(data)
+        except Coupon.DoesNotExist:
+            return Response({"detail": "not found"}, status=404)
+        except DjangoValidationError as e:
+            return Response({"detail": str(e)}, status=400)
+        except Exception as e:
+            if request.query_params.get("_diag") == "1":
+                import traceback
+                return Response({"detail": "internal error", "error": str(e), "trace": traceback.format_exc().splitlines()[-5:]}, status=500)
+            return Response({"detail": "internal error"}, status=500)
 
 
 class MyInviteCodeView(APIView):
@@ -84,10 +118,28 @@ class AcceptReferralView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        ref = request.data.get("ref_code")
-        accept_referral(request.user, ref)
-        # 보상 시점: 즉시가 아니라 '가입 완성' or '첫 주문' 등에 맞춰 qualify 호출
-        return Response({"ok": True})
+        ref_code = request.data.get("ref_code")
+        if not ref_code:
+            raise DRFValidationError({"ref_code": "필수 필드입니다."})
+
+        try:
+            referral = accept_referral(referee=request.user, ref_code=ref_code)
+        except DjangoValidationError as exc:
+            if hasattr(exc, "message_dict") and exc.message_dict:
+                payload = exc.message_dict
+            else:
+                message = exc.messages[0] if getattr(exc, "messages", None) else str(exc)
+                payload = {"detail": message}
+            status_code = (
+                status.HTTP_409_CONFLICT
+                if getattr(exc, "code", "") == "referral_already_accepted"
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response(payload, status=status_code)
+
+        qualify_referral_and_grant(request.user)
+
+        return Response({"ok": True, "referral_id": referral.id}, status=status.HTTP_200_OK)
 
 
 class QualifyReferralView(APIView):

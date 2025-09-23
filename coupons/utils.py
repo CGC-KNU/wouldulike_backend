@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from contextlib import contextmanager
@@ -9,6 +10,8 @@ try:
     import ulid  # provided by the 'ulid-py' package
 except Exception as e:  # pragma: no cover
     ulid = None  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 
 def make_coupon_code(length: int = 12) -> str:
@@ -42,28 +45,37 @@ def redis_lock(
 ) -> Generator[None, None, None]:
     """A simple Redis spin-lock using django-redis low-level client.
 
-    - Acquires a lock with SET NX EX.
-    - Spins until acquired or `max_wait` elapses.
-    - Releases lock only if token matches (best-effort).
-
-    Args:
-        key: Lock key name.
-        ttl: Expiration for the lock in seconds.
-        spin: Sleep seconds between attempts.
-        max_wait: Total wait budget before timing out.
+    Falls back to a no-op lock when Redis is unavailable so development
+    environments without Redis do not raise 500 errors.
     """
     token = str(uuid.uuid4())
     deadline = time.time() + max_wait
     acquired = False
 
-    # Get raw redis client (requires django-redis backend)
-    client = cache.client.get_client(False)  # type: ignore[attr-defined]
+    try:
+        client = cache.client.get_client(False)  # type: ignore[attr-defined]
+    except Exception as exc:  # pragma: no cover - cache backend missing
+        logger.warning("redis lock disabled: %s", exc)
+        client = None
+
+    if client is None:
+        yield
+        return
 
     while time.time() < deadline:
-        acquired = client.set(name=key, value=token, nx=True, ex=ttl)
+        try:
+            acquired = client.set(name=key, value=token, nx=True, ex=ttl)
+        except Exception as exc:
+            logger.warning("redis lock fell back to noop: %s", exc)
+            client = None
+            break
         if acquired:
             break
         time.sleep(spin)
+
+    if client is None:
+        yield
+        return
 
     try:
         if not acquired:
@@ -71,12 +83,10 @@ def redis_lock(
         yield
     finally:
         try:
-            # Release only if we still own the lock
             val: Optional[bytes] = client.get(key)
             if val and (val.decode() == token):
                 client.delete(key)
         except Exception:
-            # best-effort unlock; ignore errors
             pass
 
 

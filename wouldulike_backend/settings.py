@@ -13,6 +13,9 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 env = environ.Env()
 environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
+USE_LOCAL_SQLITE = os.getenv("DJANGO_USE_LOCAL_SQLITE", "0") == "1"
+DISABLE_EXTERNAL_DBS = os.getenv("DJANGO_DISABLE_EXTERNAL_DBS", "0") == "1"
+
 
 secret_file = os.path.join(BASE_DIR, 'secrets.json')  # secrets.json 파일 위치를 명시
 
@@ -142,7 +145,25 @@ DATABASES = {
 }
 
 
-DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
+
+DEFAULT_DB_CONFIG = DATABASES.get("default", {}).copy()
+
+if USE_LOCAL_SQLITE:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": os.path.join(BASE_DIR, "local.sqlite3"),
+        }
+    }
+elif DISABLE_EXTERNAL_DBS:
+    DATABASES = {
+        "default": DEFAULT_DB_CONFIG,
+    }
+
+if USE_LOCAL_SQLITE or DISABLE_EXTERNAL_DBS:
+    DATABASE_ROUTERS = []
+else:
+    DATABASE_ROUTERS = ['wouldulike_backend.db_routers.TypeDescriptionRouter']
 
 
 CACHES = {

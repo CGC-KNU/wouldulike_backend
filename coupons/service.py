@@ -1,5 +1,6 @@
-from datetime import timedelta, date
-from django.db import transaction
+from datetime import date, datetime
+from django.db import transaction, IntegrityError, router
+from utils.db_locks import locked_get
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
@@ -20,8 +21,11 @@ from .utils import make_coupon_code, redis_lock, idem_get, idem_set
 User = get_user_model()
 
 
+GLOBAL_COUPON_EXPIRY = datetime(2026, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
+REFERRAL_MAX_REWARDS_PER_REFERRER = 5
+
 def _expires_at(ct: CouponType):
-    return timezone.now() + timedelta(days=ct.valid_days)
+    return GLOBAL_COUPON_EXPIRY
 
 
 def ensure_invite_code(user: User) -> InviteCode:
@@ -49,52 +53,51 @@ def issue_signup_coupon(user: User):
     )
 
 
+
 @transaction.atomic
 def redeem_coupon(user: User, coupon_code: str, restaurant_id: int, pin: str):
-    # Lock coupon row first and handle expiry eagerly
-    coupon = Coupon.objects.select_for_update().get(code=coupon_code, user=user)
+    alias = router.db_for_write(Coupon)
+    coupon = locked_get(Coupon.objects, using_alias=alias, code=coupon_code, user=user)
     if coupon.status != "ISSUED":
         raise ValidationError("already used or invalid state")
 
     now = timezone.now()
     if coupon.expires_at <= now:
-        # Mark as expired on-the-fly
         coupon.status = "EXPIRED"
-        coupon.save(update_fields=["status"])
+        coupon.save(update_fields=["status"], using=alias)
         raise ValidationError("expired")
 
-    # Verify merchant PIN after confirming coupon is still valid
     if not _verify_pin(restaurant_id, pin):
         raise ValidationError("invalid merchant code")
 
     lock_key = f"lock:coupon:{coupon.id}"
     with redis_lock(lock_key, ttl=5):
-        coupon.refresh_from_db()
+        coupon.refresh_from_db(using=alias)
         if coupon.status != "ISSUED":
             raise ValidationError("already used")
         if coupon.expires_at <= timezone.now():
             coupon.status = "EXPIRED"
-            coupon.save(update_fields=["status"])
+            coupon.save(update_fields=["status"], using=alias)
             raise ValidationError("expired")
 
         coupon.status = "REDEEMED"
         coupon.redeemed_at = timezone.now()
         coupon.restaurant_id = restaurant_id
-        coupon.save()
+        coupon.save(using=alias)
     return coupon
+
 
 
 @transaction.atomic
 def check_and_expire_coupon(user: User, coupon_code: str) -> dict:
-    """Check coupon validity; if expired, mark EXPIRED and return status.
+    """Check coupon validity; if expired, mark EXPIRED and return status."""
+    alias = router.db_for_write(Coupon)
+    coupon = locked_get(Coupon.objects, using_alias=alias, code=coupon_code, user=user)
 
-    Returns a minimal status payload for the client to decide UI flow.
-    """
-    coupon = Coupon.objects.select_for_update().get(code=coupon_code, user=user)
     now = timezone.now()
     if coupon.status == "ISSUED" and coupon.expires_at <= now:
         coupon.status = "EXPIRED"
-        coupon.save(update_fields=["status"])
+        coupon.save(update_fields=["status"], using=alias)
 
     return {
         "code": coupon.code,
@@ -106,55 +109,156 @@ def check_and_expire_coupon(user: User, coupon_code: str) -> dict:
     }
 
 
-def accept_referral(referee: User, ref_code: str):
+
+def accept_referral(*, referee: User, ref_code: str) -> Referral:
+
+    db_alias = router.db_for_write(Referral)
+
     try:
-        referrer = InviteCode.objects.select_related("user").get(code=ref_code).user
+
+        invite_code = InviteCode.objects.using(db_alias).get(code=ref_code)
+
+        referrer = invite_code.user
+
     except InviteCode.DoesNotExist:
+
         raise ValidationError("invalid referral code")
+
     if referrer.id == referee.id:
+
         raise ValidationError("self referral not allowed")
 
-    # 단순 어뷰즈 룰(동일 디바이스/번호 체크는 별도 계층에서)
-    Referral.objects.create(referrer=referrer, referee=referee, code_used=ref_code)
-
-
-@transaction.atomic
-def qualify_referral_and_grant(referee: User):
-    # referee 가입 완료 시점 등에서 호출
     try:
-        ref = Referral.objects.select_for_update().get(referee=referee)
-    except Referral.DoesNotExist:
-        return None
 
-    if ref.status != "PENDING":
+        with transaction.atomic(using=db_alias):
+
+            base_qs = Referral.objects.using(db_alias)
+            locked_qs = base_qs.select_for_update()
+
+            if locked_qs.filter(referee=referee).exists():
+
+                raise ValidationError(
+
+                    "이미 추천을 수락했습니다.",
+
+                    code="referral_already_accepted",
+
+                )
+
+            active_referrals = (
+                locked_qs.filter(referrer=referrer)
+                .exclude(status="REJECTED")
+                .count()
+            )
+            if active_referrals >= REFERRAL_MAX_REWARDS_PER_REFERRER:
+
+                raise ValidationError(
+
+                    "referral limit reached",
+
+                    code="referral_limit_reached",
+
+                )
+
+            return base_qs.create(
+
+                referrer=referrer,
+
+                referee=referee,
+
+                code_used=ref_code,
+
+            )
+
+    except IntegrityError:
+
+        raise ValidationError(
+
+            "이미 추천을 수락했습니다.",
+
+            code="referral_already_accepted",
+
+        )
+
+def qualify_referral_and_grant(referee: User):
+
+    # referee 가???료 ?점 ?에??출
+
+    db_alias = router.db_for_write(Referral)
+
+    with transaction.atomic(using=db_alias):
+
+        locked_qs = Referral.objects.using(db_alias).select_for_update()
+
+        try:
+
+            ref = locked_qs.get(referee=referee)
+
+        except Referral.DoesNotExist:
+
+            return None
+
+        if ref.status != "PENDING":
+
+            return ref
+
+        current_reward_count = (
+            locked_qs.filter(referrer=ref.referrer, status="QUALIFIED")
+            .exclude(pk=ref.pk)
+            .count()
+        )
+        can_reward_referrer = current_reward_count < REFERRAL_MAX_REWARDS_PER_REFERRER
+
+        ref.status = "QUALIFIED"
+
+        ref.qualified_at = timezone.now()
+
+        ref.save(update_fields=["status", "qualified_at"], using=db_alias)
+
+        # reward issuance
+
+        ref_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFERRER")
+
+        ref_camp = Campaign.objects.using(db_alias).get(code="REFERRAL", active=True)
+
+        if can_reward_referrer:
+
+            Coupon.objects.using(db_alias).create(
+
+                code=make_coupon_code(),
+
+                user=ref.referrer,
+
+                coupon_type=ref_ct,
+
+                campaign=ref_camp,
+
+                expires_at=_expires_at(ref_ct),
+
+                issue_key=f"REFERRAL_REFERRER:{ref.referrer_id}:{referee.id}",
+
+            )
+
+        new_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFEREE")
+
+        Coupon.objects.using(db_alias).create(
+
+            code=make_coupon_code(),
+
+            user=referee,
+
+            coupon_type=new_ct,
+
+            campaign=ref_camp,
+
+            expires_at=_expires_at(new_ct),
+
+            issue_key=f"REFERRAL_REFEREE:{referee.id}",
+
+        )
+
         return ref
 
-    ref.status = "QUALIFIED"
-    ref.qualified_at = timezone.now()
-    ref.save()
-
-    # 보상 발급
-    ref_ct = CouponType.objects.get(code="REFERRAL_BONUS_REFERRER")
-    ref_camp = Campaign.objects.get(code="REFERRAL", active=True)
-    Coupon.objects.create(
-        code=make_coupon_code(),
-        user=ref.referrer,
-        coupon_type=ref_ct,
-        campaign=ref_camp,
-        expires_at=_expires_at(ref_ct),
-        issue_key=f"REFERRAL_REFERRER:{ref.referrer_id}:{referee.id}",
-    )
-
-    new_ct = CouponType.objects.get(code="REFERRAL_BONUS_REFEREE")
-    Coupon.objects.create(
-        code=make_coupon_code(),
-        user=referee,
-        coupon_type=new_ct,
-        campaign=ref_camp,
-        expires_at=_expires_at(new_ct),
-        issue_key=f"REFERRAL_REFEREE:{referee.id}",
-    )
-    return ref
 
 
 def claim_flash_drop(user: User, campaign_code: str, idem_key: str):
@@ -189,7 +293,8 @@ def claim_flash_drop(user: User, campaign_code: str, idem_key: str):
 # ---- Stamp (Punch) Card Service ----
 
 # 목표 개수 및 보상 정의 (시드로 생성 필요)
-STAMP_TARGET = 8
+STAMP_THRESHOLDS = (5, 10)
+STAMP_CYCLE_TARGET = max(STAMP_THRESHOLDS)
 REWARD_COUPON_CODE = "STAMP_REWARD_8"
 REWARD_CAMPAIGN_CODE = "STAMP_REWARD"
 
@@ -208,16 +313,17 @@ def _verify_pin(restaurant_id: int, pin: str) -> bool:
     return False
 
 
-def _issue_reward_coupon(user: User, issue_key_suffix: str):
+def _issue_reward_coupon(user: User, restaurant_id: int, issue_key_suffix: str):
     ct = CouponType.objects.get(code=REWARD_COUPON_CODE)
     camp = Campaign.objects.get(code=REWARD_CAMPAIGN_CODE, active=True)
     issue_key = f"STAMP_REWARD:{user.id}:{issue_key_suffix}"
-    expires_at = timezone.now() + timezone.timedelta(days=ct.valid_days)
+    expires_at = _expires_at(ct)
     return Coupon.objects.create(
         code=make_coupon_code(),
         user=user,
         coupon_type=ct,
         campaign=camp,
+        restaurant_id=restaurant_id,
         expires_at=expires_at,
         issue_key=issue_key,
     )
@@ -225,7 +331,7 @@ def _issue_reward_coupon(user: User, issue_key_suffix: str):
 
 @transaction.atomic
 def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = None):
-    # 멱등성(같은 요청 재시도 방지)
+    # 멱등(같은 요청 재발급 방지)
     if idem_key:
         cache_key = f"idem:stamp:{restaurant_id}:{idem_key}"
         prev = idem_get(cache_key)
@@ -236,44 +342,48 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
     if not _verify_pin(restaurant_id, pin):
         raise ValidationError("invalid merchant code")
 
-    # 동시 적립 방지 락 (user-restaurant 별)
+    # 동시 요청 방지 (user-restaurant 잠금)
     lock_key = f"lock:stamp:{user.id}:{restaurant_id}"
     with redis_lock(lock_key, ttl=5):
-        # 상태 잠금
-        wallet, _ = (
-            StampWallet.objects.select_for_update().get_or_create(
-                user=user, restaurant_id=restaurant_id
-            )
+        wallet, _ = StampWallet.objects.get_or_create(
+            user=user, restaurant_id=restaurant_id
         )
 
-        # 적립
+        prev_stamps = wallet.stamps
         wallet.stamps += 1
         StampEvent.objects.create(
             user=user, restaurant_id=restaurant_id, delta=+1, source="PIN"
         )
-        reward_issued = None
+        reward_codes = []
+        now_suffix = timezone.now().strftime("%Y%m%d%H%M%S%f")
+        max_threshold = max(STAMP_THRESHOLDS)
+        max_threshold_reached = False
 
-        # 보상 조건 달성
-        if wallet.stamps >= STAMP_TARGET:
-            # 보상 쿠폰 발급
-            reward_issued = _issue_reward_coupon(
-                user, issue_key_suffix=f"{restaurant_id}:{timezone.now().date():%Y%m%d}"
-            )
-            # 정책 1: 리셋(0으로)
-            wallet.stamps = 0
-            # 정책 2(이월): wallet.stamps -= STAMP_TARGET
+        for threshold in STAMP_THRESHOLDS:
+            if prev_stamps < threshold <= wallet.stamps:
+                suffix = f"{restaurant_id}:{now_suffix}:T{threshold}"
+                reward = _issue_reward_coupon(user, restaurant_id, issue_key_suffix=suffix)
+                reward_codes.append(reward.code)
+                if threshold == max_threshold:
+                    max_threshold_reached = True
+
+        if max_threshold_reached:
+            wallet.stamps -= max_threshold
 
         wallet.save()
 
     result = {
         "ok": True,
         "current": wallet.stamps,
-        "target": STAMP_TARGET,
-        "reward_coupon_code": reward_issued.code if reward_issued else None,
+        "target": STAMP_CYCLE_TARGET,
+        "reward_coupon_code": reward_codes[-1] if reward_codes else None,
     }
+    if reward_codes:
+        result["reward_coupon_codes"] = reward_codes
     if idem_key:
         idem_set(cache_key, result, ttl=300)
     return result
+
 
 
 def get_stamp_status(user: User, restaurant_id: int):
@@ -281,8 +391,8 @@ def get_stamp_status(user: User, restaurant_id: int):
         w = StampWallet.objects.get(user=user, restaurant_id=restaurant_id)
         return {
             "current": w.stamps,
-            "target": STAMP_TARGET,
+            "target": STAMP_CYCLE_TARGET,
             "updated_at": w.updated_at,
         }
     except StampWallet.DoesNotExist:
-        return {"current": 0, "target": STAMP_TARGET, "updated_at": None}
+        return {"current": 0, "target": STAMP_CYCLE_TARGET, "updated_at": None}
