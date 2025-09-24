@@ -64,6 +64,7 @@ INSTALLED_APPS = [
     'type_description',
     'food_by_type',
     'restaurants',
+    'campus_restaurants',
     'notifications',
     'rest_framework',
     'corsheaders',
