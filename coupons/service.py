@@ -1,10 +1,13 @@
 import uuid
+import random
 from datetime import date, datetime
 from django.db import transaction, IntegrityError, router
+from django.db.models import Count
 from utils.db_locks import locked_get
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
+from restaurants.models import Restaurant
 
 from .models import (
     Campaign,
@@ -24,6 +27,78 @@ User = get_user_model()
 
 GLOBAL_COUPON_EXPIRY = datetime(2026, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
 REFERRAL_MAX_REWARDS_PER_REFERRER = 5
+
+
+MAX_COUPONS_PER_RESTAURANT = 200
+
+
+def _select_restaurant_for_coupon(ct: CouponType, *, db_alias: str | None = None) -> int:
+    alias = db_alias or router.db_for_write(Coupon)
+    restaurant_ids = list(Restaurant.objects.values_list("id", flat=True))
+    if not restaurant_ids:
+        raise ValidationError("no restaurants available for coupon assignment")
+
+    counts = {}
+    qs = (
+        Coupon.objects.using(alias)
+        .filter(coupon_type=ct)
+        .exclude(restaurant_id__isnull=True)
+        .values("restaurant_id")
+        .annotate(cnt=Count("id"))
+    )
+    for row in qs:
+        rid = row["restaurant_id"]
+        if rid is None:
+            continue
+        counts[rid] = row["cnt"]
+
+    random.shuffle(restaurant_ids)
+    min_count = None
+    candidates: list[int] = []
+    for rid in restaurant_ids:
+        assigned = counts.get(rid, 0)
+        if assigned >= MAX_COUPONS_PER_RESTAURANT:
+            continue
+        if min_count is None or assigned < min_count:
+            min_count = assigned
+            candidates = [rid]
+        elif assigned == min_count:
+            candidates.append(rid)
+
+    if not candidates:
+        raise ValidationError("coupon issuance limit reached for all restaurants")
+
+    return random.choice(candidates)
+
+
+def _create_coupon_with_restaurant(
+    *,
+    user: User,
+    coupon_type: CouponType,
+    campaign: Campaign | None,
+    issue_key: str | None,
+    db_alias: str | None = None,
+    code: str | None = None,
+    expires_at: datetime | None = None,
+    extra_fields: dict | None = None,
+) -> Coupon:
+    alias = db_alias or router.db_for_write(Coupon)
+    fields = {
+        "code": code or make_coupon_code(),
+        "user": user,
+        "coupon_type": coupon_type,
+        "campaign": campaign,
+        "expires_at": expires_at or _expires_at(coupon_type),
+        "issue_key": issue_key,
+    }
+    if extra_fields:
+        fields.update(extra_fields)
+
+    lock_key = f"lock:coupon:assign:{coupon_type.id}"
+    with redis_lock(lock_key, ttl=5):
+        restaurant_id = _select_restaurant_for_coupon(coupon_type, db_alias=alias)
+        fields["restaurant_id"] = restaurant_id
+        return Coupon.objects.using(alias).create(**fields)
 
 def _expires_at(ct: CouponType):
     return GLOBAL_COUPON_EXPIRY
@@ -52,19 +127,19 @@ def ensure_invite_code(user: User) -> InviteCode:
     return invite
 
 
+
 def issue_signup_coupon(user: User):
-    ct = CouponType.objects.get(code="WELCOME_3000")
-    camp = Campaign.objects.get(code="SIGNUP_WELCOME", active=True)
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="WELCOME_3000")
+    camp = Campaign.objects.using(alias).get(code="SIGNUP_WELCOME", active=True)
     issue_key = f"SIGNUP:{user.id}"
-    return Coupon.objects.create(
-        code=make_coupon_code(),
+    return _create_coupon_with_restaurant(
         user=user,
         coupon_type=ct,
         campaign=camp,
-        expires_at=_expires_at(ct),
         issue_key=issue_key,
+        db_alias=alias,
     )
-
 
 
 @transaction.atomic
@@ -234,42 +309,26 @@ def qualify_referral_and_grant(referee: User):
 
         ref_camp = Campaign.objects.using(db_alias).get(code="REFERRAL", active=True)
 
+
+
         if can_reward_referrer:
-
-            Coupon.objects.using(db_alias).create(
-
-                code=make_coupon_code(),
-
+            _create_coupon_with_restaurant(
                 user=ref.referrer,
-
                 coupon_type=ref_ct,
-
                 campaign=ref_camp,
-
-                expires_at=_expires_at(ref_ct),
-
                 issue_key=f"REFERRAL_REFERRER:{ref.referrer_id}:{referee.id}",
-
+                db_alias=db_alias,
             )
 
         new_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFEREE")
 
-        Coupon.objects.using(db_alias).create(
-
-            code=make_coupon_code(),
-
+        _create_coupon_with_restaurant(
             user=referee,
-
             coupon_type=new_ct,
-
             campaign=ref_camp,
-
-            expires_at=_expires_at(new_ct),
-
             issue_key=f"REFERRAL_REFEREE:{referee.id}",
-
+            db_alias=db_alias,
         )
-
         return ref
 
 
@@ -280,7 +339,10 @@ def claim_flash_drop(user: User, campaign_code: str, idem_key: str):
     if prev:
         return prev
 
-    camp = Campaign.objects.get(code=campaign_code, active=True)
+
+
+    coupon_alias = router.db_for_write(Coupon)
+    camp = Campaign.objects.using(coupon_alias).get(code=campaign_code, active=True)
     quota_key = f"quota:{camp.id}:{date.today():%Y%m%d}"
     cli = __import__("django_redis").get_redis_connection()
 
@@ -290,17 +352,18 @@ def claim_flash_drop(user: User, campaign_code: str, idem_key: str):
             cli.incr(quota_key)  # 복원
             raise ValidationError("sold out")
 
-        ct = CouponType.objects.get(code="FLASH_3000")
-        coupon = Coupon.objects.create(
-            code=make_coupon_code(),
+        ct = CouponType.objects.using(coupon_alias).get(code="FLASH_3000")
+        coupon = _create_coupon_with_restaurant(
             user=user,
             coupon_type=ct,
             campaign=camp,
-            expires_at=_expires_at(ct),
             issue_key=f"FLASH:{camp.id}:{user.id}:{date.today():%Y%m%d}",
+            db_alias=coupon_alias,
         )
     idem_set(cache_key, coupon.code, ttl=300)
     return coupon.code
+
+
 
 
 # ---- Stamp (Punch) Card Service ----

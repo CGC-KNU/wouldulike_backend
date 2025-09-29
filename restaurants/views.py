@@ -1,11 +1,35 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
 from django.db import connections
 import json
 import random
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_affiliate_restaurant(row):
+    """Convert a raw row from restaurants_affiliate into a JSON-serializable dict."""
+    (
+        name,
+        road_address,
+        category_1,
+        category_2,
+        x,
+        y,
+        s3_image_urls,
+    ) = row
+
+    return {
+        'name': name,
+        'road_address': road_address,
+        'category_1': category_1,
+        'category_2': category_2,
+        'x': x,
+        'y': y,
+        's3_image_urls': list(s3_image_urls) if s3_image_urls else [],
+    }
 
 @csrf_exempt
 def get_random_restaurants(request):
@@ -179,3 +203,88 @@ def get_nearby_restaurants(request):
     except Exception as e:
         logger.exception("Unexpected error")
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_affiliate_restaurants(request):
+    """Return all affiliate restaurants with key details."""
+    try:
+        with connections['cloudsql'].cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT name, road_address, category_1, category_2, x, y, s3_image_urls
+                FROM restaurants_affiliate
+                ORDER BY name
+                """
+            )
+            rows = cursor.fetchall()
+
+        restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
+
+        return JsonResponse({'restaurants': restaurants}, status=200)
+    except Exception as exc:
+        logger.exception("Failed to fetch affiliate restaurants")
+        return JsonResponse(
+            {'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(exc)}'},
+            status=500,
+        )
+
+
+@require_http_methods(["GET"])
+def get_affiliate_restaurant_detail(request):
+    """Return full affiliate restaurant row matched by name (exact match preferred)."""
+    name_query = request.GET.get('name')
+
+    if not name_query:
+        return JsonResponse(
+            {'error_code': 'INVALID_REQUEST', 'message': 'Query parameter "name" is required'},
+            status=400,
+        )
+
+    try:
+        with connections['cloudsql'].cursor() as cursor:
+            # Try exact match first for stability.
+            cursor.execute(
+                "SELECT * FROM restaurants_affiliate WHERE name = %s",
+                [name_query],
+            )
+            rows = cursor.fetchall()
+            columns = [col[0] for col in cursor.description]
+
+            if not rows:
+                cursor.execute(
+                    "SELECT * FROM restaurants_affiliate WHERE name ILIKE %s",
+                    [f'%{name_query}%'],
+                )
+                rows = cursor.fetchall()
+                columns = [col[0] for col in cursor.description]
+
+        if not rows:
+            return JsonResponse(
+                {'error_code': 'NOT_FOUND', 'message': 'Affiliate restaurant not found'},
+                status=404,
+            )
+
+        if len(rows) > 1:
+            matched_names = [dict(zip(columns, row)).get('name') for row in rows]
+            return JsonResponse(
+                {
+                    'error_code': 'MULTIPLE_MATCHES',
+                    'message': 'Multiple restaurants matched; please provide a more specific name',
+                    'matches': matched_names,
+                },
+                status=409,
+            )
+
+        restaurant = dict(zip(columns, rows[0]))
+
+        if 's3_image_urls' in restaurant and restaurant['s3_image_urls'] is None:
+            restaurant['s3_image_urls'] = []
+
+        return JsonResponse({'restaurant': restaurant}, status=200)
+    except Exception as exc:
+        logger.exception("Failed to fetch affiliate restaurant detail")
+        return JsonResponse(
+            {'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(exc)}'},
+            status=500,
+        )

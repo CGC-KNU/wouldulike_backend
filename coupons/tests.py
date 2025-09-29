@@ -1,10 +1,13 @@
-﻿from django.conf import settings
+from unittest.mock import patch
+
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.test import TestCase
+from django.utils import timezone
 
-from coupons.models import InviteCode, Referral
-from coupons.service import accept_referral
+from coupons.models import Campaign, Coupon, CouponType, InviteCode, Referral
+from coupons.service import accept_referral, issue_signup_coupon
 
 
 class SingleDBRouter:
@@ -22,6 +25,70 @@ class SingleDBRouter:
 
 
 settings.DATABASE_ROUTERS = ["coupons.tests.SingleDBRouter"]
+
+
+class RestaurantAllocationTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user_model = get_user_model()
+        cls.campaign = Campaign.objects.get(code="SIGNUP_WELCOME")
+        cls.coupon_type = CouponType.objects.get(code="WELCOME_3000")
+
+    def _create_user(self, idx: int):
+        return self.user_model.objects.create_user(kakao_id=50000 + idx, password="pass")
+
+    def test_signup_coupon_assigns_available_restaurant(self):
+        user = self._create_user(1)
+        with patch(
+            "coupons.service.Restaurant.objects.values_list",
+            side_effect=lambda *args, **kwargs: [101, 102],
+        ):
+            coupon = issue_signup_coupon(user)
+        self.assertIn(coupon.restaurant_id, [101, 102])
+
+    def test_allocation_skips_restaurant_when_limit_reached(self):
+        restaurant_ids = [201, 202]
+        existing_user = self._create_user(2)
+        for idx in range(200):
+            Coupon.objects.create(
+                code=f"PRE{idx:04d}",
+                user=existing_user,
+                coupon_type=self.coupon_type,
+                campaign=self.campaign,
+                expires_at=timezone.now(),
+                restaurant_id=restaurant_ids[0],
+                issue_key=f"PRE-{idx}",
+            )
+
+        new_user = self._create_user(3)
+        with patch(
+            "coupons.service.Restaurant.objects.values_list",
+            side_effect=lambda *args, **kwargs: list(restaurant_ids),
+        ):
+            coupon = issue_signup_coupon(new_user)
+        self.assertEqual(coupon.restaurant_id, restaurant_ids[1])
+
+    def test_allocation_prefers_least_assigned_restaurant(self):
+        restaurant_ids = [301, 302, 303]
+        base_user = self._create_user(4)
+        for idx, restaurant_id in enumerate([301] * 3 + [302] * 5):
+            Coupon.objects.create(
+                code=f"BAL{idx:04d}",
+                user=base_user,
+                coupon_type=self.coupon_type,
+                campaign=self.campaign,
+                expires_at=timezone.now(),
+                restaurant_id=restaurant_id,
+                issue_key=f"BAL-{idx}",
+            )
+
+        new_user = self._create_user(5)
+        with patch(
+            "coupons.service.Restaurant.objects.values_list",
+            side_effect=lambda *args, **kwargs: list(restaurant_ids),
+        ):
+            coupon = issue_signup_coupon(new_user)
+        self.assertEqual(coupon.restaurant_id, restaurant_ids[2])
 
 
 class ReferralLimitTests(TestCase):
