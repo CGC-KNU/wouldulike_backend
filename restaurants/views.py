@@ -12,22 +12,24 @@ logger = logging.getLogger(__name__)
 def _serialize_affiliate_restaurant(row):
     """Convert a raw row from restaurants_affiliate into a JSON-serializable dict."""
     (
+        restaurant_id,
         name,
-        road_address,
-        category_1,
-        category_2,
-        x,
-        y,
+        address,
+        category,
+        zone,
+        phone_number,
+        url,
         s3_image_urls,
     ) = row
 
     return {
+        'restaurant_id': restaurant_id,
         'name': name,
-        'road_address': road_address,
-        'category_1': category_1,
-        'category_2': category_2,
-        'x': x,
-        'y': y,
+        'address': address,
+        'category': category,
+        'zone': zone,
+        'phone_number': phone_number,
+        'url': url,
         's3_image_urls': list(s3_image_urls) if s3_image_urls else [],
     }
 
@@ -212,7 +214,7 @@ def get_affiliate_restaurants(request):
         with connections['cloudsql'].cursor() as cursor:
             cursor.execute(
                 """
-                SELECT name, road_address, category_1, category_2, x, y, s3_image_urls
+                SELECT restaurant_id, name, address, category, zone, phone_number, url, s3_image_urls
                 FROM restaurants_affiliate
                 ORDER BY name
                 """
