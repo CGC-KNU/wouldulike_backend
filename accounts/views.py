@@ -9,9 +9,11 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 import os
+import logging
 
 from .models import User
 from .jwt_utils import generate_tokens_for_user
+from coupons.service import issue_signup_coupon
 from .utils import merge_guest_data
 
 
@@ -57,6 +59,14 @@ class KakaoLoginView(APIView):
         if guest_uuid:
             merge_guest_data(guest_uuid, user)
 
+        signup_coupon_code = None
+        if created:
+            try:
+                coupon = issue_signup_coupon(user)
+                signup_coupon_code = coupon.code
+            except Exception as exc:
+                logger.warning('failed to issue signup coupon for user %s: %s', user.id, exc)
+
         # 3) JWT 발급
         tokens = generate_tokens_for_user(user)
 
@@ -70,6 +80,8 @@ class KakaoLoginView(APIView):
             },
             'is_new': created,
         }
+        if signup_coupon_code:
+            resp['signup_coupon_code'] = signup_coupon_code
         return Response(resp, status=status.HTTP_200_OK)
 
 

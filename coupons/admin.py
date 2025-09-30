@@ -59,9 +59,13 @@ class ReferralAdmin(admin.ModelAdmin):
 
 @admin.register(MerchantPin)
 class MerchantPinAdmin(admin.ModelAdmin):
-    list_display = ("restaurant_id", "algo", "last_rotated_at")
+    list_display = ("restaurant_id", "restaurant_name", "algo", "last_rotated_at")
     list_filter = ("algo",)
-    search_fields = ("restaurant_id",)
+    search_fields = ("restaurant_id", "restaurant__name")
+
+    @staticmethod
+    def restaurant_name(obj):
+        return getattr(obj.restaurant, 'name', '-')
 
 
 @admin.register(StampWallet)

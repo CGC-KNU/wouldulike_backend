@@ -7,7 +7,7 @@ from utils.db_locks import locked_get
 from django.utils import timezone
 from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
-from restaurants.models import Restaurant
+from restaurants.models import AffiliateRestaurant
 
 from .models import (
     Campaign,
@@ -34,7 +34,9 @@ MAX_COUPONS_PER_RESTAURANT = 200
 
 def _select_restaurant_for_coupon(ct: CouponType, *, db_alias: str | None = None) -> int:
     alias = db_alias or router.db_for_write(Coupon)
-    restaurant_ids = list(Restaurant.objects.values_list("id", flat=True))
+    restaurant_ids = list(
+        AffiliateRestaurant.objects.using(alias).values_list("restaurant_id", flat=True)
+    )
     if not restaurant_ids:
         raise ValidationError("no restaurants available for coupon assignment")
 
@@ -377,7 +379,7 @@ REWARD_CAMPAIGN_CODE = "STAMP_REWARD"
 
 def _verify_pin(restaurant_id: int, pin: str) -> bool:
     try:
-        mp = MerchantPin.objects.get(restaurant_id=restaurant_id)
+        mp = MerchantPin.objects.select_related("restaurant").get(restaurant_id=restaurant_id)
     except MerchantPin.DoesNotExist:
         return False
 

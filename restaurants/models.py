@@ -1,5 +1,22 @@
 from django.db import models
 
+
+class AffiliateRestaurant(models.Model):
+    """Read-only mapping of affiliate restaurants stored in CloudSQL."""
+
+    restaurant_id = models.IntegerField(primary_key=True)
+    name = models.CharField(max_length=255)
+    pin_secret = models.CharField(max_length=128, null=True, blank=True)
+    pin_updated_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "restaurants_affiliate"
+        managed = False
+
+    def __str__(self):
+        return f"Affiliate:{self.restaurant_id} {self.name}"
+
+
 class Restaurant(models.Model):
     id = models.BigAutoField(primary_key=True)
     name = models.CharField(max_length=255)

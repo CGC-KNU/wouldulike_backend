@@ -223,7 +223,11 @@ def get_affiliate_restaurants(request):
 
         restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
 
-        return JsonResponse({'restaurants': restaurants}, status=200)
+        return JsonResponse(
+            {'restaurants': restaurants},
+            status=200,
+            json_dumps_params={'ensure_ascii': False},
+        )
     except Exception as exc:
         logger.exception("Failed to fetch affiliate restaurants")
         return JsonResponse(
@@ -265,6 +269,7 @@ def get_affiliate_restaurant_detail(request):
             return JsonResponse(
                 {'error_code': 'NOT_FOUND', 'message': 'Affiliate restaurant not found'},
                 status=404,
+                json_dumps_params={'ensure_ascii': False},
             )
 
         if len(rows) > 1:
@@ -276,6 +281,7 @@ def get_affiliate_restaurant_detail(request):
                     'matches': matched_names,
                 },
                 status=409,
+                json_dumps_params={'ensure_ascii': False},
             )
 
         restaurant = dict(zip(columns, rows[0]))
@@ -283,7 +289,11 @@ def get_affiliate_restaurant_detail(request):
         if 's3_image_urls' in restaurant and restaurant['s3_image_urls'] is None:
             restaurant['s3_image_urls'] = []
 
-        return JsonResponse({'restaurant': restaurant}, status=200)
+        return JsonResponse(
+            {'restaurant': restaurant},
+            status=200,
+            json_dumps_params={'ensure_ascii': False},
+        )
     except Exception as exc:
         logger.exception("Failed to fetch affiliate restaurant detail")
         return JsonResponse(

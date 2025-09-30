@@ -103,7 +103,16 @@ class Referral(models.Model):
 
 
 class MerchantPin(models.Model):
-    restaurant_id = models.IntegerField(db_index=True, unique=True)
+    restaurant = models.OneToOneField(
+        "restaurants.AffiliateRestaurant",
+        on_delete=models.CASCADE,
+        db_column="restaurant_id",
+        to_field="restaurant_id",
+        related_name="merchant_pin",
+        db_constraint=False,
+        null=True,
+        blank=True,
+    )
     # STATIC | TOTP
     algo = models.CharField(max_length=10, default="STATIC")
     # STATIC 핀 or TOTP 시드
@@ -113,7 +122,9 @@ class MerchantPin(models.Model):
     last_rotated_at = models.DateTimeField(null=True, blank=True)
 
     def __str__(self):
-        return f"PIN:{self.restaurant_id}({self.algo})"
+        name = getattr(self.restaurant, "name", None)
+        base = f"PIN:{self.restaurant_id}({self.algo})"
+        return f"PIN:{self.restaurant_id} {name}({self.algo})" if name else base
 
 
 class StampWallet(models.Model):
