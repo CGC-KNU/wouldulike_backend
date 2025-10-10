@@ -35,6 +35,7 @@ urlpatterns = [
     path('restaurants/', include('restaurants.urls')),
     path('notifications/', include('notifications.urls')),
     path('api/auth/', include('accounts.urls')),
+    path('api/users/', include('accounts.user_urls')),
     path('api/', include('coupons.api.urls')),
     # Alias for dev login requested as /auth/dev-login/
     path('auth/dev-login/', DevLoginView.as_view()),

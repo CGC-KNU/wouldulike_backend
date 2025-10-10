@@ -1,3 +1,4 @@
+import json
 import requests
 from django.conf import settings
 from rest_framework.views import APIView
@@ -15,6 +16,32 @@ from .models import User
 from .jwt_utils import generate_tokens_for_user
 from coupons.service import issue_signup_coupon
 from .utils import merge_guest_data
+
+logger = logging.getLogger(__name__)
+
+
+def _serialize_user(user: User):
+    favorites = user.favorite_restaurants
+    favorites_payload = []
+    if isinstance(favorites, list):
+        favorites_payload = favorites
+    elif favorites:
+        try:
+            favorites_payload = json.loads(favorites)
+        except (TypeError, json.JSONDecodeError):
+            favorites_payload = favorites
+
+    return {
+        'id': user.id,
+        'kakao_id': user.kakao_id,
+        'type_code': user.type_code,
+        'favorite_restaurants': favorites_payload,
+        'fcm_token': user.fcm_token,
+        'preferences': user.preferences,
+        'survey_responses': user.survey_responses,
+        'created_at': user.created_at,
+        'updated_at': user.updated_at,
+    }
 
 
 class KakaoLoginView(APIView):
@@ -182,3 +209,61 @@ class DevLoginView(APIView):
             "is_new": created,
         }
         return Response(resp, status=status.HTTP_200_OK)
+
+
+class UserMeView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(_serialize_user(request.user), status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        user = request.user
+        data = request.data or {}
+        update_fields = set()
+
+        if 'type_code' in data:
+            type_code = data.get('type_code')
+            if type_code:
+                type_code = str(type_code).strip().upper()
+                if len(type_code) != 4:
+                    return Response({'detail': 'type_code must be exactly 4 characters'}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                type_code = None
+            if type_code != user.type_code:
+                user.type_code = type_code
+                update_fields.add('type_code')
+
+        if 'favorite_restaurants' in data:
+            favorites = data.get('favorite_restaurants')
+            if favorites in (None, ''):
+                serialized_favorites = None
+            elif isinstance(favorites, list):
+                serialized_favorites = json.dumps(favorites)
+            elif isinstance(favorites, str):
+                serialized_favorites = favorites
+            else:
+                return Response({'detail': 'favorite_restaurants must be a list, string, or null'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if serialized_favorites != user.favorite_restaurants:
+                user.favorite_restaurants = serialized_favorites
+                update_fields.add('favorite_restaurants')
+
+        for attr in ('preferences', 'survey_responses', 'fcm_token'):
+            if attr in data:
+                value = data.get(attr)
+                if value == '':
+                    value = None
+                if value != getattr(user, attr):
+                    setattr(user, attr, value)
+                    update_fields.add(attr)
+
+        if update_fields:
+            update_fields = set(update_fields)
+            update_fields.add('updated_at')
+            user.save(update_fields=list(update_fields))
+        return Response(_serialize_user(user), status=status.HTTP_200_OK)
+
+    def put(self, request):
+        return self.patch(request)
