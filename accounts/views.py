@@ -13,6 +13,7 @@ import os
 import logging
 
 from .models import User
+from guests.models import GuestUser
 from .jwt_utils import generate_tokens_for_user
 from coupons.service import issue_signup_coupon
 from .utils import merge_guest_data
@@ -263,6 +264,18 @@ class UserMeView(APIView):
             update_fields = set(update_fields)
             update_fields.add('updated_at')
             user.save(update_fields=list(update_fields))
+
+            sync_fields = {}
+            for field in ('type_code', 'favorite_restaurants', 'fcm_token'):
+                if field in update_fields:
+                    sync_fields[field] = getattr(user, field)
+
+            if sync_fields:
+                guest_update_fields = list(sync_fields.keys()) + ['updated_at']
+                for guest in GuestUser.objects.filter(linked_user=user):
+                    for field_name, value in sync_fields.items():
+                        setattr(guest, field_name, value)
+                    guest.save(update_fields=guest_update_fields)
         return Response(_serialize_user(user), status=status.HTTP_200_OK)
 
     def put(self, request):

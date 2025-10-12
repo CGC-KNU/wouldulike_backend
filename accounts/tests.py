@@ -68,7 +68,11 @@ class KakaoLoginTests(DisableCouponSignalMixin, APITestCase):
         self.assertEqual(response.status_code, 200)
         user = User.objects.get()
         self.assertEqual(user.type_code, 'AAAA')
-        self.assertEqual(GuestUser.objects.count(), 0)
+
+        guest.refresh_from_db()
+        self.assertEqual(GuestUser.objects.count(), 1)
+        self.assertEqual(guest.linked_user, user)
+        self.assertEqual(guest.type_code, 'AAAA')
 
     @patch('accounts.views.requests.get')
     def test_guest_merge_overwrites_existing_type_code(self, mock_get):
@@ -85,7 +89,39 @@ class KakaoLoginTests(DisableCouponSignalMixin, APITestCase):
         self.assertEqual(response.status_code, 200)
         existing_user.refresh_from_db()
         self.assertEqual(existing_user.type_code, 'AAAA')
-        self.assertEqual(GuestUser.objects.count(), 0)
+
+        guest.refresh_from_db()
+        self.assertEqual(GuestUser.objects.count(), 1)
+        self.assertEqual(guest.linked_user, existing_user)
+        self.assertEqual(guest.type_code, 'AAAA')
+
+    @patch('accounts.views.requests.get')
+    def test_guest_data_backfills_missing_fields(self, mock_get):
+        existing_user = User.objects.create_user(
+            kakao_id=12345,
+            type_code='COOL',
+            favorite_restaurants='["A"]',
+            fcm_token='token-123',
+        )
+        guest = GuestUser.objects.create(type_code=None, favorite_restaurants=None, fcm_token=None)
+
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = KAKAO_RESPONSE
+
+        response = self.client.post('/api/auth/kakao', {
+            'access_token': 'valid',
+            'guest_uuid': str(guest.uuid)
+        })
+
+        self.assertEqual(response.status_code, 200)
+
+        existing_user.refresh_from_db()
+        guest.refresh_from_db()
+
+        self.assertEqual(existing_user.type_code, 'COOL')
+        self.assertEqual(guest.type_code, 'COOL')
+        self.assertEqual(guest.favorite_restaurants, '["A"]')
+        self.assertEqual(guest.fcm_token, 'token-123')
 
 
 class UserMeTests(DisableCouponSignalMixin, APITestCase):

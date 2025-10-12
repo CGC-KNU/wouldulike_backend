@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.db import models
 import uuid
 import json
@@ -11,6 +12,13 @@ class GuestUser(models.Model):
     type_code = models.CharField(max_length=4, null=True, blank=True)  # 유형 코드 (영어 4자리, 비어있을 수 있음)
     favorite_restaurants = models.TextField(null=True, blank=True)  # 찜한 음식점 이름 (JSON 형식, 비어있을 수 있음)
     fcm_token = models.CharField(max_length=255, null=True, blank=True)
+    linked_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="guest_users",
+    )
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
