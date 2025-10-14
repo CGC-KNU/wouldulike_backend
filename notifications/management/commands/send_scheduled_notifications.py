@@ -29,6 +29,7 @@ class Command(BaseCommand):
 
         sent_count = 0
         failure_count = 0
+        partial_count = 0
         for notification in notifications:
             response = send_notification(tokens, notification.content)
 
@@ -41,7 +42,11 @@ class Command(BaseCommand):
                 )
                 continue
 
-            if response.get("failure"):
+            failures = response.get("failure", 0) or 0
+            successes = response.get("success", 0) or 0
+            failed_tokens = response.get("failed_tokens", [])
+
+            if successes == 0:
                 failure_count += 1
                 self.stdout.write(
                     self.style.WARNING(
@@ -50,12 +55,47 @@ class Command(BaseCommand):
                 )
                 continue
 
+            if failures:
+                partial_count += 1
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"Notification {notification.id} partially failed: {response}"
+                    )
+                )
+
+                # Clean up invalid tokens such as UNREGISTERED responses.
+                invalid_tokens = []
+                for failed in failed_tokens:
+                    token = failed.get("token")
+                    error = failed.get("response", {}).get("error", {}) if failed.get(
+                        "response"
+                    ) else {}
+                    error_code = ""
+                    for detail in error.get("details", []):
+                        if detail.get("@type") == "type.googleapis.com/google.firebase.fcm.v1.FcmError":
+                            error_code = detail.get("errorCode")
+                            break
+                    status = error.get("status")
+                    if error_code == "UNREGISTERED" or status == "NOT_FOUND":
+                        invalid_tokens.append(token)
+
+                if invalid_tokens:
+                    GuestUser.objects.filter(fcm_token__in=invalid_tokens).update(
+                        fcm_token=""
+                    )
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"Removed {len(invalid_tokens)} invalid FCM tokens"
+                        )
+                    )
+
             notification.sent = True
             notification.save(update_fields=["sent"])
             sent_count += 1
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Sent {sent_count} notifications (failed: {failure_count})"
+                f"Sent {sent_count} notifications "
+                f"(failed: {failure_count}, partial: {partial_count})"
             )
         )
