@@ -21,13 +21,41 @@ class Command(BaseCommand):
             .values_list("fcm_token", flat=True)
         )
 
+        if not tokens:
+            self.stdout.write(
+                self.style.WARNING("No valid FCM tokens found; skipping send.")
+            )
+            return
+
         sent_count = 0
+        failure_count = 0
         for notification in notifications:
-            send_notification(tokens, notification.content)
+            response = send_notification(tokens, notification.content)
+
+            if not response:
+                failure_count += 1
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"Notification {notification.id} failed to send (no response)"
+                    )
+                )
+                continue
+
+            if response.get("failure"):
+                failure_count += 1
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"Notification {notification.id} failed: {response}"
+                    )
+                )
+                continue
+
             notification.sent = True
             notification.save(update_fields=["sent"])
             sent_count += 1
 
         self.stdout.write(
-            self.style.SUCCESS(f"Sent {sent_count} notifications")
+            self.style.SUCCESS(
+                f"Sent {sent_count} notifications (failed: {failure_count})"
+            )
         )
