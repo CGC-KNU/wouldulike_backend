@@ -26,7 +26,11 @@ class MyCouponsView(generics.ListAPIView):
     serializer_class = CouponSerializer
 
     def get_queryset(self):
-        qs = Coupon.objects.filter(user=self.request.user).order_by("-issued_at")
+        qs = (
+            Coupon.objects.select_related("coupon_type", "campaign")
+            .filter(user=self.request.user)
+            .order_by("-issued_at")
+        )
         status_q = self.request.query_params.get("status")
         if status_q:
             qs = qs.filter(status=status_q)

@@ -8,6 +8,7 @@ from .models import (
     MerchantPin,
     StampWallet,
     StampEvent,
+    RestaurantCouponBenefit,
 )
 
 
@@ -38,6 +39,31 @@ class CouponAdmin(admin.ModelAdmin):
     )
     list_filter = ("status", "coupon_type", "campaign")
     search_fields = ("code", "user__kakao_id")
+
+
+@admin.register(RestaurantCouponBenefit)
+class RestaurantCouponBenefitAdmin(admin.ModelAdmin):
+    list_display = (
+        "coupon_type",
+        "restaurant_id",
+        "restaurant_name",
+        "title",
+        "active",
+        "updated_at",
+    )
+    list_filter = ("coupon_type", "active")
+    search_fields = (
+        "coupon_type__code",
+        "coupon_type__title",
+        "restaurant__name",
+        "restaurant_id",
+        "title",
+    )
+    raw_id_fields = ("coupon_type", "restaurant")
+
+    @staticmethod
+    def restaurant_name(obj):
+        return getattr(obj.restaurant, "name", "-")
 
 
 @admin.register(InviteCode)

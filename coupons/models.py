@@ -35,6 +35,37 @@ class CouponType(models.Model):
         return self.code
 
 
+class RestaurantCouponBenefit(models.Model):
+    coupon_type = models.ForeignKey(
+        CouponType,
+        on_delete=models.CASCADE,
+        related_name="restaurant_benefits",
+    )
+    restaurant = models.ForeignKey(
+        "restaurants.AffiliateRestaurant",
+        on_delete=models.CASCADE,
+        db_column="restaurant_id",
+        to_field="restaurant_id",
+        related_name="coupon_benefits",
+        db_constraint=False,
+    )
+    title = models.CharField(max_length=120)
+    subtitle = models.CharField(max_length=255, blank=True, default="")
+    benefit_json = models.JSONField(default=dict, blank=True)
+    active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["coupon_type", "restaurant"], name="uq_coupon_type_restaurant"
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.coupon_type.code} @ {self.restaurant_id}"
+
+
 class Coupon(models.Model):
     STATUS = (
         ("ISSUED", "ISSUED"),
@@ -57,6 +88,7 @@ class Coupon(models.Model):
     redeemed_at = models.DateTimeField(null=True, blank=True)
     # TODO: replace with FK when restaurant model is ready
     restaurant_id = models.IntegerField(null=True, blank=True)
+    benefit_snapshot = models.JSONField(null=True, blank=True)
     # Duplicate issue guard key
     issue_key = models.CharField(max_length=120, null=True, blank=True)
 

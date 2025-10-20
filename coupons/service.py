@@ -18,6 +18,7 @@ from .models import (
     MerchantPin,
     StampWallet,
     StampEvent,
+    RestaurantCouponBenefit,
 )
 from .utils import make_coupon_code, redis_lock, idem_get, idem_set
 
@@ -30,6 +31,58 @@ REFERRAL_MAX_REWARDS_PER_REFERRER = 5
 
 
 MAX_COUPONS_PER_RESTAURANT = 200
+
+
+def _build_benefit_snapshot(
+    coupon_type: CouponType,
+    restaurant_id: int,
+    *,
+    db_alias: str | None = None,
+) -> dict:
+    snapshot = {
+        "coupon_type_code": coupon_type.code,
+        "coupon_type_title": coupon_type.title,
+        "restaurant_id": restaurant_id,
+        "benefit": coupon_type.benefit_json,
+        "title": coupon_type.title,
+        "subtitle": "",
+    }
+
+    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
+    benefit = (
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .select_related("restaurant")
+        .filter(
+            coupon_type=coupon_type,
+            restaurant_id=restaurant_id,
+            active=True,
+        )
+        .first()
+    )
+
+    if benefit:
+        snapshot.update(
+            {
+                "title": benefit.title,
+                "subtitle": benefit.subtitle,
+                "benefit": benefit.benefit_json or coupon_type.benefit_json,
+            }
+        )
+        restaurant_name = getattr(benefit.restaurant, "name", None)
+        if restaurant_name:
+            snapshot["restaurant_name"] = restaurant_name
+        return snapshot
+
+    restaurant_alias = db_alias or router.db_for_read(AffiliateRestaurant)
+    restaurant_name = (
+        AffiliateRestaurant.objects.using(restaurant_alias)
+        .filter(restaurant_id=restaurant_id)
+        .values_list("name", flat=True)
+        .first()
+    )
+    if restaurant_name:
+        snapshot["restaurant_name"] = restaurant_name
+    return snapshot
 
 
 def _select_restaurant_for_coupon(ct: CouponType, *, db_alias: str | None = None) -> int:
@@ -100,6 +153,10 @@ def _create_coupon_with_restaurant(
     with redis_lock(lock_key, ttl=5):
         restaurant_id = _select_restaurant_for_coupon(coupon_type, db_alias=alias)
         fields["restaurant_id"] = restaurant_id
+        if "benefit_snapshot" not in fields:
+            fields["benefit_snapshot"] = _build_benefit_snapshot(
+                coupon_type, restaurant_id, db_alias=alias
+            )
         return Coupon.objects.using(alias).create(**fields)
 
 def _expires_at(ct: CouponType):
@@ -173,6 +230,9 @@ def redeem_coupon(user: User, coupon_code: str, restaurant_id: int, pin: str):
         coupon.status = "REDEEMED"
         coupon.redeemed_at = timezone.now()
         coupon.restaurant_id = restaurant_id
+        coupon.benefit_snapshot = _build_benefit_snapshot(
+            coupon.coupon_type, restaurant_id, db_alias=alias
+        )
         coupon.save(using=alias)
     return coupon
 
@@ -396,6 +456,7 @@ def _issue_reward_coupon(user: User, restaurant_id: int, issue_key_suffix: str):
     camp = Campaign.objects.get(code=REWARD_CAMPAIGN_CODE, active=True)
     issue_key = f"STAMP_REWARD:{user.id}:{issue_key_suffix}"
     expires_at = _expires_at(ct)
+    benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id)
     return Coupon.objects.create(
         code=make_coupon_code(),
         user=user,
@@ -404,6 +465,7 @@ def _issue_reward_coupon(user: User, restaurant_id: int, issue_key_suffix: str):
         restaurant_id=restaurant_id,
         expires_at=expires_at,
         issue_key=issue_key,
+        benefit_snapshot=benefit_snapshot,
     )
 
 
