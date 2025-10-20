@@ -249,6 +249,46 @@ def check_and_expire_coupon(user: User, coupon_code: str) -> dict:
         coupon.status = "EXPIRED"
         coupon.save(update_fields=["status"], using=alias)
 
+    restaurant_id = coupon.restaurant_id
+    benefit_snapshot = coupon.benefit_snapshot
+    updated_snapshot = False
+
+    if restaurant_id and not benefit_snapshot:
+        benefit_snapshot = _build_benefit_snapshot(
+            coupon.coupon_type,
+            restaurant_id,
+            db_alias=alias,
+        )
+        updated_snapshot = True
+
+    if not benefit_snapshot:
+        benefit_snapshot = {
+            "coupon_type_code": coupon.coupon_type.code,
+            "coupon_type_title": coupon.coupon_type.title,
+            "restaurant_id": restaurant_id,
+            "benefit": coupon.coupon_type.benefit_json,
+            "title": coupon.coupon_type.title,
+            "subtitle": "",
+        }
+
+    restaurant_name = benefit_snapshot.get("restaurant_name")
+    if restaurant_name is None and restaurant_id:
+        restaurant_alias = router.db_for_read(AffiliateRestaurant)
+        restaurant_name = (
+            AffiliateRestaurant.objects.using(restaurant_alias)
+            .filter(restaurant_id=restaurant_id)
+            .values_list("name", flat=True)
+            .first()
+        )
+        if restaurant_name:
+            benefit_snapshot["restaurant_name"] = restaurant_name
+            updated_snapshot = True
+
+    if updated_snapshot:
+        Coupon.objects.using(alias).filter(pk=coupon.pk).update(
+            benefit_snapshot=benefit_snapshot
+        )
+
     return {
         "code": coupon.code,
         "status": coupon.status,
@@ -256,6 +296,9 @@ def check_and_expire_coupon(user: User, coupon_code: str) -> dict:
         "redeemed_at": coupon.redeemed_at,
         "campaign": coupon.campaign_id,
         "coupon_type": coupon.coupon_type_id,
+        "restaurant_id": coupon.restaurant_id,
+        "restaurant_name": restaurant_name,
+        "benefit": benefit_snapshot,
     }
 
 
