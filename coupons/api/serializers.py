@@ -1,3 +1,4 @@
+from django.db import router
 from rest_framework import serializers
 from restaurants.models import AffiliateRestaurant
 from ..models import Coupon, InviteCode
@@ -58,8 +59,10 @@ class CouponSerializer(serializers.ModelSerializer):
         if restaurant_id in cache:
             return cache[restaurant_id]
 
+        alias = router.db_for_read(AffiliateRestaurant)
         fetched = (
-            AffiliateRestaurant.objects.filter(restaurant_id=restaurant_id)
+            AffiliateRestaurant.objects.using(alias)
+            .filter(restaurant_id=restaurant_id)
             .values_list("name", flat=True)
             .first()
         )
