@@ -6,7 +6,7 @@ class TypeDescriptionRouter:
             return 'default'
         if model._meta.app_label in {'type_description', 'food_by_type'}:
             return 'rds'
-        if model._meta.app_label in {'coupons', 'campus_restaurants'}:
+        if model._meta.app_label in {'coupons', 'campus_restaurants', 'restaurants'}:
             return 'cloudsql'
         return 'default'
 
@@ -17,7 +17,7 @@ class TypeDescriptionRouter:
             return 'default'
         if model._meta.app_label in {'type_description', 'food_by_type'}:
             return 'rds'
-        if model._meta.app_label in {'coupons', 'campus_restaurants'}:
+        if model._meta.app_label in {'coupons', 'campus_restaurants', 'restaurants'}:
             return 'cloudsql'
         return 'default'
 

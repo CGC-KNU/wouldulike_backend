@@ -1,4 +1,4 @@
-from django.db import router
+from django.db import router, DatabaseError
 from rest_framework import serializers
 from restaurants.models import AffiliateRestaurant
 from ..models import Coupon, InviteCode
@@ -60,12 +60,15 @@ class CouponSerializer(serializers.ModelSerializer):
             return cache[restaurant_id]
 
         alias = router.db_for_read(AffiliateRestaurant)
-        fetched = (
-            AffiliateRestaurant.objects.using(alias)
-            .filter(restaurant_id=restaurant_id)
-            .values_list("name", flat=True)
-            .first()
-        )
+        try:
+            fetched = (
+                AffiliateRestaurant.objects.using(alias)
+                .filter(restaurant_id=restaurant_id)
+                .values_list("name", flat=True)
+                .first()
+            )
+        except DatabaseError:
+            fetched = None
         cache[restaurant_id] = fetched
         return fetched
 

@@ -1,7 +1,7 @@
 import uuid
 import random
 from datetime import date, datetime
-from django.db import transaction, IntegrityError, router
+from django.db import transaction, IntegrityError, router, DatabaseError
 from django.db.models import Count
 from utils.db_locks import locked_get
 from django.utils import timezone
@@ -68,18 +68,24 @@ def _build_benefit_snapshot(
                 "benefit": benefit.benefit_json or coupon_type.benefit_json,
             }
         )
-        restaurant_name = getattr(benefit.restaurant, "name", None)
+        try:
+            restaurant_name = getattr(benefit.restaurant, "name", None)
+        except DatabaseError:
+            restaurant_name = None
         if restaurant_name:
             snapshot["restaurant_name"] = restaurant_name
         return snapshot
 
     restaurant_alias = db_alias or router.db_for_read(AffiliateRestaurant)
-    restaurant_name = (
-        AffiliateRestaurant.objects.using(restaurant_alias)
-        .filter(restaurant_id=restaurant_id)
-        .values_list("name", flat=True)
-        .first()
-    )
+    try:
+        restaurant_name = (
+            AffiliateRestaurant.objects.using(restaurant_alias)
+            .filter(restaurant_id=restaurant_id)
+            .values_list("name", flat=True)
+            .first()
+        )
+    except DatabaseError:
+        restaurant_name = None
     if restaurant_name:
         snapshot["restaurant_name"] = restaurant_name
     return snapshot
@@ -274,12 +280,15 @@ def check_and_expire_coupon(user: User, coupon_code: str) -> dict:
     restaurant_name = benefit_snapshot.get("restaurant_name")
     if restaurant_name is None and restaurant_id:
         restaurant_alias = router.db_for_read(AffiliateRestaurant)
-        restaurant_name = (
-            AffiliateRestaurant.objects.using(restaurant_alias)
-            .filter(restaurant_id=restaurant_id)
-            .values_list("name", flat=True)
-            .first()
-        )
+        try:
+            restaurant_name = (
+                AffiliateRestaurant.objects.using(restaurant_alias)
+                .filter(restaurant_id=restaurant_id)
+                .values_list("name", flat=True)
+                .first()
+            )
+        except DatabaseError:
+            restaurant_name = None
         if restaurant_name:
             benefit_snapshot["restaurant_name"] = restaurant_name
             updated_snapshot = True
