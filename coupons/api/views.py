@@ -14,6 +14,7 @@ from ..service import (
     qualify_referral_and_grant,
     claim_flash_drop,
     add_stamp,
+    get_all_stamp_statuses,
     get_stamp_status,
     check_and_expire_coupon,
 )
@@ -194,3 +195,12 @@ class MyStampStatusView(APIView):
             return Response({"detail": "restaurant_id required"}, status=400)
         data = get_stamp_status(request.user, int(restaurant_id))
         return Response(data)
+
+
+class MyAllStampStatusView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        data = get_all_stamp_statuses(request.user)
+        return Response({"results": data})

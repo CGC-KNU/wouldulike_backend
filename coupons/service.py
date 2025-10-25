@@ -604,6 +604,50 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
 
 
 
+def get_all_stamp_statuses(user: User):
+    restaurant_alias = router.db_for_read(AffiliateRestaurant)
+    try:
+        accessible_ids = list(
+            AffiliateRestaurant.objects.using(restaurant_alias)
+            .order_by("restaurant_id")
+            .values_list("restaurant_id", flat=True)
+        )
+    except DatabaseError:
+        accessible_ids = []
+
+    wallet_qs = StampWallet.objects.filter(user=user)
+    wallet_map = {wallet.restaurant_id: wallet for wallet in wallet_qs}
+
+    results: list[dict] = []
+    seen_ids: set[int] = set()
+
+    for restaurant_id in accessible_ids:
+        wallet = wallet_map.get(restaurant_id)
+        results.append(
+            {
+                "restaurant_id": restaurant_id,
+                "current": wallet.stamps if wallet else 0,
+                "target": STAMP_CYCLE_TARGET,
+                "updated_at": wallet.updated_at if wallet else None,
+            }
+        )
+        seen_ids.add(restaurant_id)
+
+    extra_ids = sorted(set(wallet_map.keys()) - seen_ids)
+    for restaurant_id in extra_ids:
+        wallet = wallet_map[restaurant_id]
+        results.append(
+            {
+                "restaurant_id": restaurant_id,
+                "current": wallet.stamps,
+                "target": STAMP_CYCLE_TARGET,
+                "updated_at": wallet.updated_at,
+            }
+        )
+
+    return results
+
+
 def get_stamp_status(user: User, restaurant_id: int):
     try:
         w = StampWallet.objects.get(user=user, restaurant_id=restaurant_id)
