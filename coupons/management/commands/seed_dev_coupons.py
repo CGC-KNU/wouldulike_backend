@@ -35,10 +35,18 @@ class Command(BaseCommand):
                 "valid_days": 1,
             },
         )
-        ct_reward, _ = CouponType.objects.get_or_create(
-            code="STAMP_REWARD_8",
+        ct_reward_5, _ = CouponType.objects.get_or_create(
+            code="STAMP_REWARD_5",
             defaults={
-                "title": "Stamp Reward 8",
+                "title": "Stamp Reward 5",
+                "benefit_json": {"type": "fixed", "value": 3000},
+                "valid_days": 7,
+            },
+        )
+        ct_reward_10, _ = CouponType.objects.get_or_create(
+            code="STAMP_REWARD_10",
+            defaults={
+                "title": "Stamp Reward 10",
                 "benefit_json": {"type": "fixed", "value": 3000},
                 "valid_days": 7,
             },
@@ -82,4 +90,3 @@ class Command(BaseCommand):
             mp.save(update_fields=["algo", "secret"])
 
         self.stdout.write(self.style.SUCCESS("Dev coupon/stamp/flash seed completed."))
-

@@ -485,7 +485,10 @@ def claim_flash_drop(user: User, campaign_code: str, idem_key: str):
 # 목표 개수 및 보상 정의 (시드로 생성 필요)
 STAMP_THRESHOLDS = (5, 10)
 STAMP_CYCLE_TARGET = max(STAMP_THRESHOLDS)
-REWARD_COUPON_CODE = "STAMP_REWARD_8"
+REWARD_COUPON_CODES = {
+    5: "STAMP_REWARD_5",
+    10: "STAMP_REWARD_10",
+}
 REWARD_CAMPAIGN_CODE = "STAMP_REWARD"
 
 
@@ -503,8 +506,14 @@ def _verify_pin(restaurant_id: int, pin: str) -> bool:
     return False
 
 
-def _issue_reward_coupon(user: User, restaurant_id: int, issue_key_suffix: str):
-    ct = CouponType.objects.get(code=REWARD_COUPON_CODE)
+def _issue_reward_coupon(
+    user: User,
+    restaurant_id: int,
+    *,
+    coupon_type_code: str,
+    issue_key_suffix: str,
+):
+    ct = CouponType.objects.get(code=coupon_type_code)
     camp = Campaign.objects.get(code=REWARD_CAMPAIGN_CODE, active=True)
     issue_key = f"STAMP_REWARD:{user.id}:{issue_key_suffix}"
     expires_at = _expires_at(ct)
@@ -547,15 +556,31 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
             user=user, restaurant_id=restaurant_id, delta=+1, source="PIN"
         )
         reward_codes = []
+        reward_details = []
         now_suffix = timezone.now().strftime("%Y%m%d%H%M%S%f")
         max_threshold = max(STAMP_THRESHOLDS)
         max_threshold_reached = False
 
         for threshold in STAMP_THRESHOLDS:
             if prev_stamps < threshold <= wallet.stamps:
+                coupon_type_code = REWARD_COUPON_CODES.get(threshold)
+                if not coupon_type_code:
+                    raise ValidationError(f"stamp reward coupon type missing for threshold={threshold}")
                 suffix = f"{restaurant_id}:{now_suffix}:T{threshold}"
-                reward = _issue_reward_coupon(user, restaurant_id, issue_key_suffix=suffix)
+                reward = _issue_reward_coupon(
+                    user,
+                    restaurant_id,
+                    coupon_type_code=coupon_type_code,
+                    issue_key_suffix=suffix,
+                )
                 reward_codes.append(reward.code)
+                reward_details.append(
+                    {
+                        "threshold": threshold,
+                        "coupon_code": reward.code,
+                        "coupon_type": reward.coupon_type.code,
+                    }
+                )
                 if threshold == max_threshold:
                     max_threshold_reached = True
 
@@ -572,6 +597,7 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
     }
     if reward_codes:
         result["reward_coupon_codes"] = reward_codes
+        result["reward_coupons"] = reward_details
     if idem_key:
         idem_set(cache_key, result, ttl=300)
     return result
