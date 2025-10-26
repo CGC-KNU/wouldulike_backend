@@ -1,5 +1,6 @@
 import uuid
 import random
+import logging
 from datetime import date, datetime
 from django.db import transaction, IntegrityError, router, DatabaseError
 from django.db.models import Count
@@ -24,6 +25,8 @@ from .utils import make_coupon_code, redis_lock, idem_get, idem_set
 
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 GLOBAL_COUPON_EXPIRY = datetime(2026, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
@@ -572,6 +575,14 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
                     restaurant_id,
                     coupon_type_code=coupon_type_code,
                     issue_key_suffix=suffix,
+                )
+                logger.info(
+                    "Stamp reward issued user=%s restaurant=%s threshold=%s coupon_type=%s coupon_code=%s",
+                    user.id,
+                    restaurant_id,
+                    threshold,
+                    reward.coupon_type.code,
+                    reward.code,
                 )
                 reward_codes.append(reward.code)
                 reward_details.append(
