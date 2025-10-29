@@ -67,7 +67,7 @@ try:
         code = models.CharField(max_length=40, unique=True)   # ex) WELCOME_3000
         title = models.CharField(max_length=80)
         benefit_json = models.JSONField(default=dict)         # {"type":"fixed","value":3000}
-        valid_days = models.PositiveIntegerField(default=7)
+        valid_days = models.PositiveIntegerField(default=0)
         per_user_limit = models.PositiveIntegerField(default=1)
 
         def __str__(self):

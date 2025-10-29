@@ -33,8 +33,7 @@ class Command(BaseCommand):
             code="WELCOME_3000",
             defaults={
                 "title": "Welcome ₩3,000",
-                "benefit_json": {"type": "fixed", "value": 3000},
-                "valid_days": 7,
+                "valid_days": 0,
                 "per_user_limit": 1,
             },
         )
@@ -42,16 +41,16 @@ class Command(BaseCommand):
             code="REFERRAL_BONUS_REFERRER",
             defaults={
                 "title": "Referral Bonus (Referrer)",
-                "benefit_json": {"type": "fixed", "value": 2000},
-                "valid_days": 14,
+                "valid_days": 0,
+                "per_user_limit": 5,
             },
         )
         CouponType.objects.get_or_create(
             code="REFERRAL_BONUS_REFEREE",
             defaults={
                 "title": "Referral Bonus (New User)",
-                "benefit_json": {"type": "fixed", "value": 2000},
-                "valid_days": 14,
+                "valid_days": 0,
+                "per_user_limit": 5,
             },
         )
 
@@ -59,8 +58,7 @@ class Command(BaseCommand):
             code="FLASH_3000",
             defaults={
                 "title": "Flash ₩3,000",
-                "benefit_json": {"type": "fixed", "value": 3000},
-                "valid_days": 3,
+                "valid_days": 0,
             },
         )
 
@@ -69,8 +67,7 @@ class Command(BaseCommand):
             code="STAMP_REWARD_5",
             defaults={
                 "title": "Stamp Reward (5)",
-                "benefit_json": {"type": "fixed", "value": 3000},
-                "valid_days": 14,
+                "valid_days": 0,
                 "per_user_limit": 999,
             },
         )
@@ -78,8 +75,7 @@ class Command(BaseCommand):
             code="STAMP_REWARD_10",
             defaults={
                 "title": "Stamp Reward (10)",
-                "benefit_json": {"type": "fixed", "value": 3000},
-                "valid_days": 14,
+                "valid_days": 0,
                 "per_user_limit": 999,
             },
         )

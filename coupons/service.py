@@ -35,6 +35,12 @@ REFERRAL_MAX_REWARDS_PER_REFERRER = 5
 
 MAX_COUPONS_PER_RESTAURANT = 200
 
+COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
+    "WELCOME_3000": {30},
+    "REFERRAL_BONUS_REFERRER": {30},
+    "REFERRAL_BONUS_REFEREE": {30},
+}
+
 
 def _build_benefit_snapshot(
     coupon_type: CouponType,
@@ -102,6 +108,8 @@ def _select_restaurant_for_coupon(ct: CouponType, *, db_alias: str | None = None
     if not restaurant_ids:
         raise ValidationError("no restaurants available for coupon assignment")
 
+    excluded_ids = COUPON_TYPE_EXCLUDED_RESTAURANTS.get(ct.code, set())
+
     counts = {}
     qs = (
         Coupon.objects.using(alias)
@@ -120,6 +128,8 @@ def _select_restaurant_for_coupon(ct: CouponType, *, db_alias: str | None = None
     min_count = None
     candidates: list[int] = []
     for rid in restaurant_ids:
+        if rid in excluded_ids:
+            continue
         assigned = counts.get(rid, 0)
         if assigned >= MAX_COUPONS_PER_RESTAURANT:
             continue

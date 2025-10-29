@@ -28,7 +28,7 @@ class CouponType(models.Model):
     title = models.CharField(max_length=80)
     # {"type":"fixed","value":3000} / {"type":"percent","value":20,"max":5000}
     benefit_json = models.JSONField(default=dict)
-    valid_days = models.PositiveIntegerField(default=7)
+    valid_days = models.PositiveIntegerField(default=0)
     per_user_limit = models.PositiveIntegerField(default=1)
 
     def __str__(self):

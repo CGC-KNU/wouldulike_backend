@@ -23,32 +23,28 @@ class Command(BaseCommand):
             code="WELCOME_3000",
             defaults={
                 "title": "Welcome 3000",
-                "benefit_json": {"type": "fixed", "value": 3000},
-                "valid_days": 7,
+                "valid_days": 0,
             },
         )
         ct_flash, _ = CouponType.objects.get_or_create(
             code="FLASH_3000",
             defaults={
                 "title": "Flash 3000",
-                "benefit_json": {"type": "fixed", "value": 3000},
-                "valid_days": 1,
+                "valid_days": 0,
             },
         )
         ct_reward_5, _ = CouponType.objects.get_or_create(
             code="STAMP_REWARD_5",
             defaults={
                 "title": "Stamp Reward 5",
-                "benefit_json": {"type": "fixed", "value": 3000},
-                "valid_days": 7,
+                "valid_days": 0,
             },
         )
         ct_reward_10, _ = CouponType.objects.get_or_create(
             code="STAMP_REWARD_10",
             defaults={
                 "title": "Stamp Reward 10",
-                "benefit_json": {"type": "fixed", "value": 3000},
-                "valid_days": 7,
+                "valid_days": 0,
             },
         )
 
