@@ -14,6 +14,7 @@ def _serialize_affiliate_restaurant(row):
     (
         restaurant_id,
         name,
+        description,
         address,
         category,
         zone,
@@ -25,6 +26,7 @@ def _serialize_affiliate_restaurant(row):
     return {
         'restaurant_id': restaurant_id,
         'name': name,
+        'description': description,
         'address': address,
         'category': category,
         'zone': zone,
@@ -214,7 +216,16 @@ def get_affiliate_restaurants(request):
         with connections['cloudsql'].cursor() as cursor:
             cursor.execute(
                 """
-                SELECT restaurant_id, name, address, category, zone, phone_number, url, s3_image_urls
+                SELECT
+                    restaurant_id,
+                    name,
+                    description,
+                    address,
+                    category,
+                    zone,
+                    phone_number,
+                    url,
+                    s3_image_urls
                 FROM restaurants_affiliate
                 ORDER BY name
                 """

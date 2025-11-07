@@ -6,6 +6,7 @@ class AffiliateRestaurant(models.Model):
 
     restaurant_id = models.IntegerField(primary_key=True)
     name = models.CharField(max_length=255)
+    description = models.TextField(null=True, blank=True)
     pin_secret = models.CharField(max_length=128, null=True, blank=True)
     pin_updated_at = models.DateTimeField(null=True, blank=True)
 
