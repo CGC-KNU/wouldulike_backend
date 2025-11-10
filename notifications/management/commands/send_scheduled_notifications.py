@@ -1,9 +1,12 @@
 from django.core.management.base import BaseCommand
 from django.utils import timezone
+from django.contrib.auth import get_user_model
 
 from guests.models import GuestUser
 from notifications.models import Notification
 from notifications.utils import send_notification
+
+User = get_user_model()
 
 
 class Command(BaseCommand):
@@ -15,11 +18,22 @@ class Command(BaseCommand):
             scheduled_time__lte=now,
             sent=False,
         )
-        tokens = list(
+        
+        # GuestUser와 User 모두에서 FCM 토큰 수집
+        guest_tokens = list(
             GuestUser.objects.exclude(fcm_token__isnull=True)
             .exclude(fcm_token="")
             .values_list("fcm_token", flat=True)
         )
+        
+        user_tokens = list(
+            User.objects.exclude(fcm_token__isnull=True)
+            .exclude(fcm_token="")
+            .values_list("fcm_token", flat=True)
+        )
+        
+        # 중복 제거 (같은 토큰이 여러 사용자에게 있을 수 있음)
+        tokens = list(set(guest_tokens + user_tokens))
 
         if not tokens:
             self.stdout.write(
@@ -80,12 +94,17 @@ class Command(BaseCommand):
                         invalid_tokens.append(token)
 
                 if invalid_tokens:
-                    GuestUser.objects.filter(fcm_token__in=invalid_tokens).update(
+                    # GuestUser와 User 모두에서 무효한 토큰 제거
+                    guest_removed = GuestUser.objects.filter(fcm_token__in=invalid_tokens).update(
+                        fcm_token=""
+                    )
+                    user_removed = User.objects.filter(fcm_token__in=invalid_tokens).update(
                         fcm_token=""
                     )
                     self.stdout.write(
                         self.style.WARNING(
-                            f"Removed {len(invalid_tokens)} invalid FCM tokens"
+                            f"Removed {len(invalid_tokens)} invalid FCM tokens "
+                            f"(GuestUser: {guest_removed}, User: {user_removed})"
                         )
                     )
 
