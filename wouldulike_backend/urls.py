@@ -7,7 +7,7 @@ admin.site.index_title = "Data Operations Dashboard"
 from django.conf import settings
 from django.conf.urls.static import static
 from django.http import HttpResponse
-from accounts.views import DevLoginView  # dev-only helper
+from accounts.views import DevLoginView, CustomTokenRefreshView  # dev-only helper
 from rest_framework_simplejwt.views import TokenRefreshView
 from coupons.api.views import (
     AddStampView,
@@ -40,7 +40,7 @@ urlpatterns = [
     # Alias for dev login requested as /auth/dev-login/
     path('auth/dev-login/', DevLoginView.as_view()),
     # Auth aliases (avoid CSRF by ensuring DRF view is hit even without /api prefix)
-    path('auth/refresh/', TokenRefreshView.as_view(), name='alias-token-refresh'),
+    path('auth/refresh/', CustomTokenRefreshView.as_view(), name='alias-token-refresh'),
     # Backward-compat alias: allow calling /coupons/stamps/add/ without the /api prefix
     path('coupons/stamps/add/', AddStampView.as_view()),
     # Backward-compat alias: allow calling /coupons/stamps/my/ without the /api prefix

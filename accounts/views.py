@@ -7,8 +7,11 @@ from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.views import TokenRefreshView as BaseTokenRefreshView
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
+from django.core.cache import cache
 import os
 import logging
 
@@ -98,11 +101,12 @@ class KakaoLoginView(APIView):
         # 3) JWT 발급
         tokens = generate_tokens_for_user(user)
 
-        # 응답 스키마: token/access+refresh, user/id+nickname+profile_image_url
+        # 응답 스키마: token/access+refresh, user/id+kakao_id+nickname+profile_image_url
         resp = {
             'token': tokens,
             'user': {
                 'id': user.id,
+                'kakao_id': user.kakao_id,
                 'nickname': nickname,
                 'profile_image_url': profile_image_url,
             },
@@ -113,6 +117,94 @@ class KakaoLoginView(APIView):
         return Response(resp, status=status.HTTP_200_OK)
 
 
+class CustomTokenRefreshView(BaseTokenRefreshView):
+    """
+    커스텀 토큰 갱신 뷰
+    - 프론트엔드 요구사항에 맞는 응답 형식 제공
+    - 에러 처리 개선
+    - 로깅 추가
+    - 동시성 처리 (같은 refresh token으로 동시 요청 시 동일한 새 토큰 반환)
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        refresh_token = request.data.get('refresh')
+        
+        if not refresh_token:
+            logger.warning('Token refresh attempted without refresh token')
+            return Response(
+                {
+                    'detail': 'Refresh token is required',
+                    'code': 'invalid_request'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 동시성 처리: 같은 refresh token으로 짧은 시간 내 요청이 오면 캐시된 새 토큰 반환
+        cache_key = f'token_refresh:{refresh_token[:20]}'
+        cached_response = cache.get(cache_key)
+        if cached_response:
+            logger.info('Returning cached token refresh response')
+            return Response(cached_response, status=status.HTTP_200_OK)
+
+        try:
+            # 기존 refresh token 검증
+            refresh = RefreshToken(refresh_token)
+            
+            # ROTATE_REFRESH_TOKENS가 True일 때, 새로운 refresh token 생성
+            # BaseTokenRefreshView의 로직을 따름
+            if settings.SIMPLE_JWT.get('ROTATE_REFRESH_TOKENS', False):
+                # 기존 refresh token을 blacklist에 추가
+                refresh.blacklist()
+                # 새로운 refresh token 생성
+                new_refresh = RefreshToken.for_user(refresh.user)
+                new_access = new_refresh.access_token
+                
+                response_data = {
+                    'access': str(new_access),
+                    'refresh': str(new_refresh)
+                }
+            else:
+                # ROTATE_REFRESH_TOKENS가 False인 경우 기존 refresh token 재사용
+                new_access = refresh.access_token
+                response_data = {
+                    'access': str(new_access),
+                    'refresh': str(refresh)
+                }
+
+            # 캐시에 저장 (5초 동안 유효) - 동시 요청 방지
+            cache.set(cache_key, response_data, timeout=5)
+
+            logger.info(f'Token refreshed successfully for user {refresh.user.id}')
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except TokenError as e:
+            error_code = 'token_not_valid'
+            error_detail = 'Token is invalid or expired'
+            
+            if 'expired' in str(e).lower():
+                error_code = 'token_expired'
+                error_detail = 'Token is expired'
+            
+            logger.warning(f'Token refresh failed: {str(e)}')
+            return Response(
+                {
+                    'detail': error_detail,
+                    'code': error_code
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception as e:
+            logger.error(f'Unexpected error during token refresh: {str(e)}', exc_info=True)
+            return Response(
+                {
+                    'detail': 'Token is invalid or expired',
+                    'code': 'token_not_valid'
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+
 class LogoutView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -120,12 +212,35 @@ class LogoutView(APIView):
     def post(self, request):
         refresh_token = request.data.get('refresh')
         if not refresh_token:
-            return Response({'detail': 'refresh token required'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {
+                    'detail': 'Refresh token is required',
+                    'code': 'invalid_request'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
         try:
             token = RefreshToken(refresh_token)
             token.blacklist()
-        except Exception:
-            return Response({'detail': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+            logger.info(f'User {request.user.id} logged out successfully')
+        except TokenError as e:
+            logger.warning(f'Logout failed: Invalid refresh token - {str(e)}')
+            return Response(
+                {
+                    'detail': 'Invalid token',
+                    'code': 'token_not_valid'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f'Unexpected error during logout: {str(e)}', exc_info=True)
+            return Response(
+                {
+                    'detail': 'Invalid token',
+                    'code': 'token_not_valid'
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
         return Response(status=status.HTTP_205_RESET_CONTENT)
 
 
@@ -203,6 +318,7 @@ class DevLoginView(APIView):
             "token": tokens,
             "user": {
                 "id": user.id,
+                "kakao_id": user.kakao_id,
                 # Dev login has no Kakao profile; provide minimal placeholders
                 "nickname": f"dev-{user.kakao_id}",
                 "profile_image_url": "",

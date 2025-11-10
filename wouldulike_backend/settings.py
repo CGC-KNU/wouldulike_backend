@@ -41,12 +41,35 @@ ALLOWED_HOSTS = ['*']
 # URL 룰에서 트레일링 슬래시 자동 보정
 APPEND_SLASH = True
 
-# CORS_ALLOW_ALL_ORIGINS = True # 개발 중 모든 도메인 허용
-# # 배포 시 특정 도메인만 허용
-# # CORS_ALLOWED_ORIGINS = [
-# #     "http://localhost:3000",
-# #     "http://127.0.0.1:3000",
-# # ]
+# CORS 설정
+CORS_ALLOW_ALL_ORIGINS = True  # 개발 중 모든 도메인 허용
+# 배포 시 특정 도메인만 허용하려면 아래 주석을 해제하고 CORS_ALLOW_ALL_ORIGINS를 False로 설정
+# CORS_ALLOW_ALL_ORIGINS = False
+# CORS_ALLOWED_ORIGINS = [
+#     "http://localhost:3000",
+#     "http://127.0.0.1:3000",
+#     # 프로덕션 도메인 추가
+# ]
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOW_METHODS = [
+    'DELETE',
+    'GET',
+    'OPTIONS',
+    'PATCH',
+    'POST',
+    'PUT',
+]
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
 
 
 AUTHENTICATION_FORM = 'guests.forms.CustomAuthenticationForm'
@@ -251,9 +274,20 @@ REST_FRAMEWORK = {
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),
-    'BLACKLIST_AFTER_ROTATION': True,
+    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),  # 15분 (권장 범위: 15분 ~ 1시간)
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),  # 14일 (권장 범위: 7일 ~ 30일)
+    'ROTATE_REFRESH_TOKENS': True,  # 토큰 갱신 시 새로운 refresh token 발급
+    'BLACKLIST_AFTER_ROTATION': True,  # 토큰 갱신 후 기존 refresh token을 blacklist에 추가
+    'ALGORITHM': 'HS256',
+    'SIGNING_KEY': SECRET_KEY,
+    'AUTH_HEADER_TYPES': ('Bearer',),
+    'AUTH_TOKEN_CLASSES': ('rest_framework_simplejwt.tokens.AccessToken',),
+    'TOKEN_TYPE_CLAIM': 'token_type',
+    'JTI_CLAIM': 'jti',
+    'TOKEN_USER_CLASS': 'rest_framework_simplejwt.models.TokenUser',
+    'SLIDING_TOKEN_REFRESH_EXP_CLAIM': 'refresh_exp',
+    'SLIDING_TOKEN_LIFETIME': timedelta(minutes=5),
+    'SLIDING_TOKEN_REFRESH_LIFETIME': timedelta(days=1),
 }
 
 KAKAO_ADMIN_KEY = os.getenv('KAKAO_ADMIN_KEY')
