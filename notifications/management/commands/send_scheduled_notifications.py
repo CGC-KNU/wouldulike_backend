@@ -19,6 +19,8 @@ class Command(BaseCommand):
             sent=False,
         )
         
+        self.stdout.write(f"Found {notifications.count()} notification(s) to send")
+        
         # GuestUser와 User 모두에서 FCM 토큰 수집
         guest_tokens = list(
             GuestUser.objects.exclude(fcm_token__isnull=True)
@@ -32,12 +34,22 @@ class Command(BaseCommand):
             .values_list("fcm_token", flat=True)
         )
         
+        self.stdout.write(f"Found {len(guest_tokens)} guest tokens and {len(user_tokens)} user tokens")
+        
         # 중복 제거 (같은 토큰이 여러 사용자에게 있을 수 있음)
         tokens = list(set(guest_tokens + user_tokens))
+        
+        self.stdout.write(f"Total unique tokens: {len(tokens)}")
 
         if not tokens:
             self.stdout.write(
                 self.style.WARNING("No valid FCM tokens found; skipping send.")
+            )
+            return
+        
+        if not notifications.exists():
+            self.stdout.write(
+                self.style.WARNING("No notifications to send.")
             )
             return
 
@@ -45,13 +57,15 @@ class Command(BaseCommand):
         failure_count = 0
         partial_count = 0
         for notification in notifications:
+            self.stdout.write(f"\nSending notification {notification.id}: {notification.content[:50]}...")
             response = send_notification(tokens, notification.content)
 
             if not response:
                 failure_count += 1
                 self.stdout.write(
-                    self.style.WARNING(
-                        f"Notification {notification.id} failed to send (no response)"
+                    self.style.ERROR(
+                        f"Notification {notification.id} failed to send (no response). "
+                        "Check FCM configuration (FCM_PROJECT_ID, FCM_SERVICE_ACCOUNT_FILE/JSON)."
                     )
                 )
                 continue
