@@ -274,8 +274,8 @@ REST_FRAMEWORK = {
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=15),  # 15분 (권장 범위: 15분 ~ 1시간)
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=14),  # 14일 (권장 범위: 7일 ~ 30일)
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=24),  # 24시간 (모바일 앱에 적합)
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),  # 30일 (장기간 로그인 유지)
     'ROTATE_REFRESH_TOKENS': True,  # 토큰 갱신 시 새로운 refresh token 발급
     'BLACKLIST_AFTER_ROTATION': True,  # 토큰 갱신 후 기존 refresh token을 blacklist에 추가
     'ALGORITHM': 'HS256',

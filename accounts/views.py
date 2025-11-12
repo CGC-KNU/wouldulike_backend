@@ -5,10 +5,11 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.views import TokenRefreshView as BaseTokenRefreshView
+from django.utils import timezone
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 from django.core.cache import cache
@@ -100,6 +101,12 @@ class KakaoLoginView(APIView):
 
         # 3) JWT 발급
         tokens = generate_tokens_for_user(user)
+        
+        # 토큰 만료 시간 정보 추가
+        refresh = RefreshToken(tokens['refresh'])
+        access_token = refresh.access_token
+        tokens['access_expires_at'] = access_token['exp']  # Unix timestamp
+        tokens['refresh_expires_at'] = refresh['exp']  # Unix timestamp
 
         # 응답 스키마: token/access+refresh, user/id+kakao_id+nickname+profile_image_url
         resp = {
@@ -162,14 +169,18 @@ class CustomTokenRefreshView(BaseTokenRefreshView):
                 
                 response_data = {
                     'access': str(new_access),
-                    'refresh': str(new_refresh)
+                    'refresh': str(new_refresh),
+                    'access_expires_at': new_access['exp'],  # Unix timestamp
+                    'refresh_expires_at': new_refresh['exp'],  # Unix timestamp
                 }
             else:
                 # ROTATE_REFRESH_TOKENS가 False인 경우 기존 refresh token 재사용
                 new_access = refresh.access_token
                 response_data = {
                     'access': str(new_access),
-                    'refresh': str(refresh)
+                    'refresh': str(refresh),
+                    'access_expires_at': new_access['exp'],  # Unix timestamp
+                    'refresh_expires_at': refresh['exp'],  # Unix timestamp
                 }
 
             # 캐시에 저장 (5초 동안 유효) - 동시 요청 방지
@@ -199,6 +210,66 @@ class CustomTokenRefreshView(BaseTokenRefreshView):
             return Response(
                 {
                     'detail': 'Token is invalid or expired',
+                    'code': 'token_not_valid'
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+
+
+class TokenVerifyView(APIView):
+    """
+    토큰 검증 API
+    - 현재 ACCESS_TOKEN이 유효한지 확인
+    - 만료까지 남은 시간 정보 제공
+    - 프론트엔드가 만료 전에 갱신할 수 있도록 도움
+    """
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        """현재 토큰의 상태를 반환"""
+        try:
+            # 요청에서 토큰 추출
+            auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+            if not auth_header.startswith('Bearer '):
+                return Response(
+                    {
+                        'detail': 'Invalid authorization header',
+                        'code': 'invalid_request'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            token_string = auth_header.split(' ')[1]
+            access_token = AccessToken(token_string)
+            
+            # 만료 시간 정보 추출
+            exp_timestamp = access_token['exp']
+            now_timestamp = timezone.now().timestamp()
+            expires_in = exp_timestamp - now_timestamp  # 초 단위
+            
+            return Response({
+                'valid': True,
+                'expires_at': exp_timestamp,
+                'expires_in': max(0, int(expires_in)),  # 남은 시간 (초)
+                'user_id': access_token['user_id'],
+            }, status=status.HTTP_200_OK)
+            
+        except TokenError as e:
+            return Response(
+                {
+                    'valid': False,
+                    'detail': 'Token is invalid or expired',
+                    'code': 'token_not_valid'
+                },
+                status=status.HTTP_401_UNAUTHORIZED
+            )
+        except Exception as e:
+            logger.error(f'Token verification failed: {str(e)}', exc_info=True)
+            return Response(
+                {
+                    'valid': False,
+                    'detail': 'Token verification failed',
                     'code': 'token_not_valid'
                 },
                 status=status.HTTP_401_UNAUTHORIZED
@@ -314,6 +385,13 @@ class DevLoginView(APIView):
             return Response({"detail": "invalid id format"}, status=status.HTTP_400_BAD_REQUEST)
 
         tokens = generate_tokens_for_user(user)
+        
+        # 토큰 만료 시간 정보 추가
+        refresh = RefreshToken(tokens['refresh'])
+        access_token = refresh.access_token
+        tokens['access_expires_at'] = access_token['exp']  # Unix timestamp
+        tokens['refresh_expires_at'] = refresh['exp']  # Unix timestamp
+        
         resp = {
             "token": tokens,
             "user": {
