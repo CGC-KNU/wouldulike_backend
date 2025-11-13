@@ -21,6 +21,7 @@ from coupons.api.views import (
     QualifyReferralView,
     FlashClaimView,
 )
+from .url_views import GetFrontendUrlView
 
 def home_view(request):
     return HttpResponse("<h1>WouldULike</h1>")
@@ -37,6 +38,7 @@ urlpatterns = [
     path('api/auth/', include('accounts.urls')),
     path('api/users/', include('accounts.user_urls')),
     path('api/', include('coupons.api.urls')),
+    path('api/url/', GetFrontendUrlView.as_view(), name='get_frontend_url'),
     # Alias for dev login requested as /auth/dev-login/
     path('auth/dev-login/', DevLoginView.as_view()),
     # Auth aliases (avoid CSRF by ensuring DRF view is hit even without /api prefix)
