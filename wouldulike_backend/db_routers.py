@@ -6,7 +6,7 @@ class TypeDescriptionRouter:
             return 'default'
         if model._meta.app_label in {'type_description', 'food_by_type'}:
             return 'rds'
-        if model._meta.app_label in {'coupons', 'campus_restaurants', 'restaurants'}:
+        if model._meta.app_label in {'coupons', 'campus_restaurants', 'restaurants', 'trends'}:
             return 'cloudsql'
         return 'default'
 
@@ -17,7 +17,7 @@ class TypeDescriptionRouter:
             return 'default'
         if model._meta.app_label in {'type_description', 'food_by_type'}:
             return 'rds'
-        if model._meta.app_label in {'coupons', 'campus_restaurants', 'restaurants'}:
+        if model._meta.app_label in {'coupons', 'campus_restaurants', 'restaurants', 'trends'}:
             return 'cloudsql'
         return 'default'
 
@@ -29,7 +29,7 @@ class TypeDescriptionRouter:
         """Control where migrations run for each app."""
         if app_label in {'type_description', 'food_by_type'}:
             return db == 'rds'
-        if app_label == 'coupons':
+        if app_label in {'coupons', 'trends'}:
             return db == 'cloudsql'
         if app_label == 'campus_restaurants':
             return False
