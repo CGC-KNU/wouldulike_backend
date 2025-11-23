@@ -559,24 +559,24 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
     # 동시 요청 방지 (user-restaurant 잠금)
     lock_key = f"lock:stamp:{user.id}:{restaurant_id}"
     with redis_lock(lock_key, ttl=5):
-        # 하루 2번 제한 체크 (식당별)
-        now = timezone.now()
-        today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
-        
-        today_stamp_count = StampEvent.objects.using('cloudsql').filter(
-            user=user,
-            restaurant_id=restaurant_id,
-            delta=+1,  # 적립만 카운트 (정정은 제외)
-            created_at__gte=today_start,
-            created_at__lte=today_end
-        ).count()
-        
-        if today_stamp_count >= 2:
-            raise ValidationError(
-                f"하루 최대 2번까지만 스탬프를 적립할 수 있습니다. "
-                f"오늘 이미 {today_stamp_count}번 적립하셨습니다."
-            )
+        # 하루 2번 제한 체크 (식당별) - 임시로 비활성화
+        # now = timezone.now()
+        # today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        # today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+        # 
+        # today_stamp_count = StampEvent.objects.using('cloudsql').filter(
+        #     user=user,
+        #     restaurant_id=restaurant_id,
+        #     delta=+1,  # 적립만 카운트 (정정은 제외)
+        #     created_at__gte=today_start,
+        #     created_at__lte=today_end
+        # ).count()
+        # 
+        # if today_stamp_count >= 2:
+        #     raise ValidationError(
+        #         f"하루 최대 2번까지만 스탬프를 적립할 수 있습니다. "
+        #         f"오늘 이미 {today_stamp_count}번 적립하셨습니다."
+        #     )
         
         wallet, _ = StampWallet.objects.using('cloudsql').get_or_create(
             user=user, restaurant_id=restaurant_id
