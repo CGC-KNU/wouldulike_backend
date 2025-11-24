@@ -6,7 +6,7 @@ from django.core.management.base import BaseCommand
 from django.db import transaction
 from django.contrib.auth import get_user_model
 
-from coupons.models import Coupon, StampWallet, StampEvent
+from coupons.models import Coupon, StampWallet, StampEvent, Referral
 
 User = get_user_model()
 
@@ -25,12 +25,18 @@ class Command(BaseCommand):
             type=int,
             help='특정 사용자 ID만 초기화 (선택사항)',
         )
+        parser.add_argument(
+            '--include-referrals',
+            action='store_true',
+            help='친구초대(Referral) 이력도 함께 삭제하여 재발급 가능하게 함',
+        )
 
     def handle(self, *args, **options):
         dry_run = options['dry_run']
         user_id = options.get('user_id')
+        include_referrals = options.get('include_referrals', False)
         user_db = 'default'  # User 모델은 default DB 사용
-        coupon_db = 'cloudsql'  # Coupon, StampWallet, StampEvent는 cloudsql DB 사용
+        coupon_db = 'cloudsql'  # Coupon, StampWallet, StampEvent, Referral는 cloudsql DB 사용
 
         if dry_run:
             self.stdout.write(self.style.WARNING('=== DRY-RUN 모드: 실제 변경 없음 ===\n'))
@@ -58,11 +64,26 @@ class Command(BaseCommand):
         coupon_count = Coupon.objects.using(coupon_db).filter(user_id__in=user_ids).count()
         wallet_count = StampWallet.objects.using(coupon_db).filter(user_id__in=user_ids).count()
         event_count = StampEvent.objects.using(coupon_db).filter(user_id__in=user_ids).count()
+        
+        referral_count = 0
+        if include_referrals:
+            # referrer 또는 referee로 참여한 모든 Referral 레코드
+            referral_count = Referral.objects.using(coupon_db).filter(
+                referrer_id__in=user_ids
+            ).count() + Referral.objects.using(coupon_db).filter(
+                referee_id__in=user_ids
+            ).exclude(referrer_id__in=user_ids).count()
 
         self.stdout.write('삭제될 데이터:')
         self.stdout.write(f'  - 쿠폰: {coupon_count}개')
         self.stdout.write(f'  - 스탬프 지갑: {wallet_count}개')
-        self.stdout.write(f'  - 스탬프 이벤트: {event_count}개\n')
+        self.stdout.write(f'  - 스탬프 이벤트: {event_count}개')
+        if include_referrals:
+            self.stdout.write(f'  - 친구초대 이력 (Referral): {referral_count}개')
+            self.stdout.write(self.style.WARNING('  ⚠️  Referral 삭제 시 신규가입/친구초대 쿠폰 재발급이 가능해집니다.'))
+        else:
+            self.stdout.write(self.style.WARNING('  ⚠️  Referral 미삭제: 신규가입/친구초대 쿠폰은 재발급되지 않습니다.'))
+        self.stdout.write('')
 
         if dry_run:
             self.stdout.write(self.style.WARNING('DRY-RUN 모드: 실제 삭제하지 않습니다.'))
@@ -83,13 +104,31 @@ class Command(BaseCommand):
             deleted_coupons = Coupon.objects.using(coupon_db).filter(user_id__in=user_ids).delete()[0]
             deleted_wallets = StampWallet.objects.using(coupon_db).filter(user_id__in=user_ids).delete()[0]
             deleted_events = StampEvent.objects.using(coupon_db).filter(user_id__in=user_ids).delete()[0]
+            
+            deleted_referrals = 0
+            if include_referrals:
+                # referrer로 참여한 Referral 삭제
+                deleted_referrals += Referral.objects.using(coupon_db).filter(
+                    referrer_id__in=user_ids
+                ).delete()[0]
+                # referee로 참여한 Referral 삭제 (중복 제거)
+                deleted_referrals += Referral.objects.using(coupon_db).filter(
+                    referee_id__in=user_ids
+                ).exclude(referrer_id__in=user_ids).delete()[0]
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f'\n=== 초기화 완료 ===\n'
-                f'삭제된 쿠폰: {deleted_coupons}개\n'
-                f'삭제된 스탬프 지갑: {deleted_wallets}개\n'
-                f'삭제된 스탬프 이벤트: {deleted_events}개'
-            )
+        result_msg = (
+            f'\n=== 초기화 완료 ===\n'
+            f'삭제된 쿠폰: {deleted_coupons}개\n'
+            f'삭제된 스탬프 지갑: {deleted_wallets}개\n'
+            f'삭제된 스탬프 이벤트: {deleted_events}개'
         )
+        
+        if include_referrals:
+            result_msg += f'\n삭제된 친구초대 이력: {deleted_referrals}개'
+            result_msg += '\n✅ 신규가입/친구초대 쿠폰 재발급이 가능합니다.'
+        else:
+            result_msg += '\n⚠️  Referral 미삭제: 신규가입/친구초대 쿠폰은 재발급되지 않습니다.'
+            result_msg += '\n   재발급을 원하시면 --include-referrals 옵션을 사용하세요.'
+        
+        self.stdout.write(self.style.SUCCESS(result_msg))
 

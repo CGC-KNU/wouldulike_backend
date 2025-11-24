@@ -21,6 +21,7 @@ from coupons.models import (
     StampWallet,
     StampEvent,
     MerchantPin,
+    Referral,
 )
 
 User = get_user_model()
@@ -47,13 +48,19 @@ class Command(BaseCommand):
             choices=[1, 2, 3, 4],
             help='특정 단계만 실행 (1: 사용자 목록, 2: 사용자 데이터 초기화, 3: 쿠폰 제한 초기화, 4: PIN 재생성)',
         )
+        parser.add_argument(
+            '--include-referrals',
+            action='store_true',
+            help='친구초대(Referral) 이력도 함께 삭제하여 재발급 가능하게 함',
+        )
 
     def handle(self, *args, **options):
         dry_run = options['dry_run']
         pin_length = options['pin_length']
         step = options.get('step')
+        include_referrals = options.get('include_referrals', False)
         user_db = 'default'  # User 모델은 default DB 사용
-        coupon_db = 'cloudsql'  # Coupon, StampWallet, StampEvent는 cloudsql DB 사용
+        coupon_db = 'cloudsql'  # Coupon, StampWallet, StampEvent, Referral는 cloudsql DB 사용
 
         if dry_run:
             self.stdout.write(self.style.WARNING('=== DRY-RUN 모드: 실제 변경 없음 ===\n'))
@@ -114,6 +121,22 @@ class Command(BaseCommand):
                 event_count = StampEvent.objects.using(coupon_db).filter(user_id__in=user_ids).count()
                 StampEvent.objects.using(coupon_db).filter(user_id__in=user_ids).delete()
                 self.stdout.write(f'   - 삭제된 스탬프 이벤트: {event_count}개')
+                
+                # Referral 삭제 (옵션)
+                if include_referrals:
+                    referral_count = (
+                        Referral.objects.using(coupon_db).filter(referrer_id__in=user_ids).count() +
+                        Referral.objects.using(coupon_db).filter(referee_id__in=user_ids)
+                        .exclude(referrer_id__in=user_ids).count()
+                    )
+                    Referral.objects.using(coupon_db).filter(referrer_id__in=user_ids).delete()
+                    Referral.objects.using(coupon_db).filter(referee_id__in=user_ids).exclude(
+                        referrer_id__in=user_ids
+                    ).delete()
+                    self.stdout.write(f'   - 삭제된 친구초대 이력: {referral_count}개')
+                    self.stdout.write(self.style.SUCCESS('   ✅ 신규가입/친구초대 쿠폰 재발급 가능'))
+                else:
+                    self.stdout.write(self.style.WARNING('   ⚠️  Referral 미삭제: 신규가입/친구초대 쿠폰은 재발급되지 않음'))
             else:
                 coupon_count = Coupon.objects.using(coupon_db).filter(user_id__in=user_ids).count()
                 wallet_count = StampWallet.objects.using(coupon_db).filter(user_id__in=user_ids).count()
@@ -121,6 +144,23 @@ class Command(BaseCommand):
                 self.stdout.write(f'   - 삭제될 쿠폰: {coupon_count}개')
                 self.stdout.write(f'   - 삭제될 스탬프 지갑: {wallet_count}개')
                 self.stdout.write(f'   - 삭제될 스탬프 이벤트: {event_count}개')
+                
+                if include_referrals:
+                    referral_count = (
+                        Referral.objects.using(coupon_db).filter(referrer_id__in=user_ids).count() +
+                        Referral.objects.using(coupon_db).filter(referee_id__in=user_ids)
+                        .exclude(referrer_id__in=user_ids).count()
+                    )
+                    self.stdout.write(f'   - 삭제될 친구초대 이력: {referral_count}개')
+                    self.stdout.write(self.style.SUCCESS('   ✅ 신규가입/친구초대 쿠폰 재발급 가능'))
+                else:
+                    referral_count = (
+                        Referral.objects.using(coupon_db).filter(referrer_id__in=user_ids).count() +
+                        Referral.objects.using(coupon_db).filter(referee_id__in=user_ids)
+                        .exclude(referrer_id__in=user_ids).count()
+                    )
+                    self.stdout.write(f'   - 친구초대 이력 (유지): {referral_count}개')
+                    self.stdout.write(self.style.WARNING('   ⚠️  Referral 미삭제: 신규가입/친구초대 쿠폰은 재발급되지 않음'))
             
             self.stdout.write('')
 
