@@ -10,6 +10,11 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
+            '--kakao-only',
+            action='store_true',
+            help='카카오 로그인 사용자만 조회',
+        )
+        parser.add_argument(
             '--search',
             type=str,
             help='카카오 ID로 검색 (부분 일치)',
@@ -30,18 +35,22 @@ class Command(BaseCommand):
         search_term = options.get('search')
         limit = options.get('limit')
         show_all = options.get('all')
+        kakao_only = options.get('kakao_only')
 
         # 쿼리 구성
+        if kakao_only:
+            users = User.objects.exclude(kakao_id__isnull=True)
+        else:
+            users = User.objects.all()
+        
         if search_term:
             try:
                 # 숫자로 검색 시도
                 search_id = int(search_term)
-                users = User.objects.filter(kakao_id__icontains=search_id)
+                users = users.filter(kakao_id__icontains=search_id)
             except ValueError:
                 # 문자열 검색
-                users = User.objects.filter(kakao_id__icontains=search_term)
-        else:
-            users = User.objects.all()
+                users = users.filter(kakao_id__icontains=search_term)
 
         # 정렬: 최근 생성된 순서
         users = users.order_by('-created_at')
@@ -54,7 +63,8 @@ class Command(BaseCommand):
             total_count = users.count()
 
         # 결과 출력
-        self.stdout.write(self.style.SUCCESS(f'\n=== 사용자 목록 (총 {total_count}명) ===\n'))
+        title = '카카오 로그인 사용자 목록' if kakao_only else '사용자 목록'
+        self.stdout.write(self.style.SUCCESS(f'\n=== {title} (총 {total_count}명) ===\n'))
         
         if not users.exists():
             self.stdout.write(self.style.WARNING('검색 결과가 없습니다.'))
