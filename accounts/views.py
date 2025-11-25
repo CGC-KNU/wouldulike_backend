@@ -56,72 +56,146 @@ class KakaoLoginView(APIView):
 
     def post(self, request):
         # 요청 스펙: JSON body로 access_token(필수), guest_uuid(선택)
-        access_token = request.data.get('access_token') or request.data.get('accessToken')
-        guest_uuid = request.data.get('guest_uuid')
-        if not access_token:
-            return Response({'detail': 'access_token is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 1) Kakao 프로필 조회
-        try:
-            kakao_response = requests.get(
-                'https://kapi.kakao.com/v2/user/me',
-                headers={'Authorization': f'Bearer {access_token}'},
-                timeout=10,
-            )
-        except Exception:
-            return Response({'detail': 'kakao_api_error'}, status=status.HTTP_502_BAD_GATEWAY)
-
-        if kakao_response.status_code != 200:
-            return Response({'detail': 'kakao_token_invalid'}, status=status.HTTP_401_UNAUTHORIZED)
-
-        data = kakao_response.json()
-        kakao_id = data.get('id')
-        kakao_account = data.get('kakao_account') or {}
-        profile = kakao_account.get('profile') or {}
-        nickname = profile.get('nickname') or ''
-        profile_image_url = profile.get('profile_image_url') or ''
-
-        if not kakao_id:
-            return Response({'detail': 'kakao_profile_invalid'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # 2) 사용자 매핑/생성: kakao_id 기준
-        user, created = User.objects.get_or_create(kakao_id=kakao_id)
-
-        # guest_uuid가 있으면 게스트 데이터 귀속 (선택 구현)
-        if guest_uuid:
-            merge_guest_data(guest_uuid, user)
-
-        signup_coupon_code = None
-        if created:
-            try:
-                coupon = issue_signup_coupon(user)
-                signup_coupon_code = coupon.code
-            except Exception as exc:
-                logger.warning('failed to issue signup coupon for user %s: %s', user.id, exc)
-
-        # 3) JWT 발급
-        tokens = generate_tokens_for_user(user)
+        user_agent = request.META.get('HTTP_USER_AGENT', 'Unknown')
+        client_ip = request.META.get('REMOTE_ADDR', 'Unknown')
         
-        # 토큰 만료 시간 정보 추가
-        refresh = RefreshToken(tokens['refresh'])
-        access_token = refresh.access_token
-        tokens['access_expires_at'] = access_token['exp']  # Unix timestamp
-        tokens['refresh_expires_at'] = refresh['exp']  # Unix timestamp
+        try:
+            access_token = request.data.get('access_token') or request.data.get('accessToken')
+            guest_uuid = request.data.get('guest_uuid')
+            
+            logger.info(f'Login attempt - User-Agent: {user_agent}, IP: {client_ip}, Has token: {bool(access_token)}')
+            
+            if not access_token:
+                logger.warning(f'Login failed: access_token missing - User-Agent: {user_agent}')
+                return Response({'detail': 'access_token is required'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # 응답 스키마: token/access+refresh, user/id+kakao_id+nickname+profile_image_url
-        resp = {
-            'token': tokens,
-            'user': {
-                'id': user.id,
-                'kakao_id': user.kakao_id,
-                'nickname': nickname,
-                'profile_image_url': profile_image_url,
-            },
-            'is_new': created,
-        }
-        if signup_coupon_code:
-            resp['signup_coupon_code'] = signup_coupon_code
-        return Response(resp, status=status.HTTP_200_OK)
+            # 1) Kakao 프로필 조회
+            try:
+                kakao_response = requests.get(
+                    'https://kapi.kakao.com/v2/user/me',
+                    headers={'Authorization': f'Bearer {access_token}'},
+                    timeout=10,
+                )
+            except requests.exceptions.Timeout:
+                logger.error(f'Kakao API timeout - User-Agent: {user_agent}, IP: {client_ip}')
+                return Response({'detail': 'kakao_api_error', 'code': 'timeout'}, status=status.HTTP_502_BAD_GATEWAY)
+            except requests.exceptions.ConnectionError as e:
+                logger.error(f'Kakao API connection error - User-Agent: {user_agent}, IP: {client_ip}, Error: {str(e)}')
+                return Response({'detail': 'kakao_api_error', 'code': 'connection_error'}, status=status.HTTP_502_BAD_GATEWAY)
+            except Exception as e:
+                logger.error(f'Kakao API unexpected error - User-Agent: {user_agent}, IP: {client_ip}, Error: {str(e)}', exc_info=True)
+                return Response({'detail': 'kakao_api_error', 'code': 'unknown'}, status=status.HTTP_502_BAD_GATEWAY)
+
+            if kakao_response.status_code != 200:
+                logger.warning(f'Kakao API returned non-200 status: {kakao_response.status_code} - User-Agent: {user_agent}, Response: {kakao_response.text[:200]}')
+                return Response({'detail': 'kakao_token_invalid', 'code': f'http_{kakao_response.status_code}'}, status=status.HTTP_401_UNAUTHORIZED)
+
+            # JSON 파싱 처리 (UTF-8 BOM 및 잘못된 MIME 타입 대비)
+            try:
+                data = kakao_response.json()
+            except ValueError:
+                raw_text = kakao_response.text
+                data = None
+                # Kakao가 간헐적으로 UTF-8 BOM이 포함된 텍스트나 JSON MIME이 아닌 응답을
+                # 반환하는 경우를 대비해 content를 우선 활용한 수동 파싱을 시도한다.
+                fallback_sources = [
+                    kakao_response.content,
+                    raw_text,
+                ]
+                for payload in fallback_sources:
+                    if not payload:
+                        continue
+                    try:
+                        cleaned_text = (
+                            payload.decode('utf-8-sig') if isinstance(payload, (bytes, bytearray)) 
+                            else str(payload).lstrip('\ufeff')
+                        )
+                        data = json.loads(cleaned_text)
+                        logger.info(f'Successfully parsed Kakao response using fallback method - User-Agent: {user_agent}')
+                        break
+                    except (UnicodeDecodeError, ValueError, json.JSONDecodeError):
+                        continue
+                
+                if data is None:
+                    logger.error(
+                        'Failed to parse Kakao profile response',
+                        extra={
+                            'status_code': kakao_response.status_code,
+                            'content_type': kakao_response.headers.get('Content-Type'),
+                            'content_length': len(kakao_response.content or b''),
+                            'text': raw_text[:500] if raw_text else None,
+                            'user_agent': user_agent,
+                            'client_ip': client_ip,
+                        },
+                    )
+                    return Response({'detail': 'kakao_api_error', 'code': 'invalid_response'}, status=status.HTTP_502_BAD_GATEWAY)
+            
+            kakao_id = data.get('id')
+            kakao_account = data.get('kakao_account') or {}
+            profile = kakao_account.get('profile') or {}
+            nickname = profile.get('nickname') or ''
+            profile_image_url = profile.get('profile_image_url') or ''
+
+            if not kakao_id:
+                logger.warning(f'Kakao profile invalid (no kakao_id) - User-Agent: {user_agent}, Data: {str(data)[:200]}')
+                return Response({'detail': 'kakao_profile_invalid'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # 2) 사용자 매핑/생성: kakao_id 기준
+            try:
+                user, created = User.objects.get_or_create(kakao_id=kakao_id)
+            except Exception as e:
+                logger.error(f'User creation/retrieval error - User-Agent: {user_agent}, IP: {client_ip}, Kakao ID: {kakao_id}, Error: {str(e)}', exc_info=True)
+                return Response({'detail': 'internal_error', 'code': 'user_creation_failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # guest_uuid가 있으면 게스트 데이터 귀속 (선택 구현)
+            if guest_uuid:
+                try:
+                    merge_guest_data(guest_uuid, user)
+                except Exception as exc:
+                    logger.warning(f'Failed to merge guest data - User-Agent: {user_agent}, Guest UUID: {guest_uuid}, Error: {str(exc)}', exc_info=True)
+                    # 게스트 데이터 병합 실패는 치명적이지 않으므로 계속 진행
+
+            signup_coupon_code = None
+            if created:
+                try:
+                    coupon = issue_signup_coupon(user)
+                    signup_coupon_code = coupon.code
+                except Exception as exc:
+                    logger.warning('failed to issue signup coupon for user %s: %s', user.id, exc)
+
+            # 3) JWT 발급
+            try:
+                tokens = generate_tokens_for_user(user)
+                
+                # 토큰 만료 시간 정보 추가
+                refresh = RefreshToken(tokens['refresh'])
+                access_token_obj = refresh.access_token
+                tokens['access_expires_at'] = access_token_obj['exp']  # Unix timestamp
+                tokens['refresh_expires_at'] = refresh['exp']  # Unix timestamp
+            except Exception as e:
+                logger.error(f'Token generation error - User-Agent: {user_agent}, IP: {client_ip}, User ID: {user.id}, Error: {str(e)}', exc_info=True)
+                return Response({'detail': 'internal_error', 'code': 'token_generation_failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+            # 응답 스키마: token/access+refresh, user/id+kakao_id+nickname+profile_image_url
+            resp = {
+                'token': tokens,
+                'user': {
+                    'id': user.id,
+                    'kakao_id': user.kakao_id,
+                    'nickname': nickname,
+                    'profile_image_url': profile_image_url,
+                },
+                'is_new': created,
+            }
+            if signup_coupon_code:
+                resp['signup_coupon_code'] = signup_coupon_code
+            
+            logger.info(f'Login successful - User-Agent: {user_agent}, IP: {client_ip}, User ID: {user.id}, Kakao ID: {kakao_id}, Is New: {created}')
+            return Response(resp, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f'Unexpected error in KakaoLoginView - User-Agent: {user_agent}, IP: {client_ip}, Error: {str(e)}', exc_info=True)
+            return Response({'detail': 'internal_error', 'code': 'unexpected_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class CustomTokenRefreshView(BaseTokenRefreshView):
