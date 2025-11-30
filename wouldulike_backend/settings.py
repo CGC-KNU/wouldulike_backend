@@ -320,7 +320,7 @@ if DEBUG:
     MEDIA_URL = ''
     MEDIA_ROOT = ''
 else:
-    AWS_S3_CUSTOM_DOMAIN = 'https://wouldulike-default-bucket.s3.ap-northeast-2.amazonaws.com/'
+    AWS_S3_CUSTOM_DOMAIN = 'https://wouldulike-default-bucket-lunching.s3.ap-northeast-2.amazonaws.com/'
     STATIC_URL = f"{AWS_S3_CUSTOM_DOMAIN}static/"
     MEDIA_URL = AWS_S3_CUSTOM_DOMAIN
     AWS_QUERYSTRING_AUTH = False  # S3에서 URL에 인증 정보 포함 안 함
