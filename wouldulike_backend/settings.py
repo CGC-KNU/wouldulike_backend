@@ -222,7 +222,7 @@ REDIS_URL = os.getenv("REDIS_URL")
 # AWS S3 설정 (개인)
 AWS_ACCESS_KEY_ID = os.getenv("AWS_ACCESS_KEY_ID")
 AWS_SECRET_ACCESS_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
-AWS_STORAGE_BUCKET_NAME = 'wouldulike-default-bucket'
+AWS_STORAGE_BUCKET_NAME = 'wouldulike-default-bucket-lunching'
 AWS_S3_REGION_NAME = 'ap-northeast-2'
 
 FCM_SERVER_KEY = os.getenv("FCM_SERVER_KEY")
