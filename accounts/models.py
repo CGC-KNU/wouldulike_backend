@@ -6,7 +6,7 @@ from django.contrib.auth.models import (
 
 class UserManager(BaseUserManager):
     def create_user(self, kakao_id, password=None, **extra_fields):
-        if not kakao_id:
+        if kakao_id is None:
             raise ValueError('Users must have a kakao_id')
         user = self.model(kakao_id=kakao_id, **extra_fields)
         user.set_password(password)

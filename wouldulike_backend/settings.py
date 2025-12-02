@@ -1,5 +1,5 @@
 from pathlib import Path
-import os, json, environ
+import os, json, environ, logging
 from django.core.exceptions import ImproperlyConfigured
 from decouple import config
 
@@ -231,6 +231,25 @@ FCM_SERVER_KEY = os.getenv("FCM_SERVER_KEY")
 FCM_PROJECT_ID = os.getenv("FCM_PROJECT_ID")
 FCM_SERVICE_ACCOUNT_FILE = os.getenv("FCM_SERVICE_ACCOUNT_FILE")
 FCM_SERVICE_ACCOUNT_JSON = os.getenv("FCM_SERVICE_ACCOUNT_JSON")
+
+# 여러 Firebase 프로젝트 지원 (선택사항)
+# 환경변수 FCM_PROJECT_CONFIGS에 JSON 문자열로 설정
+# 예시:
+# FCM_PROJECT_CONFIGS='[{"project_id": "wouldulike-efe19", "service_account_file": "/path/to/file1.json"}, {"project_id": "wouldulike-old", "service_account_file": "/path/to/file2.json"}]'
+# 또는 settings.py에서 직접 설정:
+# FCM_PROJECT_CONFIGS = [
+#     {"project_id": "wouldulike-efe19", "service_account_file": "/path/to/file1.json"},
+#     {"project_id": "wouldulike-old", "service_account_file": "/path/to/file2.json"},
+# ]
+FCM_PROJECT_CONFIGS = os.getenv("FCM_PROJECT_CONFIGS")
+if FCM_PROJECT_CONFIGS:
+    try:
+        import json
+        FCM_PROJECT_CONFIGS = json.loads(FCM_PROJECT_CONFIGS)
+    except json.JSONDecodeError:
+        logger = logging.getLogger(__name__)
+        logger.warning("FCM_PROJECT_CONFIGS JSON could not be decoded, ignoring")
+        FCM_PROJECT_CONFIGS = None
 
 
 AUTH_PASSWORD_VALIDATORS = [

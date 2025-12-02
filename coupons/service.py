@@ -221,6 +221,100 @@ def issue_signup_coupon(user: User):
 
 
 @transaction.atomic
+def issue_ambassador_coupons(user: User):
+    """
+    엠버서더 보상을 위해 특정 사용자에게 전체 제휴식당 쿠폰을 발급합니다.
+    신규가입 쿠폰과 동일한 쿠폰 타입(WELCOME_3000)을 사용하지만,
+    각 식당마다 고유한 issue_key를 사용하여 중복 발급 방지 제약조건을 통과합니다.
+    
+    Args:
+        user: 쿠폰을 발급받을 사용자
+        
+    Returns:
+        발급된 쿠폰 리스트
+    """
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="WELCOME_3000")
+    camp = Campaign.objects.using(alias).get(code="SIGNUP_WELCOME", active=True)
+    
+    # 전체 제휴식당 목록 가져오기
+    restaurant_ids = list(
+        AffiliateRestaurant.objects.using(alias).values_list("restaurant_id", flat=True)
+    )
+    if not restaurant_ids:
+        raise ValidationError("no restaurants available for coupon assignment")
+    
+    # 제외된 식당 필터링
+    excluded_ids = COUPON_TYPE_EXCLUDED_RESTAURANTS.get(ct.code, set())
+    valid_restaurant_ids = [rid for rid in restaurant_ids if rid not in excluded_ids]
+    
+    if not valid_restaurant_ids:
+        raise ValidationError("no valid restaurants available after exclusions")
+    
+    issued_coupons = []
+    failed_restaurants = []
+    
+    for restaurant_id in valid_restaurant_ids:
+        try:
+            # 각 식당마다 고유한 issue_key 사용
+            issue_key = f"AMBASSADOR:{user.id}:{restaurant_id}"
+            
+            # 이미 발급된 쿠폰이 있는지 확인 (중복 발급 방지)
+            existing = Coupon.objects.using(alias).filter(
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                issue_key=issue_key,
+            ).first()
+            
+            if existing:
+                logger.info(
+                    f"Coupon already exists for ambassador reward - "
+                    f"user={user.id}, restaurant={restaurant_id}, coupon_code={existing.code}"
+                )
+                issued_coupons.append(existing)
+                continue
+            
+            # 쿠폰 생성
+            benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, db_alias=alias)
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=_expires_at(ct),
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued_coupons.append(coupon)
+            logger.info(
+                f"Ambassador coupon issued - "
+                f"user={user.id}, restaurant={restaurant_id}, coupon_code={coupon.code}"
+            )
+        except Exception as exc:
+            logger.error(
+                f"Failed to issue ambassador coupon - "
+                f"user={user.id}, restaurant={restaurant_id}, error={str(exc)}",
+                exc_info=True
+            )
+            failed_restaurants.append((restaurant_id, str(exc)))
+    
+    if failed_restaurants:
+        logger.warning(
+            f"Some coupons failed to issue - "
+            f"user={user.id}, failed_count={len(failed_restaurants)}, "
+            f"failed_restaurants={failed_restaurants}"
+        )
+    
+    return {
+        "coupons": issued_coupons,
+        "total_issued": len(issued_coupons),
+        "failed_restaurants": failed_restaurants,
+    }
+
+
+@transaction.atomic
 def redeem_coupon(user: User, coupon_code: str, restaurant_id: int, pin: str):
     alias = router.db_for_write(Coupon)
     coupon = locked_get(Coupon.objects, using_alias=alias, code=coupon_code, user=user)
