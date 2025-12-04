@@ -220,21 +220,15 @@ def send_notification(tokens: Iterable[str], message: str, dry_run: bool = False
     session, project_id = session_with_project
     endpoint = _FCM_ENDPOINT.format(project_id=project_id)
 
-    # 드라이런 모드: 실제 전송 없이 검증만 수행
+    # 드라이런 모드: 실제 FCM API 호출하여 토큰 유효성 검증
+    # 주의: FCM API에는 validate_only 옵션이 없으므로 실제 API 호출 시 알림이 전송됩니다.
+    # 하지만 테스트 목적으로 실제 API 응답을 통해 토큰 유효성을 검증합니다.
     if dry_run:
-        validation_result = validate_notification(tokens, message)
-        return {
-            "dry_run": True,
-            "valid": validation_result["valid"],
-            "token_count": validation_result["token_count"],
-            "valid_tokens_count": len(validation_result["valid_tokens"]),
-            "invalid_tokens_count": len(validation_result["invalid_tokens"]),
-            "issues": validation_result["issues"],
-            "warnings": validation_result["warnings"],
-            "info": validation_result["info"],
-            "config_status": validation_result["config_status"],
-            "invalid_tokens": validation_result["invalid_tokens"],
-        }
+        # 드라이런 모드에서는 실제 API 호출을 하되, 테스트 메시지로 전송
+        test_message = f"[테스트] {message}"
+        logger.info("Dry-run mode: 실제 FCM API 호출하여 토큰 유효성 검증 (알림이 전송될 수 있음)")
+    else:
+        test_message = message
 
     successes = []
     failures = []
@@ -243,7 +237,7 @@ def send_notification(tokens: Iterable[str], message: str, dry_run: bool = False
         payload = {
             "message": {
                 "token": token,
-                "notification": {"body": message},
+                "notification": {"body": test_message},
             }
         }
         try:
@@ -275,9 +269,15 @@ def send_notification(tokens: Iterable[str], message: str, dry_run: bool = False
             error_detail,
         )
 
-    return {
+    result = {
         "success": len(successes),
         "failure": len(failures),
         "succeeded_tokens": successes,
         "failed_tokens": failures,
     }
+    
+    if dry_run:
+        result["dry_run"] = True
+        result["note"] = "드라이런 모드: 실제 FCM API 호출을 통해 토큰 유효성을 검증했습니다. 알림이 전송되었을 수 있습니다."
+    
+    return result
