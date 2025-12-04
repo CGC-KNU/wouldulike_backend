@@ -68,10 +68,10 @@ class RestaurantCouponBenefit(models.Model):
 
 class Coupon(models.Model):
     STATUS = (
-        ("ISSUED", "ISSUED"),
-        ("REDEEMED", "REDEEMED"),
-        ("EXPIRED", "EXPIRED"),
-        ("CANCELED", "CANCELED"),
+        ("ISSUED", "ISSUED"), # 발급된 쿠폰
+        ("REDEEMED", "REDEEMED"), # 사용된 쿠폰
+        ("EXPIRED", "EXPIRED"), # 만료된 쿠폰
+        ("CANCELED", "CANCELED"), # 취소된 쿠폰
     )
     code = models.CharField(max_length=20, unique=True)
     user = models.ForeignKey(
