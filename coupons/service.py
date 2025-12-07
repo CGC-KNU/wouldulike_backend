@@ -1,6 +1,7 @@
 import uuid
 import random
 import logging
+import os
 from datetime import date, datetime
 from django.db import transaction, IntegrityError, router, DatabaseError
 from django.db.models import Count
@@ -31,6 +32,18 @@ logger = logging.getLogger(__name__)
 
 GLOBAL_COUPON_EXPIRY = datetime(2026, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
 REFERRAL_MAX_REWARDS_PER_REFERRER = 5
+
+# 운영진 계정 카카오 ID 목록 (환경 변수에서 읽어옴, 쉼표로 구분)
+EVENT_ADMIN_KAKAO_IDS = set(
+    int(kid.strip())
+    for kid in os.getenv("EVENT_ADMIN_KAKAO_IDS", "").split(",")
+    if kid.strip()
+)
+
+
+def _is_event_admin_user(user: User) -> bool:
+    """운영진 계정인지 확인"""
+    return user.kakao_id in EVENT_ADMIN_KAKAO_IDS
 
 
 MAX_COUPONS_PER_RESTAURANT = 200
@@ -183,8 +196,10 @@ def _expires_at(ct: CouponType):
 
 
 def ensure_invite_code(user: User) -> InviteCode:
-    if hasattr(user, "invite_code"):
-        return user.invite_code
+    # 일반 사용자는 campaign_code가 없는 기본 InviteCode 하나만 가짐
+    invite = InviteCode.objects.filter(user=user, campaign_code__isnull=True).first()
+    if invite:
+        return invite
 
     max_attempts = 32
     for attempt in range(max_attempts):
@@ -193,13 +208,14 @@ def ensure_invite_code(user: User) -> InviteCode:
         if InviteCode.objects.filter(code=code).exists():
             continue
         try:
-            return InviteCode.objects.create(user=user, code=code)
+            return InviteCode.objects.create(user=user, code=code, campaign_code=None)
         except IntegrityError:
             continue
 
     fallback_code = f"INV{user.id:06d}{uuid.uuid4().hex[:4].upper()}"
     invite, _ = InviteCode.objects.update_or_create(
         user=user,
+        campaign_code__isnull=True,
         defaults={"code": fallback_code[:16]},
     )
     return invite
@@ -443,31 +459,54 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
 
             base_qs = Referral.objects.using(db_alias)
             locked_qs = base_qs.select_for_update()
+            
+            # 운영진 계정의 추천코드인지 확인
+            is_event_admin = _is_event_admin_user(referrer)
+            
+            # 사용된 추천코드의 campaign_code 확인
+            invite_code = InviteCode.objects.using(db_alias).get(code=ref_code)
+            campaign_code = invite_code.campaign_code if is_event_admin and invite_code.campaign_code else None
+            
+            if is_event_admin and campaign_code:
+                # 운영진 계정의 이벤트 추천코드인 경우
+                # 같은 이벤트 Campaign의 추천코드를 이미 입력했는지 확인
+                existing_event_ref = locked_qs.filter(
+                    referee=referee,
+                    campaign_code=campaign_code,
+                ).exists()
+                if existing_event_ref:
+                    raise ValidationError(
+                        "이미 해당 이벤트 추천코드를 입력했습니다.",
+                        code="event_referral_already_accepted",
+                    )
+            else:
+                # 일반 추천인 로직
+                if locked_qs.filter(referee=referee, campaign_code__isnull=True).exists():
 
-            if locked_qs.filter(referee=referee).exists():
+                    raise ValidationError(
 
-                raise ValidationError(
+                        "이미 추천을 수락했습니다.",
 
-                    "이미 추천을 수락했습니다.",
+                        code="referral_already_accepted",
 
-                    code="referral_already_accepted",
+                    )
 
-                )
+                # 운영진 계정은 제한 없음
+                if not is_event_admin:
+                    active_referrals = (
+                        locked_qs.filter(referrer=referrer, campaign_code__isnull=True)
+                        .exclude(status="REJECTED")
+                        .count()
+                    )
+                    if active_referrals >= REFERRAL_MAX_REWARDS_PER_REFERRER:
 
-            active_referrals = (
-                locked_qs.filter(referrer=referrer)
-                .exclude(status="REJECTED")
-                .count()
-            )
-            if active_referrals >= REFERRAL_MAX_REWARDS_PER_REFERRER:
+                        raise ValidationError(
 
-                raise ValidationError(
+                            "referral limit reached",
 
-                    "referral limit reached",
+                            code="referral_limit_reached",
 
-                    code="referral_limit_reached",
-
-                )
+                        )
 
             return base_qs.create(
 
@@ -476,6 +515,7 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                 referee=referee,
 
                 code_used=ref_code,
+                campaign_code=campaign_code,
 
             )
 
@@ -499,58 +539,96 @@ def qualify_referral_and_grant(referee: User):
 
         locked_qs = Referral.objects.using(db_alias).select_for_update()
 
-        try:
+        # PENDING 상태인 모든 Referral 처리 (이벤트와 일반 모두)
+        pending_refs = locked_qs.filter(referee=referee, status="PENDING")
+        
+        if not pending_refs.exists():
+            # 이미 처리된 Referral이 있는지 확인
+            existing_refs = Referral.objects.using(db_alias).filter(referee=referee)
+            return existing_refs.first() if existing_refs.exists() else None
+        
+        results = []
+        for ref in pending_refs:
+            # 운영진 계정인지 확인
+            is_event_admin = _is_event_admin_user(ref.referrer)
+            
+            # 운영진 계정이면 이벤트 보상 Campaign 사용
+            if is_event_admin and ref.campaign_code:
+                # campaign_code로 Campaign 결정
+                campaign_code = ref.campaign_code
+                coupon_type_code = "REFERRAL_BONUS_REFEREE"
+                
+                if campaign_code == "EVENT_REWARD_SIGNUP":
+                    coupon_type_code = "WELCOME_3000"
+                elif campaign_code == "EVENT_REWARD_REFERRAL":
+                    coupon_type_code = "REFERRAL_BONUS_REFEREE"
+                
+                try:
+                    event_camp = Campaign.objects.using(db_alias).get(code=campaign_code, active=True)
+                    event_ct = CouponType.objects.using(db_alias).get(code=coupon_type_code)
+                    
+                    # 이벤트 보상 쿠폰 발급 (referee에게만)
+                    _create_coupon_with_restaurant(
+                        user=referee,
+                        coupon_type=event_ct,
+                        campaign=event_camp,
+                        issue_key=f"EVENT_REWARD:{referee.id}:{ref.code_used}",
+                        db_alias=db_alias,
+                    )
+                    
+                    ref.status = "QUALIFIED"
+                    ref.qualified_at = timezone.now()
+                    ref.save(update_fields=["status", "qualified_at"], using=db_alias)
+                    results.append(ref)
+                    continue
+                except (Campaign.DoesNotExist, CouponType.DoesNotExist) as e:
+                    logger.error(f"이벤트 Campaign 또는 CouponType을 찾을 수 없습니다: {campaign_code}, {e}")
+                    # 일반 로직으로 폴백
+                    pass
 
-            ref = locked_qs.get(referee=referee)
+            # 일반 추천인 로직
+            current_reward_count = (
+                locked_qs.filter(referrer=ref.referrer, status="QUALIFIED", campaign_code__isnull=True)
+                .exclude(pk=ref.pk)
+                .count()
+            )
+            can_reward_referrer = current_reward_count < REFERRAL_MAX_REWARDS_PER_REFERRER
 
-        except Referral.DoesNotExist:
+            ref.status = "QUALIFIED"
 
-            return None
+            ref.qualified_at = timezone.now()
 
-        if ref.status != "PENDING":
+            ref.save(update_fields=["status", "qualified_at"], using=db_alias)
 
-            return ref
+            # reward issuance
 
-        current_reward_count = (
-            locked_qs.filter(referrer=ref.referrer, status="QUALIFIED")
-            .exclude(pk=ref.pk)
-            .count()
-        )
-        can_reward_referrer = current_reward_count < REFERRAL_MAX_REWARDS_PER_REFERRER
+            ref_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFERRER")
 
-        ref.status = "QUALIFIED"
-
-        ref.qualified_at = timezone.now()
-
-        ref.save(update_fields=["status", "qualified_at"], using=db_alias)
-
-        # reward issuance
-
-        ref_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFERRER")
-
-        ref_camp = Campaign.objects.using(db_alias).get(code="REFERRAL", active=True)
+            ref_camp = Campaign.objects.using(db_alias).get(code="REFERRAL", active=True)
 
 
 
-        if can_reward_referrer:
+            if can_reward_referrer:
+                _create_coupon_with_restaurant(
+                    user=ref.referrer,
+                    coupon_type=ref_ct,
+                    campaign=ref_camp,
+                    issue_key=f"REFERRAL_REFERRER:{ref.referrer_id}:{referee.id}",
+                    db_alias=db_alias,
+                )
+
+            new_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFEREE")
+
             _create_coupon_with_restaurant(
-                user=ref.referrer,
-                coupon_type=ref_ct,
+                user=referee,
+                coupon_type=new_ct,
                 campaign=ref_camp,
-                issue_key=f"REFERRAL_REFERRER:{ref.referrer_id}:{referee.id}",
+                issue_key=f"REFERRAL_REFEREE:{referee.id}",
                 db_alias=db_alias,
             )
-
-        new_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFEREE")
-
-        _create_coupon_with_restaurant(
-            user=referee,
-            coupon_type=new_ct,
-            campaign=ref_camp,
-            issue_key=f"REFERRAL_REFEREE:{referee.id}",
-            db_alias=db_alias,
-        )
-        return ref
+            results.append(ref)
+        
+        return results[0] if results else None
 
 
 

@@ -105,11 +105,23 @@ class Coupon(models.Model):
 
 
 class InviteCode(models.Model):
-    user = models.OneToOneField(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="invite_code", db_constraint=False
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="invite_codes", db_constraint=False
     )
     code = models.CharField(max_length=16, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # 이벤트 보상용 Campaign 코드 (운영진 계정용, 선택적)
+    campaign_code = models.CharField(max_length=40, null=True, blank=True)
+    
+    class Meta:
+        # 일반 사용자는 하나의 InviteCode만 가질 수 있도록 제약 (운영진은 예외)
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=models.Q(campaign_code__isnull=True),
+                name="uq_invite_code_user_default",
+            )
+        ]
 
 
 class Referral(models.Model):
@@ -121,16 +133,29 @@ class Referral(models.Model):
     referrer = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="referrals_made", db_constraint=False
     )
-    referee = models.OneToOneField(
-        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="referral_from", db_constraint=False
+    referee = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="referrals_received", db_constraint=False
     )
     code_used = models.CharField(max_length=16)
     status = models.CharField(max_length=12, choices=STATUS, default="PENDING")
     qualified_at = models.DateTimeField(null=True, blank=True)
+    # 이벤트 보상용 Campaign 코드 (운영진 계정용, 선택적)
+    campaign_code = models.CharField(max_length=40, null=True, blank=True)
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["referrer", "referee"], name="uq_ref_pair")
+            # 일반 추천인: (referrer, referee) 조합은 유일해야 함
+            models.UniqueConstraint(
+                fields=["referrer", "referee"],
+                condition=models.Q(campaign_code__isnull=True),
+                name="uq_ref_pair_default",
+            ),
+            # 이벤트 추천인: (referee, campaign_code) 조합은 유일해야 함 (같은 이벤트는 한 번만)
+            models.UniqueConstraint(
+                fields=["referee", "campaign_code"],
+                condition=models.Q(campaign_code__isnull=False),
+                name="uq_ref_pair_event",
+            ),
         ]
 
 
