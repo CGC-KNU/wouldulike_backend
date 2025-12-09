@@ -195,13 +195,14 @@ def validate_notification(tokens: Iterable[str], message: str) -> dict:
     return validation_result
 
 
-def send_notification(tokens: Iterable[str], message: str, dry_run: bool = False):
+def send_notification(tokens: Iterable[str], message: str, dry_run: bool = False, title: str = "우주라이크"):
     """
     Send push notification via FCM HTTP v1 to the given tokens.
 
     Args:
         tokens: Iterable of FCM tokens
         message: Notification message text
+        title: Notification title (default: "우주라이크")
         dry_run: If True, only validate without sending (default: False)
 
     Returns a dict containing success/failure counts and details, or None when
@@ -226,48 +227,99 @@ def send_notification(tokens: Iterable[str], message: str, dry_run: bool = False
     if dry_run:
         # 드라이런 모드에서는 실제 API 호출을 하되, 테스트 메시지로 전송
         test_message = f"[테스트] {message}"
+        test_title = f"[테스트] {title}"
         logger.info("Dry-run mode: 실제 FCM API 호출하여 토큰 유효성 검증 (알림이 전송될 수 있음)")
     else:
         test_message = message
+        test_title = title
+
+    logger.info(
+        f"FCM 발송 시작 - 대상 토큰 수: {len(tokens)}, "
+        f"제목: {test_title}, 메시지: {test_message[:50]}..."
+    )
 
     successes = []
     failures = []
 
     for token in tokens:
+        # 토큰 미리보기 (로깅용)
+        token_preview = f"{token[:10]}...{token[-10:]}" if len(token) > 20 else token
+        
+        # 기본 payload 구조
         payload = {
             "message": {
                 "token": token,
-                "notification": {"body": test_message},
+                "notification": {
+                    "title": test_title,
+                    "body": test_message,
+                },
+                "data": {
+                    "type": "NOTIFICATION",
+                    "message": test_message,
+                    "title": test_title,
+                }
             }
         }
+        
+        # iOS용 apns 설정 추가
+        # FCM 토큰으로는 플랫폼을 정확히 구분할 수 없으므로,
+        # 모든 토큰에 apns 설정을 포함하는 것이 안전함
+        # (Android는 apns 블록을 무시함)
+        payload["message"]["apns"] = {
+            "headers": {
+                "apns-priority": "10",  # 즉시 전송
+            },
+            "payload": {
+                "aps": {
+                    "alert": {
+                        "title": test_title,
+                        "body": test_message,
+                    },
+                    "sound": "default",
+                    "badge": 1,
+                }
+            }
+        }
+        
         try:
+            logger.debug(
+                f"FCM 발송 시도 - Token: {token_preview}, "
+                f"Payload: {json.dumps(payload, ensure_ascii=False)[:200]}..."
+            )
+            
             response = session.post(endpoint, json=payload, timeout=10)
+            
+            if response.ok:
+                successes.append(token)
+                logger.info(
+                    f"FCM 발송 성공 - Token: {token_preview}, "
+                    f"Response: {response.status_code}"
+                )
+                continue
+            
+            # 실패 응답 처리
+            try:
+                error_detail = response.json()
+            except ValueError:
+                error_detail = {"error": response.text}
+            
+            failures.append(
+                {
+                    "token": token,
+                    "status_code": response.status_code,
+                    "response": error_detail,
+                }
+            )
+            logger.warning(
+                f"FCM 발송 실패 - Token: {token_preview}, "
+                f"Status: {response.status_code}, "
+                f"Response: {error_detail}"
+            )
+            
         except Exception:
-            logger.exception("FCM request failed for token %s", token)
+            logger.exception(f"FCM 발송 예외 - Token: {token_preview}")
             failures.append({"token": token, "error": "request_exception"})
             continue
-
-        if response.ok:
-            successes.append(token)
-            continue
-
-        try:
-            error_detail = response.json()
-        except ValueError:
-            error_detail = {"error": response.text}
-
-        failures.append(
-            {
-                "token": token,
-                "status_code": response.status_code,
-                "response": error_detail,
-            }
-        )
-        logger.warning(
-            "FCM send failed for token %s: %s",
-            token,
-            error_detail,
-        )
 
     result = {
         "success": len(successes),
@@ -275,6 +327,10 @@ def send_notification(tokens: Iterable[str], message: str, dry_run: bool = False
         "succeeded_tokens": successes,
         "failed_tokens": failures,
     }
+    
+    logger.info(
+        f"FCM 발송 완료 - 성공: {len(successes)}, 실패: {len(failures)}"
+    )
     
     if dry_run:
         result["dry_run"] = True
