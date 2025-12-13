@@ -29,15 +29,20 @@ class CouponSerializer(serializers.ModelSerializer):
 
     def get_benefit(self, obj: Coupon):
         snapshot = obj.benefit_snapshot or {}
+        
+        # coupon_type_title은 항상 CouponType.title을 사용 (benefit_snapshot과 무관하게)
+        # 프론트엔드가 benefit.coupon_type_title을 사용하더라도 올바른 값이 전달되도록 보장
+        correct_coupon_type_title = obj.coupon_type.title
+        
         if snapshot:
-            # benefit_snapshot에 coupon_type_title이 있으면 사용 (기말고사 쿠폰의 경우)
-            if "coupon_type_title" in snapshot:
-                return snapshot
+            # benefit_snapshot이 있으면 사용하되, coupon_type_title은 항상 올바른 값으로 덮어쓰기
+            snapshot = snapshot.copy()  # 원본 수정 방지
+            snapshot["coupon_type_title"] = correct_coupon_type_title
             return snapshot
 
         fallback = {
             "coupon_type_code": obj.coupon_type.code,
-            "coupon_type_title": obj.coupon_type.title,
+            "coupon_type_title": correct_coupon_type_title,
             "restaurant_id": obj.restaurant_id,
             "benefit": obj.coupon_type.benefit_json,
             "title": obj.coupon_type.title,
