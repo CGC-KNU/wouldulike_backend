@@ -331,6 +331,144 @@ def issue_ambassador_coupons(user: User):
 
 
 @transaction.atomic
+def issue_final_exam_coupons(user: User):
+    """
+    기말고사 특별 이벤트 쿠폰을 사용자에게 전체 제휴식당 쿠폰을 발급합니다.
+    한 사람당 하나의 쿠폰 세트만 받을 수 있도록 issue_key로 제어합니다.
+    
+    Args:
+        user: 쿠폰을 발급받을 사용자
+        
+    Returns:
+        발급된 쿠폰 리스트
+    """
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="FINAL_EXAM_SPECIAL")
+    camp = Campaign.objects.using(alias).get(code="FINAL_EXAM_EVENT", active=True)
+    
+    # 이미 발급된 쿠폰이 있는지 확인 (한 사람당 하나의 쿠폰 세트만)
+    existing_coupons = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+    )
+    
+    if existing_coupons.exists():
+        # 이미 발급된 쿠폰이 있으면 기존 쿠폰 반환
+        return {
+            "coupons": list(existing_coupons),
+            "total_issued": existing_coupons.count(),
+            "failed_restaurants": [],
+            "already_issued": True,
+        }
+    
+    # 전체 제휴식당 목록 가져오기
+    restaurant_ids = list(
+        AffiliateRestaurant.objects.using(alias).values_list("restaurant_id", flat=True)
+    )
+    if not restaurant_ids:
+        raise ValidationError("no restaurants available for coupon assignment")
+    
+    # 제외된 식당 필터링
+    excluded_ids = COUPON_TYPE_EXCLUDED_RESTAURANTS.get(ct.code, set())
+    valid_restaurant_ids = [rid for rid in restaurant_ids if rid not in excluded_ids]
+    
+    if not valid_restaurant_ids:
+        raise ValidationError("no valid restaurants available after exclusions")
+    
+    issued_coupons = []
+    failed_restaurants = []
+    
+    # 사용자당 하나의 쿠폰 세트만 발급되도록 동일한 issue_key 사용
+    base_issue_key = f"FINAL_EXAM:{user.id}"
+    
+    for restaurant_id in valid_restaurant_ids:
+        try:
+            # 각 식당마다 고유한 issue_key 사용 (식당 ID 포함)
+            issue_key = f"{base_issue_key}:{restaurant_id}"
+            
+            # 이미 발급된 쿠폰이 있는지 확인 (중복 발급 방지)
+            existing = Coupon.objects.using(alias).filter(
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                issue_key=issue_key,
+            ).first()
+            
+            if existing:
+                logger.info(
+                    f"Coupon already exists for final exam event - "
+                    f"user={user.id}, restaurant={restaurant_id}, coupon_code={existing.code}"
+                )
+                issued_coupons.append(existing)
+                continue
+            
+            # 쿠폰 생성
+            benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, db_alias=alias)
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=_expires_at(ct),
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued_coupons.append(coupon)
+            logger.info(
+                f"Final exam coupon issued - "
+                f"user={user.id}, restaurant={restaurant_id}, coupon_code={coupon.code}"
+            )
+        except Exception as exc:
+            logger.error(
+                f"Failed to issue final exam coupon - "
+                f"user={user.id}, restaurant={restaurant_id}, error={str(exc)}",
+                exc_info=True
+            )
+            failed_restaurants.append((restaurant_id, str(exc)))
+    
+    if failed_restaurants:
+        logger.warning(
+            f"Some coupons failed to issue - "
+            f"user={user.id}, failed_count={len(failed_restaurants)}, "
+            f"failed_restaurants={failed_restaurants}"
+        )
+    
+    return {
+        "coupons": issued_coupons,
+        "total_issued": len(issued_coupons),
+        "failed_restaurants": failed_restaurants,
+        "already_issued": False,
+    }
+
+
+@transaction.atomic
+def claim_final_exam_coupon(user: User, coupon_code: str):
+    """
+    쿠폰 코드를 입력받아 기말고사 특별 이벤트 쿠폰을 발급합니다.
+    
+    Args:
+        user: 쿠폰을 발급받을 사용자
+        coupon_code: 입력받은 쿠폰 코드 (WOULDULIKEEX)
+        
+    Returns:
+        발급된 쿠폰 정보
+    """
+    # 쿠폰 코드 검증
+    if coupon_code.upper() != "WOULDULIKEEX":
+        raise ValidationError("invalid coupon code")
+    
+    # 쿠폰 발급
+    result = issue_final_exam_coupons(user)
+    
+    if result["already_issued"]:
+        raise ValidationError("이미 발급받은 쿠폰입니다. 한 사람당 하나의 쿠폰 세트만 받을 수 있습니다.")
+    
+    return result
+
+
+@transaction.atomic
 def redeem_coupon(user: User, coupon_code: str, restaurant_id: int, pin: str):
     alias = router.db_for_write(Coupon)
     coupon = locked_get(Coupon.objects, using_alias=alias, code=coupon_code, user=user)
@@ -439,6 +577,68 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
 
     db_alias = router.db_for_write(Referral)
 
+    # 기말고사 이벤트 쿠폰 코드 처리
+    if ref_code.upper() == "WOULDULIKEEX":
+        # 이미 발급받은 쿠폰이 있는지 확인
+        alias = router.db_for_write(Coupon)
+        ct = CouponType.objects.using(alias).get(code="FINAL_EXAM_SPECIAL")
+        camp = Campaign.objects.using(alias).get(code="FINAL_EXAM_EVENT", active=True)
+        
+        existing_coupons = Coupon.objects.using(alias).filter(
+            user=referee,
+            coupon_type=ct,
+            campaign=camp,
+        )
+        
+        if existing_coupons.exists():
+            raise ValidationError(
+                "이미 기말고사 특별 쿠폰을 발급받았습니다.",
+                code="final_exam_already_issued",
+            )
+        
+        # 기말고사 쿠폰 발급
+        result = issue_final_exam_coupons(referee)
+        
+        if result["already_issued"]:
+            raise ValidationError(
+                "이미 기말고사 특별 쿠폰을 발급받았습니다.",
+                code="final_exam_already_issued",
+            )
+        
+        # Referral을 생성하지 않고 None 반환 (특별 처리)
+        # 하지만 API에서 Referral이 필요하므로, 가상의 Referral을 생성
+        # referrer는 자기 자신으로 설정하되, campaign_code로 구분
+        try:
+            with transaction.atomic(using=db_alias):
+                base_qs = Referral.objects.using(db_alias)
+                locked_qs = base_qs.select_for_update()
+                
+                # 이미 기말고사 이벤트 Referral이 있는지 확인
+                existing_ref = locked_qs.filter(
+                    referee=referee,
+                    campaign_code="FINAL_EXAM_EVENT",
+                ).exists()
+                if existing_ref:
+                    raise ValidationError(
+                        "이미 기말고사 특별 쿠폰을 발급받았습니다.",
+                        code="final_exam_already_issued",
+                    )
+                
+                # 특별한 Referral 생성 (referrer는 자기 자신, campaign_code로 구분)
+                return base_qs.create(
+                    referrer=referee,  # 자기 자신을 referrer로 설정 (campaign_code로 구분)
+                    referee=referee,
+                    code_used=ref_code.upper(),
+                    campaign_code="FINAL_EXAM_EVENT",
+                    status="QUALIFIED",  # 바로 QUALIFIED 상태로 설정
+                    qualified_at=timezone.now(),
+                )
+        except IntegrityError:
+            raise ValidationError(
+                "이미 기말고사 특별 쿠폰을 발급받았습니다.",
+                code="final_exam_already_issued",
+            )
+
     try:
 
         invite_code = InviteCode.objects.using(db_alias).get(code=ref_code)
@@ -480,7 +680,7 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                         code="event_referral_already_accepted",
                     )
             else:
-                # 일반 추천인 로직
+                # 일반 추천인 로직 (기말고사 이벤트 제외)
                 if locked_qs.filter(referee=referee, campaign_code__isnull=True).exists():
 
                     raise ValidationError(
@@ -549,6 +749,31 @@ def qualify_referral_and_grant(referee: User):
         
         results = []
         for ref in pending_refs:
+            # 기말고사 이벤트 쿠폰 처리
+            if ref.campaign_code == "FINAL_EXAM_EVENT":
+                # 이미 쿠폰이 발급되었는지 확인 (accept_referral에서 발급했을 수 있음)
+                coupon_alias = router.db_for_write(Coupon)
+                ct = CouponType.objects.using(coupon_alias).get(code="FINAL_EXAM_SPECIAL")
+                camp = Campaign.objects.using(coupon_alias).get(code="FINAL_EXAM_EVENT", active=True)
+                
+                existing_coupons = Coupon.objects.using(coupon_alias).filter(
+                    user=referee,
+                    coupon_type=ct,
+                    campaign=camp,
+                )
+                
+                if not existing_coupons.exists():
+                    # 쿠폰이 없으면 발급
+                    issue_final_exam_coupons(referee)
+                
+                # 이미 QUALIFIED 상태로 설정되어 있을 수 있음
+                if ref.status != "QUALIFIED":
+                    ref.status = "QUALIFIED"
+                    ref.qualified_at = timezone.now()
+                    ref.save(update_fields=["status", "qualified_at"], using=db_alias)
+                results.append(ref)
+                continue
+            
             # 운영진 계정인지 확인
             is_event_admin = _is_event_admin_user(ref.referrer)
             

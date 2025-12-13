@@ -17,6 +17,7 @@ from ..service import (
     get_all_stamp_statuses,
     get_stamp_status,
     check_and_expire_coupon,
+    claim_final_exam_coupon,
 )
 from .serializers import CouponSerializer, InviteCodeSerializer
 
@@ -137,11 +138,12 @@ class AcceptReferralView(APIView):
                 payload = {"detail": message}
             status_code = (
                 status.HTTP_409_CONFLICT
-                if getattr(exc, "code", "") == "referral_already_accepted"
+                if getattr(exc, "code", "") in ("referral_already_accepted", "final_exam_already_issued", "event_referral_already_accepted")
                 else status.HTTP_400_BAD_REQUEST
             )
             return Response(payload, status=status_code)
 
+        # 기말고사 이벤트의 경우 이미 쿠폰이 발급되었을 수 있으므로 qualify_referral_and_grant 호출
         qualify_referral_and_grant(request.user)
 
         return Response({"ok": True, "referral_id": referral.id}, status=status.HTTP_200_OK)
@@ -204,3 +206,33 @@ class MyAllStampStatusView(APIView):
     def get(self, request):
         data = get_all_stamp_statuses(request.user)
         return Response({"results": data})
+
+
+class ClaimFinalExamCouponView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        coupon_code = request.data.get("coupon_code")
+        if not coupon_code:
+            return Response({"detail": "coupon_code required"}, status=400)
+        
+        try:
+            result = claim_final_exam_coupon(request.user, coupon_code)
+            return Response({
+                "ok": True,
+                "total_issued": result["total_issued"],
+                "coupon_codes": [c.code for c in result["coupons"]],
+            }, status=201)
+        except DjangoValidationError as e:
+            msg = str(e)
+            if "invalid coupon code" in msg.lower():
+                return Response({"detail": "유효하지 않은 쿠폰 코드입니다."}, status=400)
+            if "이미 발급받은" in msg or "already" in msg.lower():
+                return Response({"detail": msg}, status=409)
+            return Response({"detail": msg}, status=400)
+        except Exception as e:
+            if request.query_params.get("_diag") == "1":
+                import traceback
+                return Response({"detail": "internal error", "error": str(e), "trace": traceback.format_exc().splitlines()[-5:]}, status=500)
+            return Response({"detail": "internal error"}, status=500)

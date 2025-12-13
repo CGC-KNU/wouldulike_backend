@@ -1,0 +1,97 @@
+쿠폰 코드 목록
+==============
+
+다음은 숫자와 문자로만 구성된 쿠폰 코드입니다.
+나중에 기능을 만들 때 이 코드들을 사용하시면 됩니다.
+
+쿠폰 코드 (20자 이하):
+-----------------------
+
+1. WLDK2024XMAS1234
+2. WOULDULIKE2024ABC
+3. ULIKE2024DECEMBER
+4. WLDK2024HOLIDAY99
+5. WOULDULIKE2024XYZ
+6. ULIKE2024WINTER88
+7. WLDK2024SPECIAL77
+8. WOULDULIKE2024NEW
+9. ULIKE2024CHRISTMAS
+10. WLDK2024YEAREND66
+
+짧은 쿠폰 코드 (12자):
+-----------------------
+
+1. WLDK2024XMAS
+2. WOULDULIKE24
+3. ULIKE2024DEC
+4. WLDK2024HOL
+5. WOULDULIKE99
+6. ULIKE2024WIN
+7. WLDK2024SPC
+8. WOULDULIKE88
+9. ULIKE2024XMS
+10. WLDK2024YED
+
+더 짧은 쿠폰 코드 (8자):
+-----------------------
+
+1. WLDK2024
+2. WOULD24
+3. ULIKE24
+4. WLDKXMAS
+5. WOULD99
+6. ULIKE88
+7. WLDK2024
+8. WOULDABC
+9. ULIKEXYZ
+10. WLDK9999
+
+랜덤 쿠폰 코드 (12자, 숫자+대문자):
+-----------------------------------
+
+1. A7B9C3D5E1F2
+2. K8L2M6N4P7Q9
+3. R5S1T3U7V9W2
+4. X4Y6Z8A1B3C5
+5. D7E9F1G3H5I7
+6. J9K1L3M5N7P9
+7. Q1R3S5T7U9V1
+8. W3X5Y7Z9A1B3
+9. C5D7E9F1G3H5
+10. I7J9K1L3M5N7
+
+랜덤 쿠폰 코드 (16자, 숫자+대문자):
+-----------------------------------
+
+1. A7B9C3D5E1F2G4H6
+2. I8J2K6L4M7N9P1Q3
+3. R5S1T3U7V9W2X4Y6
+4. Z8A1B3C5D7E9F1G3
+5. H5I7J9K1L3M5N7P9
+6. Q1R3S5T7U9V1W3X5
+7. Y7Z9A1B3C5D7E9F1
+8. G3H5I7J9K1L3M5N7
+9. P9Q1R3S5T7U9V1W3
+10. X5Y7Z9A1B3C5D7E9
+
+사용 예시:
+----------
+
+이 쿠폰 코드들은 나중에 다음과 같이 사용할 수 있습니다:
+
+1. CouponType.code로 사용
+2. Campaign.code로 사용  
+3. 또는 특별 이벤트용 쿠폰 코드로 사용
+
+예: CouponType 생성 시
+- code: "WLDK2024XMAS1234"
+- title: "크리스마스 특별 쿠폰"
+- benefit_json: {"type": "fixed", "value": 3000}
+
+또는 Campaign 생성 시
+- code: "WOULDULIKE2024ABC"
+- name: "연말 특별 이벤트"
+- type: "FLASH"
+
+
+

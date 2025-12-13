@@ -33,11 +33,17 @@ class Command(BaseCommand):
             action='store_true',
             help='실제로 알림을 전송합니다 (주의: --dry-run과 함께 사용 불가)',
         )
+        parser.add_argument(
+            '--cleanup',
+            action='store_true',
+            help='실패한 토큰(UNREGISTERED, SENDER_ID_MISMATCH 등)을 DB에서 자동으로 정리합니다',
+        )
 
     def handle(self, *args, **options):
         message = options['message']
         test_token = options.get('token')
         send_actual = options.get('send', False)
+        cleanup = options.get('cleanup', False)
         # --send가 명시되지 않으면 항상 드라이런 모드
         dry_run = not send_actual
 
@@ -114,7 +120,7 @@ class Command(BaseCommand):
             self._print_dry_run_results(result)
         else:
             # 실제 전송 결과 출력
-            self._print_send_results(result)
+            self._print_send_results(result, cleanup=cleanup)
 
     def _print_dry_run_results(self, result):
         """드라이런 모드 결과 출력"""
@@ -245,7 +251,7 @@ class Command(BaseCommand):
         
         self.stdout.write("=" * 80 + "\n")
 
-    def _print_send_results(self, result):
+    def _print_send_results(self, result, cleanup=False):
         """실제 전송 결과 출력"""
         if result is None:
             self.stdout.write(
@@ -266,6 +272,37 @@ class Command(BaseCommand):
                 self.style.ERROR(f"   ❌ 실패: {failure_count}개")
             )
 
+        # 실패한 토큰 분석
+        unregistered_tokens = []
+        sender_id_mismatch_tokens = []
+        bad_environment_tokens = []
+        other_failed_tokens = []
+        
+        for failed in failed_tokens:
+            token = failed.get("token")
+            response = failed.get("response", {})
+            if isinstance(response, dict):
+                error = response.get("error", {})
+                if isinstance(error, dict):
+                    error_code = None
+                    apns_error = None
+                    for detail in error.get("details", []):
+                        if detail.get("@type") == "type.googleapis.com/google.firebase.fcm.v1.FcmError":
+                            error_code = detail.get("errorCode")
+                        elif detail.get("@type") == "type.googleapis.com/google.firebase.fcm.v1.ApnsError":
+                            apns_error = detail.get("reason")
+                    
+                    if error_code == "UNREGISTERED":
+                        unregistered_tokens.append(token)
+                    elif error_code == "SENDER_ID_MISMATCH":
+                        sender_id_mismatch_tokens.append(token)
+                    elif apns_error == "BadEnvironmentKeyInToken":
+                        bad_environment_tokens.append(token)
+                    else:
+                        other_failed_tokens.append(failed)
+            else:
+                other_failed_tokens.append(failed)
+
         # 실패한 토큰 상세 (최대 10개)
         if failed_tokens:
             self.stdout.write("\n❌ 실패한 토큰 상세:")
@@ -284,26 +321,62 @@ class Command(BaseCommand):
             if len(failed_tokens) > 10:
                 self.stdout.write(f"   ... 외 {len(failed_tokens) - 10}개")
 
-        # 무효한 토큰 정리 안내
-        unregistered_tokens = []
-        for failed in failed_tokens:
-            response = failed.get("response", {})
-            if isinstance(response, dict):
-                error = response.get("error", {})
-                if isinstance(error, dict):
-                    for detail in error.get("details", []):
-                        if detail.get("@type") == "type.googleapis.com/google.firebase.fcm.v1.FcmError":
-                            if detail.get("errorCode") == "UNREGISTERED":
-                                unregistered_tokens.append(failed.get("token"))
-                                break
-
-        if unregistered_tokens:
-            self.stdout.write(
-                self.style.WARNING(
-                    f"\n⚠️  {len(unregistered_tokens)}개의 등록되지 않은 토큰이 발견되었습니다. "
-                    "이 토큰들은 DB에서 제거하는 것을 권장합니다."
+        # 오류 유형별 통계
+        if unregistered_tokens or sender_id_mismatch_tokens or bad_environment_tokens:
+            self.stdout.write("\n📊 오류 유형별 통계:")
+            if unregistered_tokens:
+                self.stdout.write(
+                    self.style.WARNING(f"   • UNREGISTERED (등록되지 않은 토큰): {len(unregistered_tokens)}개")
                 )
-            )
+            if sender_id_mismatch_tokens:
+                self.stdout.write(
+                    self.style.WARNING(f"   • SENDER_ID_MISMATCH (Firebase 프로젝트 불일치): {len(sender_id_mismatch_tokens)}개")
+                )
+            if bad_environment_tokens:
+                self.stdout.write(
+                    self.style.WARNING(f"   • BadEnvironmentKeyInToken (APNs 환경 불일치): {len(bad_environment_tokens)}개")
+                )
+
+        # 토큰 정리
+        tokens_to_cleanup = []
+        if cleanup:
+            # UNREGISTERED 토큰은 확실히 무효하므로 정리
+            tokens_to_cleanup.extend(unregistered_tokens)
+            
+            # SENDER_ID_MISMATCH 토큰도 정리 (다른 Firebase 프로젝트의 토큰)
+            tokens_to_cleanup.extend(sender_id_mismatch_tokens)
+            
+            if tokens_to_cleanup:
+                self.stdout.write(f"\n🧹 무효한 토큰 정리 중... ({len(tokens_to_cleanup)}개)")
+                guest_removed = GuestUser.objects.filter(fcm_token__in=tokens_to_cleanup).update(fcm_token="")
+                user_removed = User.objects.filter(fcm_token__in=tokens_to_cleanup).update(fcm_token="")
+                
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"✅ 정리 완료: {len(tokens_to_cleanup)}개 토큰 제거 "
+                        f"(GuestUser: {guest_removed}개, User: {user_removed}개)"
+                    )
+                )
+            else:
+                self.stdout.write("\n💡 정리할 무효한 토큰이 없습니다.")
+        else:
+            # 정리 안내
+            if unregistered_tokens or sender_id_mismatch_tokens:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"\n⚠️  무효한 토큰 {len(unregistered_tokens) + len(sender_id_mismatch_tokens)}개가 발견되었습니다. "
+                        "이 토큰들을 DB에서 제거하려면 --cleanup 옵션을 사용하세요:"
+                    )
+                )
+                self.stdout.write("   python manage.py test_notification --send --cleanup")
+            
+            if bad_environment_tokens:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"\n⚠️  APNs 환경 불일치 토큰 {len(bad_environment_tokens)}개가 발견되었습니다. "
+                        "이 토큰들은 iOS 앱의 APNs 인증 키 환경 설정 문제일 수 있습니다."
+                    )
+                )
 
         self.stdout.write("\n" + "=" * 80)
         if success_count > 0:
