@@ -30,6 +30,9 @@ class CouponSerializer(serializers.ModelSerializer):
     def get_benefit(self, obj: Coupon):
         snapshot = obj.benefit_snapshot or {}
         if snapshot:
+            # benefit_snapshot에 coupon_type_title이 있으면 사용 (기말고사 쿠폰의 경우)
+            if "coupon_type_title" in snapshot:
+                return snapshot
             return snapshot
 
         fallback = {

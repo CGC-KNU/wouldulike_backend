@@ -89,6 +89,8 @@ def _build_benefit_snapshot(
                 "title": benefit.title,
                 "subtitle": benefit.subtitle,
                 "benefit": benefit.benefit_json or coupon_type.benefit_json,
+                # coupon_type_title은 항상 CouponType의 title을 사용 (식당별 쿠폰 내용과 무관하게)
+                "coupon_type_title": coupon_type.title,
             }
         )
         try:
