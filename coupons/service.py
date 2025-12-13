@@ -578,6 +578,12 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
 
     db_alias = router.db_for_write(Referral)
 
+    # 차단된 쿠폰 코드 목록
+    BLOCKED_CODES = {"01KBWVFS", "01KBWVFSSNEE"}
+    
+    if ref_code.upper() in BLOCKED_CODES:
+        raise ValidationError("invalid referral code")
+    
     # 기말고사 이벤트 쿠폰 코드 처리
     if ref_code.upper() == "WOULDULIKEEX":
         # 이미 발급받은 쿠폰이 있는지 확인
@@ -615,15 +621,27 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                 locked_qs = base_qs.select_for_update()
                 
                 # 이미 기말고사 이벤트 Referral이 있는지 확인
-                existing_ref = locked_qs.filter(
+                existing_refs = locked_qs.filter(
                     referee=referee,
                     campaign_code="FINAL_EXAM_EVENT",
-                ).exists()
-                if existing_ref:
-                    raise ValidationError(
-                        "이미 기말고사 특별 쿠폰을 발급받았습니다.",
-                        code="final_exam_already_issued",
+                )
+                if existing_refs.exists():
+                    # 쿠폰이 삭제되었는지 확인 (쿠폰이 없으면 Referral도 삭제하고 재입력 허용)
+                    existing_ref = existing_refs.first()
+                    existing_coupons = Coupon.objects.using(alias).filter(
+                        user=referee,
+                        coupon_type=ct,
+                        campaign=camp,
                     )
+                    
+                    # 쿠폰이 없으면 Referral을 삭제하고 재입력 허용
+                    if not existing_coupons.exists():
+                        existing_ref.delete()
+                    else:
+                        raise ValidationError(
+                            "이미 기말고사 특별 쿠폰을 발급받았습니다.",
+                            code="final_exam_already_issued",
+                        )
                 
                 # 특별한 Referral 생성 (referrer는 자기 자신, campaign_code로 구분)
                 return base_qs.create(
@@ -671,26 +689,69 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
             if is_event_admin and campaign_code:
                 # 운영진 계정의 이벤트 추천코드인 경우
                 # 같은 이벤트 Campaign의 추천코드를 이미 입력했는지 확인
-                existing_event_ref = locked_qs.filter(
+                existing_event_refs = locked_qs.filter(
                     referee=referee,
                     campaign_code=campaign_code,
-                ).exists()
-                if existing_event_ref:
-                    raise ValidationError(
-                        "이미 해당 이벤트 추천코드를 입력했습니다.",
-                        code="event_referral_already_accepted",
-                    )
+                )
+                if existing_event_refs.exists():
+                    # 쿠폰이 삭제되었는지 확인 (쿠폰이 없으면 Referral도 삭제하고 재입력 허용)
+                    existing_ref = existing_event_refs.first()
+                    coupon_alias = router.db_for_write(Coupon)
+                    
+                    # 해당 이벤트와 관련된 쿠폰 타입 확인
+                    if campaign_code == "EVENT_REWARD_SIGNUP":
+                        coupon_type_code = "WELCOME_3000"
+                    elif campaign_code == "EVENT_REWARD_REFERRAL":
+                        coupon_type_code = "REFERRAL_BONUS_REFEREE"
+                    else:
+                        coupon_type_code = None
+                    
+                    if coupon_type_code:
+                        try:
+                            ct = CouponType.objects.using(coupon_alias).get(code=coupon_type_code)
+                            camp = Campaign.objects.using(coupon_alias).get(code=campaign_code, active=True)
+                            related_coupons = Coupon.objects.using(coupon_alias).filter(
+                                user=referee,
+                                coupon_type=ct,
+                                campaign=camp,
+                            )
+                            
+                            # 쿠폰이 없으면 Referral을 삭제하고 재입력 허용
+                            if not related_coupons.exists():
+                                existing_ref.delete()
+                            else:
+                                raise ValidationError(
+                                    "이미 해당 이벤트 추천코드를 입력했습니다.",
+                                    code="event_referral_already_accepted",
+                                )
+                        except (CouponType.DoesNotExist, Campaign.DoesNotExist):
+                            # 쿠폰 타입이나 캠페인을 찾을 수 없으면 Referral 삭제
+                            existing_ref.delete()
+                    else:
+                        # 쿠폰 타입을 알 수 없으면 Referral 삭제
+                        existing_ref.delete()
             else:
                 # 일반 추천인 로직 (기말고사 이벤트 제외)
-                if locked_qs.filter(referee=referee, campaign_code__isnull=True).exists():
-
-                    raise ValidationError(
-
-                        "이미 추천을 수락했습니다.",
-
-                        code="referral_already_accepted",
-
+                existing_refs = locked_qs.filter(referee=referee, campaign_code__isnull=True)
+                if existing_refs.exists():
+                    # 쿠폰이 삭제되었는지 확인 (쿠폰이 없으면 Referral도 삭제하고 재입력 허용)
+                    coupon_alias = router.db_for_write(Coupon)
+                    existing_ref = existing_refs.first()
+                    
+                    # 해당 Referral과 관련된 쿠폰이 있는지 확인
+                    related_coupons = Coupon.objects.using(coupon_alias).filter(
+                        user=referee,
+                        coupon_type__code__in=["REFERRAL_BONUS_REFEREE", "REFERRAL_BONUS_REFERRER"],
                     )
+                    
+                    # 쿠폰이 없으면 Referral을 삭제하고 재입력 허용
+                    if not related_coupons.exists():
+                        existing_ref.delete()
+                    else:
+                        raise ValidationError(
+                            "이미 추천을 수락했습니다.",
+                            code="referral_already_accepted",
+                        )
 
                 # 운영진 계정은 제한 없음
                 if not is_event_admin:

@@ -143,8 +143,11 @@ class AcceptReferralView(APIView):
             )
             return Response(payload, status=status_code)
 
-        # 기말고사 이벤트의 경우 이미 쿠폰이 발급되었을 수 있으므로 qualify_referral_and_grant 호출
-        qualify_referral_and_grant(request.user)
+        # 기말고사 이벤트의 경우 이미 쿠폰이 발급되었고 Referral이 QUALIFIED 상태이므로
+        # qualify_referral_and_grant를 호출하지 않음 (호출해도 처리할 것이 없음)
+        # 일반 추천인 코드의 경우에만 qualify_referral_and_grant 호출
+        if referral.campaign_code != "FINAL_EXAM_EVENT":
+            qualify_referral_and_grant(request.user)
 
         return Response({"ok": True, "referral_id": referral.id}, status=status.HTTP_200_OK)
 
