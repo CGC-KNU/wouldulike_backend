@@ -20,14 +20,17 @@ def copy_referral_benefits_to_final_exam(apps, schema_editor):
     )
     
     # 각 식당별 쿠폰 내용을 FINAL_EXAM_SPECIAL로 복사
+    # title은 REFERRAL_BONUS_REFEREE의 title을 그대로 사용 (쿠폰 보상 내역)
+    # subtitle은 "기말고사 쪽지 이벤트"로 설정
+    # benefit_json은 REFERRAL_BONUS_REFEREE와 동일하게 유지
     copied_count = 0
     for benefit in referral_benefits:
         RestaurantCouponBenefit.objects.update_or_create(
             coupon_type=final_exam_type,
             restaurant_id=benefit.restaurant_id,
             defaults={
-                "title": benefit.title,
-                "subtitle": benefit.subtitle,
+                "title": benefit.title,  # 쿠폰 보상 내역 (REFERRAL_BONUS_REFEREE와 동일)
+                "subtitle": "기말고사 쪽지 이벤트",  # 이벤트 이름
                 "benefit_json": benefit.benefit_json,
                 "active": benefit.active,
             },

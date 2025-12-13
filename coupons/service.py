@@ -296,6 +296,8 @@ def issue_ambassador_coupons(user: User):
             
             # 쿠폰 생성
             benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, db_alias=alias)
+            # 엠버서더 쿠폰의 subtitle을 '엠버서더 특별 쿠폰'으로 설정
+            benefit_snapshot["subtitle"] = "엠버서더 특별 쿠폰"
             coupon = Coupon.objects.using(alias).create(
                 code=make_coupon_code(),
                 user=user,
