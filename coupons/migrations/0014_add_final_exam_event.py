@@ -10,7 +10,7 @@ def add_final_exam_event(apps, schema_editor):
     CouponType.objects.update_or_create(
         code="FINAL_EXAM_SPECIAL",
         defaults={
-            "title": "기말고사 특별 발급 쿠폰",
+            "title": "기말고사 쪽지 이벤트",
             "valid_days": 0,
             "per_user_limit": 1,
             "benefit_json": {"type": "fixed", "value": 3000},

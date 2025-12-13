@@ -52,6 +52,7 @@ COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
     "WELCOME_3000": {30},
     "REFERRAL_BONUS_REFERRER": {30},
     "REFERRAL_BONUS_REFEREE": {30},
+    "FINAL_EXAM_SPECIAL": {30},  # 고니식탁 제외
 }
 
 
