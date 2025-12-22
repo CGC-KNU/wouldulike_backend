@@ -9,6 +9,20 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _normalize_restaurant_name(name):
+    """
+    식당 이름에 양쪽에만 붙어 있는 따옴표("Better" / 'Better')를 제거한다.
+    내부의 따옴표나 기타 문자는 그대로 둔다.
+    """
+    if not isinstance(name, str) or len(name) < 2:
+        return name
+
+    first, last = name[0], name[-1]
+    if first == last and first in ('"', "'"):
+        return name[1:-1]
+    return name
+
+
 def _serialize_affiliate_restaurant(row):
     """Convert a raw row from restaurants_affiliate into a JSON-serializable dict."""
     (
@@ -25,7 +39,7 @@ def _serialize_affiliate_restaurant(row):
 
     return {
         'restaurant_id': restaurant_id,
-        'name': name,
+        'name': _normalize_restaurant_name(name),
         'description': description,
         'address': address,
         'category': category,
@@ -114,18 +128,22 @@ def get_random_restaurants(request):
 
         logger.info(f"Final unique selections: {len(unique_by_name)}")
 
-        return JsonResponse({
-            'random_restaurants': [
-                {
-                    'name': r[0],
-                    'road_address': r[1],
-                    'category_1': r[2],
-                    'category_2': r[3],
-                    'x': r[4],
-                    'y': r[5]
-                } for r in unique_by_name.values()
-            ]
-        }, status=200)
+        return JsonResponse(
+            {
+                'random_restaurants': [
+                    {
+                        'name': _normalize_restaurant_name(r[0]),
+                        'road_address': r[1],
+                        'category_1': r[2],
+                        'category_2': r[3],
+                        'x': r[4],
+                        'y': r[5],
+                    }
+                    for r in unique_by_name.values()
+                ]
+            },
+            status=200,
+        )
 
     except json.JSONDecodeError:
         return JsonResponse({'error_code': 'INVALID_JSON', 'message': 'Request body must be valid JSON'}, status=400)
@@ -188,19 +206,22 @@ def get_nearby_restaurants(request):
         random.shuffle(filtered)
         selected = filtered[:15]
 
-        return JsonResponse({
-            'restaurants': [
-                {
-                    'name': r[0],
-                    'road_address': r[1],
-                    'category_1': r[2],
-                    'category_2': r[3],
-                    'x': r[4],
-                    'y': r[5],
-                }
-                for r in selected
-            ]
-        }, status=200)
+        return JsonResponse(
+            {
+                'restaurants': [
+                    {
+                        'name': _normalize_restaurant_name(r[0]),
+                        'road_address': r[1],
+                        'category_1': r[2],
+                        'category_2': r[3],
+                        'x': r[4],
+                        'y': r[5],
+                    }
+                    for r in selected
+                ]
+            },
+            status=200,
+        )
 
     except json.JSONDecodeError:
         return JsonResponse({'error_code': 'INVALID_JSON', 'message': 'Request body must be valid JSON'}, status=400)
@@ -296,6 +317,10 @@ def get_affiliate_restaurant_detail(request):
             )
 
         restaurant = dict(zip(columns, rows[0]))
+
+        # 이름 양옆에만 붙은 따옴표 제거
+        if 'name' in restaurant:
+            restaurant['name'] = _normalize_restaurant_name(restaurant['name'])
 
         if 's3_image_urls' in restaurant and restaurant['s3_image_urls'] is None:
             restaurant['s3_image_urls'] = []
