@@ -126,32 +126,7 @@ def _select_restaurant_for_coupon(ct: CouponType, *, db_alias: str | None = None
 
     excluded_ids = COUPON_TYPE_EXCLUDED_RESTAURANTS.get(ct.code, set())
 
-    # --- 참여 식당 필터링 ---
-    # 신규가입 / 친구초대 쿠폰(WELCOME_3000, REFERRAL_*)의 경우:
-    # - 아직 어떤 RestaurantCouponBenefit 도 없는 식당(레거시 식당)은 기존처럼 전체 대상
-    # - 하나라도 RestaurantCouponBenefit 이 설정된 "관리 대상" 식당은,
-    #   해당 coupon_type 에 대한 RestaurantCouponBenefit 이 없으면 이 쿠폰의 랜덤 대상에서 제외
-    participating_ids = set(restaurant_ids)
-    if ct.code in {"WELCOME_3000", "REFERRAL_BONUS_REFERRER", "REFERRAL_BONUS_REFEREE"}:
-        benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
-
-        managed_ids = set(
-            RestaurantCouponBenefit.objects.using(benefit_alias).values_list(
-                "restaurant_id", flat=True
-            )
-        )
-        configured_ids = set(
-            RestaurantCouponBenefit.objects.using(benefit_alias)
-            .filter(coupon_type=ct, active=True)
-            .values_list("restaurant_id", flat=True)
-        )
-
-        if managed_ids:
-            # 관리 대상 식당 중에서는 해당 coupon_type 이 설정된 곳만 남기고,
-            # 아직 어떤 설정도 없는 식당은 기존 동작과 동일하게 전체 대상에 포함
-            participating_ids = (participating_ids - managed_ids) | configured_ids
-
-    counts: dict[int, int] = {}
+    counts = {}
     qs = (
         Coupon.objects.using(alias)
         .filter(coupon_type=ct)
@@ -166,11 +141,9 @@ def _select_restaurant_for_coupon(ct: CouponType, *, db_alias: str | None = None
         counts[rid] = row["cnt"]
 
     random.shuffle(restaurant_ids)
-    min_count: int | None = None
+    min_count = None
     candidates: list[int] = []
     for rid in restaurant_ids:
-        if rid not in participating_ids:
-            continue
         if rid in excluded_ids:
             continue
         assigned = counts.get(rid, 0)

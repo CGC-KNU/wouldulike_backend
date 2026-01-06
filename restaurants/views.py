@@ -248,10 +248,12 @@ def get_affiliate_restaurants(request):
                     url,
                     s3_image_urls
                 FROM restaurants_affiliate
-                ORDER BY name
                 """
             )
             rows = cursor.fetchall()
+
+        # 제휴식당 목록을 무작위로 섞어서 반환
+        random.shuffle(rows)
 
         restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
 
