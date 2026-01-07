@@ -72,6 +72,158 @@ class Command(BaseCommand):
         except ValueError:
             raise CommandError(f"날짜 형식이 올바르지 않습니다: {date_str} (YYYY-MM-DD 형식 사용)")
 
+    def _format_rate(self, issued: int, redeemed: int) -> str:
+        """발급/사용 건수로 사용률 문자열 생성"""
+        if issued <= 0:
+            return "0.0%"
+        return f"{(redeemed / issued * 100):.1f}%"
+
+    def _print_detailed_restaurant_report(self, coupon_qs, start_date, end_date, *, restaurant_id=None):
+        """
+        예시에 나왔던 포맷:
+
+        - 기간별 식당별 쿠폰 타입별 발급량 및 사용량 통계
+        - 식당별로 신규가입 / 친구초대 / 스탬프 5개 / 스탬프 10개
+        - 이벤트별(캠페인별) 발급/사용 현황
+        """
+        # 구분선 길이는 운영에서 보기 좋게 고정 길이로 사용
+        bar = "===================================="
+        sep = "--------------------------------------------"
+
+        # 헤더
+        self.stdout.write(bar)
+        self.stdout.write("")
+        self.stdout.write(
+            f"기간별 식당별 쿠폰 타입별 발급량 및 사용량 통계 "
+            f"({start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')})"
+        )
+        self.stdout.write("")
+        self.stdout.write(bar)
+        self.stdout.write("")
+
+        self.stdout.write(
+            f"📅 기간: {start_date.strftime('%m.%d')} ~ {end_date.strftime('%m.%d')}"
+        )
+        self.stdout.write(sep)
+        self.stdout.write("")
+
+        # 대상 식당 목록 조회
+        restaurant_alias = router.db_for_read(AffiliateRestaurant)
+        restaurant_qs = AffiliateRestaurant.objects.using(restaurant_alias)
+        if restaurant_id:
+            restaurant_qs = restaurant_qs.filter(restaurant_id=restaurant_id)
+
+        restaurants = list(
+            restaurant_qs.values("restaurant_id", "name").order_by("restaurant_id")
+        )
+
+        if not restaurants:
+            self.stdout.write("조회할 제휴 식당이 없습니다.")
+            self.stdout.write("")
+            self.stdout.write(bar)
+            return
+
+        for idx, r in enumerate(restaurants, 1):
+            rid = r["restaurant_id"]
+            name = r["name"] or "N/A"
+
+            restaurant_coupons = coupon_qs.filter(restaurant_id=rid)
+
+            # 해당 기간에 발급/사용된 쿠폰이 전혀 없는 경우: 아예 출력하지 않음
+            if not restaurant_coupons.exists():
+                continue
+
+            # --- 기본 타입별 집계 ---
+            # 신규가입 (WELCOME_3000)
+            signup_qs = restaurant_coupons.filter(
+                coupon_type__code="WELCOME_3000"
+            )
+            signup_issued = signup_qs.count()
+            signup_used = signup_qs.filter(status="REDEEMED").count()
+
+            # 친구초대 (REFERRAL_BONUS_REFERRER / REFERRAL_BONUS_REFEREE)
+            referral_qs = restaurant_coupons.filter(
+                coupon_type__code__in=[
+                    "REFERRAL_BONUS_REFERRER",
+                    "REFERRAL_BONUS_REFEREE",
+                ]
+            )
+            referral_issued = referral_qs.count()
+            referral_used = referral_qs.filter(status="REDEEMED").count()
+
+            # 스탬프 5개 (STAMP_REWARD_5)
+            stamp5_qs = restaurant_coupons.filter(
+                coupon_type__code="STAMP_REWARD_5"
+            )
+            stamp5_issued = stamp5_qs.count()
+            stamp5_used = stamp5_qs.filter(status="REDEEMED").count()
+
+            # 스탬프 10개 (STAMP_REWARD_10)
+            stamp10_qs = restaurant_coupons.filter(
+                coupon_type__code="STAMP_REWARD_10"
+            )
+            stamp10_issued = stamp10_qs.count()
+            stamp10_used = stamp10_qs.filter(status="REDEEMED").count()
+
+            self.stdout.write(f"🍽️  식당 ID {rid}: {name}")
+            self.stdout.write(sep)
+            # 발급/사용 내역이 있는 타입만 출력
+            if signup_issued > 0 or signup_used > 0:
+                self.stdout.write(
+                    f"  신규가입: 발급 {signup_issued}개 / 사용 {signup_used}개 "
+                    f"({self._format_rate(signup_issued, signup_used)})"
+                )
+            if referral_issued > 0 or referral_used > 0:
+                self.stdout.write(
+                    f"  친구초대: 발급 {referral_issued}개 / 사용 {referral_used}개 "
+                    f"({self._format_rate(referral_issued, referral_used)})"
+                )
+            if stamp5_issued > 0 or stamp5_used > 0:
+                self.stdout.write(
+                    f"  스탬프 5개: 발급 {stamp5_issued}개 / 사용 {stamp5_used}개 "
+                    f"({self._format_rate(stamp5_issued, stamp5_used)})"
+                )
+            if stamp10_issued > 0 or stamp10_used > 0:
+                self.stdout.write(
+                    f"  스탬프 10개: 발급 {stamp10_issued}개 / 사용 {stamp10_used}개 "
+                    f"({self._format_rate(stamp10_issued, stamp10_used)})"
+                )
+
+            # --- 이벤트별(캠페인별) 집계 ---
+            # 기본 신규가입/친구초대 캠페인(SIGNUP_WELCOME, REFERRAL)은 제외하고,
+            # 기말고사/이벤트 리워드 등 추가 이벤트만 집계
+            event_qs = (
+                restaurant_coupons.exclude(campaign__isnull=True)
+                .exclude(campaign__code__in=["SIGNUP_WELCOME", "REFERRAL"])
+            )
+            event_stats = (
+                event_qs.values("campaign__code", "campaign__name")
+                .annotate(
+                    issued=Count("id"),
+                    used=Count("id", filter=Q(status="REDEEMED")),
+                )
+                .order_by("campaign__code")
+            )
+
+            if event_stats:
+                self.stdout.write("")
+                self.stdout.write("  이벤트별:")
+                for item in event_stats:
+                    camp_code = item["campaign__code"] or "N/A"
+                    camp_name = item["campaign__name"] or "N/A"
+                    issued = item["issued"]
+                    used = item["used"]
+                    rate = self._format_rate(issued, used)
+                    self.stdout.write(
+                        f"    - {camp_name} ({camp_code}): "
+                        f"발급 {issued}개 / 사용 {used}개 ({rate})"
+                    )
+
+            self.stdout.write("")
+
+        self.stdout.write(bar)
+        self.stdout.write("")
+
     def handle(self, *args, **options):
         alias = router.db_for_read(Coupon)
         
@@ -123,7 +275,19 @@ class Command(BaseCommand):
         
         # 전체 통계
         total_count = coupon_qs.count()
-        
+
+        # 예전 리포트 스타일(기간별 식당별 쿠폰 타입별 발급/사용 통계) 포맷
+        # - by_restaurant 옵션이 지정되면 이 포맷으로 출력
+        if options.get("by_restaurant"):
+            if total_count == 0:
+                self.stdout.write("해당 기간에 발급된 쿠폰이 없습니다.")
+                return
+
+            self._print_detailed_restaurant_report(
+                coupon_qs, start_date, end_date, restaurant_id=restaurant_id
+            )
+            return
+
         self.stdout.write(self.style.SUCCESS("\n=== 쿠폰 발급 내역 ===\n"))
         if start_date == end_date:
             self.stdout.write(f"조회 날짜: {start_date.strftime('%Y년 %m월 %d일')}")

@@ -1,6 +1,16 @@
+# Python
 *.pyc
 __pycache__/
-db.sqlite3
 venv/
+
+# Environment & Secrets
 .env
 secrets.json
+
+# Database
+db.sqlite3
+local.sqlite3
+
+# Django
+media/
+staticfiles/

@@ -6,6 +6,7 @@ from guests.models import GuestUser
 from notifications.models import Notification
 from notifications.utils import send_notification
 
+
 User = get_user_model()
 
 
@@ -14,9 +15,14 @@ class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
-            '--dry-run',
-            action='store_true',
-            help='드라이런 모드: 실제 전송 없이 검증만 수행',
+            "kakao_ids",
+            nargs="*",
+            help="특정 카카오 ID들만 대상으로 전송 (지정하지 않으면 전체 대상)",
+        )
+        parser.add_argument(
+            "--dry-run",
+            action="store_true",
+            help="드라이런 모드: 실제 전송 없이 검증만 수행",
         )
         parser.add_argument(
             '--notification-id',
@@ -27,14 +33,32 @@ class Command(BaseCommand):
             '--kakao-id',
             type=int,
             nargs='*',  # 0개 이상 허용
-            help='알림을 보낼 사용자의 카카오 ID (여러 개 입력 가능)',
+            help='알림을 보낼 사용자의 카카오 ID (여러 개 입력 가능, 위치 인자 kakao_ids와 동일한 기능)',
         )
 
     def handle(self, *args, **options):
-        dry_run = options.get('dry_run', False)
+        dry_run = options.get("dry_run", False)
         notification_id = options.get('notification_id')
-        kakao_ids = options.get('kakao_id')
         
+        # 위치 인자 kakao_ids와 옵션 --kakao-id 모두 처리
+        raw_kakao_ids = options.get("kakao_ids") or []
+        kakao_id_option = options.get("kakao_id") or []
+        
+        # 두 소스를 합쳐서 filter_kakao_ids 생성
+        all_raw_kakao_ids = list(raw_kakao_ids) + list(kakao_id_option)
+        
+        filter_kakao_ids = None
+        if all_raw_kakao_ids:
+            filter_kakao_ids = []
+            for raw in all_raw_kakao_ids:
+                try:
+                    filter_kakao_ids.append(int(raw))
+                except ValueError:
+                    self.stderr.write(
+                        self.style.ERROR(f"유효하지 않은 카카오 ID 값입니다: {raw}")
+                    )
+                    return
+
         now = timezone.now()
         notifications = Notification.objects.filter(
             scheduled_time__lte=now,
@@ -44,94 +68,11 @@ class Command(BaseCommand):
         # 특정 알림 ID로 필터링
         if notification_id:
             notifications = notifications.filter(id=notification_id)
-        
-        self.stdout.write(f"Found {notifications.count()} notification(s) to send")
-        
-        # 특정 카카오 ID로 필터링된 토큰 수집
-        if kakao_ids:
-            self.stdout.write(f"\n특정 카카오 ID 사용자 {len(kakao_ids)}명에게만 전송합니다.")
-            
-            users = User.objects.filter(kakao_id__in=kakao_ids)
-            found_users = users.count()
-            
-            if found_users == 0:
-                self.stdout.write(
-                    self.style.ERROR("❌ 지정된 카카오 ID에 해당하는 사용자를 찾을 수 없습니다.")
-                )
-                return
-            
-            self.stdout.write(f"\n✅ 사용자 조회 성공: {found_users}명")
-            
-            # User의 FCM 토큰 수집
-            user_tokens = list(
-                users.exclude(fcm_token__isnull=True)
-                .exclude(fcm_token="")
-                .values_list("fcm_token", flat=True)
-            )
-            
-            # 연결된 GuestUser의 FCM 토큰 수집
-            guest_tokens = list(
-                GuestUser.objects.filter(linked_user__in=users)
-                .exclude(fcm_token__isnull=True)
-                .exclude(fcm_token="")
-                .values_list("fcm_token", flat=True)
-            )
-            
-            total_tokens = len(user_tokens) + len(guest_tokens)
-            self.stdout.write(f"📱 FCM 토큰 보유: {total_tokens}개 (User + 연결된 GuestUser)")
-            
-            # 토큰이 없는 사용자 확인
-            users_without_tokens = []
-            for user in users:
-                user_token = user.fcm_token if user.fcm_token else None
-                guest_tokens_for_user = list(
-                    GuestUser.objects.filter(linked_user=user)
-                    .exclude(fcm_token__isnull=True)
-                    .exclude(fcm_token="")
-                    .values_list("fcm_token", flat=True)
-                )
-                if not user_token and not guest_tokens_for_user:
-                    users_without_tokens.append(user.kakao_id)
-            
-            if users_without_tokens:
-                self.stdout.write(f"\n⚠️  조회 실패 또는 토큰 없음: {len(users_without_tokens)}명")
-                for kakao_id in users_without_tokens:
-                    self.stdout.write(f"   - 카카오 ID {kakao_id}: User와 연결된 GuestUser 모두 FCM 토큰이 없습니다.")
-            
-            # 중복 제거
-            tokens = list(set(user_tokens + guest_tokens))
-        else:
-            # 모든 사용자에게 전송 (기존 로직)
-            # GuestUser와 User 모두에서 FCM 토큰 수집
-            guest_tokens = list(
-                GuestUser.objects.exclude(fcm_token__isnull=True)
-                .exclude(fcm_token="")
-                .values_list("fcm_token", flat=True)
-            )
-            
-            user_tokens = list(
-                User.objects.exclude(fcm_token__isnull=True)
-                .exclude(fcm_token="")
-                .values_list("fcm_token", flat=True)
-            )
-            
-            self.stdout.write(f"Found {len(guest_tokens)} guest tokens and {len(user_tokens)} user tokens")
-            
-            # 중복 제거 (같은 토큰이 여러 사용자에게 있을 수 있음)
-            tokens = list(set(guest_tokens + user_tokens))
-        
-        self.stdout.write(f"Total unique tokens: {len(tokens)}")
 
-        if not tokens:
-            self.stdout.write(
-                self.style.WARNING("No valid FCM tokens found; skipping send.")
-            )
-            return
-        
+        self.stdout.write(f"Found {notifications.count()} notification(s) to send")
+
         if not notifications.exists():
-            self.stdout.write(
-                self.style.WARNING("No notifications to send.")
-            )
+            self.stdout.write(self.style.WARNING("No notifications to send."))
             return
 
         if dry_run:
@@ -144,11 +85,115 @@ class Command(BaseCommand):
         sent_count = 0
         failure_count = 0
         partial_count = 0
+
         for notification in notifications:
-            if dry_run:
-                self.stdout.write(f"\n[DRY-RUN] Validating notification {notification.id}: {notification.content[:50]}...")
+            # 대상 토큰 계산: target_kakao_ids 가 있으면 해당 사용자만, 없으면 전체
+            if notification.target_kakao_ids:
+                target_ids = notification.target_kakao_ids or []
+                ids = target_ids
+                if filter_kakao_ids is not None:
+                    # 예약된 대상과, 커맨드로 지정된 대상의 교집합만 사용
+                    ids = [kid for kid in target_ids if kid in filter_kakao_ids]
+
+                users = User.objects.filter(kakao_id__in=ids)
+                
+                # User의 FCM 토큰 수집
+                user_tokens = list(
+                    users.exclude(fcm_token__isnull=True)
+                    .exclude(fcm_token="")
+                    .values_list("fcm_token", flat=True)
+                )
+                
+                # 연결된 GuestUser의 FCM 토큰 수집
+                guest_tokens = list(
+                    GuestUser.objects.filter(linked_user__in=users)
+                    .exclude(fcm_token__isnull=True)
+                    .exclude(fcm_token="")
+                    .values_list("fcm_token", flat=True)
+                )
+                
+                # 중복 제거
+                tokens = list(set(user_tokens + guest_tokens))
+                
+                total_tokens = len(user_tokens) + len(guest_tokens)
+                audience_label = (
+                    f"specific kakao_ids ({len(ids)} ids, {len(tokens)} unique tokens, "
+                    f"{len(user_tokens)} user + {len(guest_tokens)} guest)"
+                )
             else:
-                self.stdout.write(f"\nSending notification {notification.id}: {notification.content[:50]}...")
+                if filter_kakao_ids is not None:
+                    # 전체 예약 알림이지만, 명시된 카카오 ID만 대상으로 전송
+                    users = User.objects.filter(kakao_id__in=filter_kakao_ids)
+                    
+                    # User의 FCM 토큰 수집
+                    user_tokens = list(
+                        users.exclude(fcm_token__isnull=True)
+                        .exclude(fcm_token="")
+                        .values_list("fcm_token", flat=True)
+                    )
+                    
+                    # 연결된 GuestUser의 FCM 토큰 수집
+                    guest_tokens = list(
+                        GuestUser.objects.filter(linked_user__in=users)
+                        .exclude(fcm_token__isnull=True)
+                        .exclude(fcm_token="")
+                        .values_list("fcm_token", flat=True)
+                    )
+                    
+                    # 중복 제거
+                    tokens = list(set(user_tokens + guest_tokens))
+                    
+                    audience_label = (
+                        f"filtered users by kakao_ids "
+                        f"({len(filter_kakao_ids)} ids, {len(tokens)} unique tokens, "
+                        f"{len(user_tokens)} user + {len(guest_tokens)} guest)"
+                    )
+                else:
+                    # GuestUser와 User 모두에서 FCM 토큰 수집 (전체 발송)
+                    guest_tokens = list(
+                        GuestUser.objects.exclude(fcm_token__isnull=True)
+                        .exclude(fcm_token="")
+                        .values_list("fcm_token", flat=True)
+                    )
+
+                    user_tokens = list(
+                        User.objects.exclude(fcm_token__isnull=True)
+                        .exclude(fcm_token="")
+                        .values_list("fcm_token", flat=True)
+                    )
+
+                    # 중복 제거 (같은 토큰이 여러 사용자에게 있을 수 있음)
+                    tokens = list(set(guest_tokens + user_tokens))
+                    audience_label = (
+                        f"all users ({len(guest_tokens)} guest, "
+                        f"{len(user_tokens)} user tokens)"
+                    )
+
+            self.stdout.write(
+                f"\nProcessing notification {notification.id} "
+                f"[audience: {audience_label}, unique tokens: {len(tokens)}]"
+            )
+
+            if not tokens:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"Notification {notification.id} has no valid tokens; skipping."
+                    )
+                )
+                failure_count += 1
+                continue
+
+            if dry_run:
+                self.stdout.write(
+                    f"[DRY-RUN] Validating notification {notification.id}: "
+                    f"{notification.content[:50]}..."
+                )
+            else:
+                self.stdout.write(
+                    f"Sending notification {notification.id}: "
+                    f"{notification.content[:50]}..."
+                )
+
             response = send_notification(tokens, notification.content, dry_run=dry_run)
 
             if not response:
@@ -176,7 +221,8 @@ class Command(BaseCommand):
                     failure_count += 1
                     self.stdout.write(
                         self.style.WARNING(
-                            f"Notification {notification.id} validation failed: {response.get('issues', [])}"
+                            f"Notification {notification.id} validation failed: "
+                            f"{response.get('issues', [])}"
                         )
                     )
                 else:
@@ -219,7 +265,10 @@ class Command(BaseCommand):
                     ) else {}
                     error_code = ""
                     for detail in error.get("details", []):
-                        if detail.get("@type") == "type.googleapis.com/google.firebase.fcm.v1.FcmError":
+                        if (
+                            detail.get("@type")
+                            == "type.googleapis.com/google.firebase.fcm.v1.FcmError"
+                        ):
                             error_code = detail.get("errorCode")
                             break
                     status = error.get("status")
@@ -228,12 +277,12 @@ class Command(BaseCommand):
 
                 if invalid_tokens:
                     # GuestUser와 User 모두에서 무효한 토큰 제거
-                    guest_removed = GuestUser.objects.filter(fcm_token__in=invalid_tokens).update(
-                        fcm_token=""
-                    )
-                    user_removed = User.objects.filter(fcm_token__in=invalid_tokens).update(
-                        fcm_token=""
-                    )
+                    guest_removed = GuestUser.objects.filter(
+                        fcm_token__in=invalid_tokens
+                    ).update(fcm_token="")
+                    user_removed = User.objects.filter(
+                        fcm_token__in=invalid_tokens
+                    ).update(fcm_token="")
                     self.stdout.write(
                         self.style.WARNING(
                             f"Removed {len(invalid_tokens)} invalid FCM tokens "
