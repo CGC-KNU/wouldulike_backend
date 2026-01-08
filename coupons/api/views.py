@@ -38,14 +38,14 @@ class MyCouponsView(generics.ListAPIView):
         # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
         if getattr(user, "is_authenticated", False):
             try:
-                coupon = issue_app_open_coupon(user)
-                if coupon:
+                coupons = issue_app_open_coupon(user)
+                if coupons:
+                    codes = [c.code for c in coupons]
                     logger.info(
-                        "app-open coupon ensured on my coupons list "
-                        "(user=%s, code=%s, issue_key=%s)",
+                        "app-open coupons ensured on my coupons list "
+                        "(user=%s, codes=%s)",
                         user.id,
-                        coupon.code,
-                        coupon.issue_key,
+                        codes,
                     )
                 else:
                     logger.info(

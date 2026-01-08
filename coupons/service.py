@@ -336,56 +336,117 @@ def issue_app_open_coupon(user: User):
         )
         return None
 
-    issue_key = _build_app_open_issue_key(user)
+    base_issue_key = _build_app_open_issue_key(user)
 
-    # 이미 같은 기간에 발급된 쿠폰이 있으면 그대로 반환 (중복 발급 방지)
-    existing = (
-        Coupon.objects.using(alias)
-        .filter(user=user, coupon_type=ct, campaign=camp, issue_key=issue_key)
-        .first()
+    # 대상 제휴 식당: 해당 쿠폰 타입에서 제외되지 않은 모든 제휴 식당
+    all_restaurant_ids = list(
+        AffiliateRestaurant.objects.using(alias).values_list("restaurant_id", flat=True)
     )
-    if existing:
-        logger.info(
-            "app-open coupon already exists "
-            "(user=%s, coupon_type=%s, campaign=%s, issue_key=%s, code=%s)",
-            user.id,
+    if not all_restaurant_ids:
+        logger.warning(
+            "app-open coupon not issued: no affiliate restaurants found "
+            "(coupon_type=%s, campaign=%s, user=%s)",
             ct.code,
             camp.code,
-            issue_key,
-            existing.code,
+            user.id,
         )
-        return existing
+        return []
 
-    try:
-        coupon = _create_coupon_with_restaurant(
-            user=user,
-            coupon_type=ct,
-            campaign=camp,
-            issue_key=issue_key,
-            db_alias=alias,
-        )
-        logger.info(
-            "app-open coupon issued "
-            "(user=%s, coupon_type=%s, campaign=%s, issue_key=%s, code=%s)",
-            user.id,
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    target_restaurant_ids = [rid for rid in all_restaurant_ids if rid not in excluded_ids]
+
+    if not target_restaurant_ids:
+        logger.warning(
+            "app-open coupon not issued: no eligible restaurants after exclusions "
+            "(coupon_type=%s, campaign=%s, user=%s)",
             ct.code,
             camp.code,
-            issue_key,
-            coupon.code,
-        )
-        return coupon
-    except IntegrityError:
-        # 동시 요청 등에 의해 유니크 제약에 걸린 경우 이미 발급된 쿠폰을 재조회
-        logger.info(
-            "app-open coupon duplicate detected (user=%s, issue_key=%s)",
             user.id,
-            issue_key,
         )
-        return (
+        return []
+
+    issued: list[Coupon] = []
+
+    for restaurant_id in target_restaurant_ids:
+        issue_key = f"{base_issue_key}:{restaurant_id}"
+
+        # 식당별로 해당 기간에 이미 발급된 쿠폰이 있으면 건너뜀
+        existing = (
             Coupon.objects.using(alias)
-            .filter(user=user, coupon_type=ct, campaign=camp, issue_key=issue_key)
+            .filter(
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                issue_key=issue_key,
+                restaurant_id=restaurant_id,
+            )
             .first()
         )
+        if existing:
+            logger.info(
+                "app-open coupon already exists for restaurant "
+                "(user=%s, coupon_type=%s, campaign=%s, issue_key=%s, restaurant_id=%s, code=%s)",
+                user.id,
+                ct.code,
+                camp.code,
+                issue_key,
+                restaurant_id,
+                existing.code,
+            )
+            issued.append(existing)
+            continue
+
+        try:
+            benefit_snapshot = _build_benefit_snapshot(
+                ct,
+                restaurant_id,
+                db_alias=alias,
+            )
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=_expires_at(ct),
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            logger.info(
+                "app-open coupon issued for restaurant "
+                "(user=%s, coupon_type=%s, campaign=%s, issue_key=%s, restaurant_id=%s, code=%s)",
+                user.id,
+                ct.code,
+                camp.code,
+                issue_key,
+                restaurant_id,
+                coupon.code,
+            )
+            issued.append(coupon)
+        except IntegrityError:
+            # 동시 요청 등에 의해 유니크 제약에 걸린 경우 이미 발급된 쿠폰을 재조회
+            logger.info(
+                "app-open coupon duplicate detected for restaurant "
+                "(user=%s, issue_key=%s, restaurant_id=%s)",
+                user.id,
+                issue_key,
+                restaurant_id,
+            )
+            dup = (
+                Coupon.objects.using(alias)
+                .filter(
+                    user=user,
+                    coupon_type=ct,
+                    campaign=camp,
+                    issue_key=issue_key,
+                    restaurant_id=restaurant_id,
+                )
+                .first()
+            )
+            if dup:
+                issued.append(dup)
+
+    return issued
 
 
 @transaction.atomic
