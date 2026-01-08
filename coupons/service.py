@@ -315,9 +315,25 @@ def issue_app_open_coupon(user: User):
     now = timezone.now()
     if camp.start_at and now < camp.start_at:
         # 아직 캠페인 시작 전이면 발급하지 않음
+        logger.info(
+            "app-open campaign not started yet "
+            "(campaign_code=%s, user=%s, now=%s, start_at=%s)",
+            camp.code,
+            user.id,
+            now,
+            camp.start_at,
+        )
         return None
     if camp.end_at and now > camp.end_at:
         # 캠페인 종료 후에는 발급하지 않음
+        logger.info(
+            "app-open campaign already ended "
+            "(campaign_code=%s, user=%s, now=%s, end_at=%s)",
+            camp.code,
+            user.id,
+            now,
+            camp.end_at,
+        )
         return None
 
     issue_key = _build_app_open_issue_key(user)
@@ -329,16 +345,35 @@ def issue_app_open_coupon(user: User):
         .first()
     )
     if existing:
+        logger.info(
+            "app-open coupon already exists "
+            "(user=%s, coupon_type=%s, campaign=%s, issue_key=%s, code=%s)",
+            user.id,
+            ct.code,
+            camp.code,
+            issue_key,
+            existing.code,
+        )
         return existing
 
     try:
-        return _create_coupon_with_restaurant(
+        coupon = _create_coupon_with_restaurant(
             user=user,
             coupon_type=ct,
             campaign=camp,
             issue_key=issue_key,
             db_alias=alias,
         )
+        logger.info(
+            "app-open coupon issued "
+            "(user=%s, coupon_type=%s, campaign=%s, issue_key=%s, code=%s)",
+            user.id,
+            ct.code,
+            camp.code,
+            issue_key,
+            coupon.code,
+        )
+        return coupon
     except IntegrityError:
         # 동시 요청 등에 의해 유니크 제약에 걸린 경우 이미 발급된 쿠폰을 재조회
         logger.info(

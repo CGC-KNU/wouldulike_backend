@@ -38,7 +38,21 @@ class MyCouponsView(generics.ListAPIView):
         # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
         if getattr(user, "is_authenticated", False):
             try:
-                issue_app_open_coupon(user)
+                coupon = issue_app_open_coupon(user)
+                if coupon:
+                    logger.info(
+                        "app-open coupon ensured on my coupons list "
+                        "(user=%s, code=%s, issue_key=%s)",
+                        user.id,
+                        coupon.code,
+                        coupon.issue_key,
+                    )
+                else:
+                    logger.info(
+                        "no app-open coupon issued on my coupons list "
+                        "(user=%s, reason=already_issued_or_campaign_inactive_or_out_of_period)",
+                        user.id,
+                    )
             except Exception as exc:  # noqa: BLE001
                 # 쿠폰 발급 실패가 내 쿠폰 목록 조회 자체를 막지 않도록 예외는 로깅만 하고 무시
                 logger.warning(
