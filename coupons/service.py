@@ -21,6 +21,7 @@ from .models import (
     StampWallet,
     StampEvent,
     RestaurantCouponBenefit,
+    CouponRestaurantExclusion,
 )
 from .utils import make_coupon_code, redis_lock, idem_get, idem_set
 
@@ -40,20 +41,64 @@ EVENT_ADMIN_KAKAO_IDS = set(
     if kid.strip()
 )
 
+# 앱 접속(로그인/토큰 갱신) 시 발급되는 쿠폰 설정
+# 기본값은 기존 가입 웰컴 쿠폰/캠페인을 재사용하되,
+# 운영에서 분리하고 싶으면 환경변수로 재정의한다.
+APP_OPEN_COUPON_TYPE_CODE = os.getenv("APP_OPEN_COUPON_TYPE_CODE", "WELCOME_3000")
+APP_OPEN_CAMPAIGN_CODE = os.getenv("APP_OPEN_CAMPAIGN_CODE", "SIGNUP_WELCOME")
+# DAILY | WEEKLY
+APP_OPEN_PERIOD = os.getenv("APP_OPEN_PERIOD", "DAILY").upper()
+
 
 def _is_event_admin_user(user: User) -> bool:
     """운영진 계정인지 확인"""
     return user.kakao_id in EVENT_ADMIN_KAKAO_IDS
 
 
+def _build_app_open_issue_key(user: User) -> str:
+    """
+    앱 접속(로그인/토큰 갱신) 쿠폰의 멱등성을 보장하기 위한 issue_key 생성.
+    - DAILY: APP_OPEN:<user_id>:YYYYMMDD
+    - WEEKLY: APP_OPEN:<user_id>:YYYY-WW (ISO 주차 기준)
+    """
+    now = timezone.now()
+    if APP_OPEN_PERIOD == "WEEKLY":
+        year, week, _ = now.isocalendar()
+        return f"APP_OPEN:{user.id}:{year:04d}-W{week:02d}"
+    # 기본은 일 단위
+    return f"APP_OPEN:{user.id}:{now:%Y%m%d}"
+
+
 MAX_COUPONS_PER_RESTAURANT = 200
 
+# 기본(코드 하드코딩) 제외 식당 설정
 COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
     "WELCOME_3000": {30},
     "REFERRAL_BONUS_REFERRER": {30},
     "REFERRAL_BONUS_REFEREE": {30},
     "FINAL_EXAM_SPECIAL": {30},  # 고니식탁 제외
 }
+
+
+def _get_excluded_restaurant_ids(
+    coupon_type_code: str,
+    *,
+    db_alias: str | None = None,
+) -> set[int]:
+    """
+    쿠폰 타입별로 제외할 restaurant_id 집합을 반환.
+    - 하드코딩된 COUPON_TYPE_EXCLUDED_RESTAURANTS
+    - DB 기반 CouponRestaurantExclusion
+    둘을 합집합으로 사용한다.
+    """
+    base = set(COUPON_TYPE_EXCLUDED_RESTAURANTS.get(coupon_type_code, set()))
+    alias = db_alias or router.db_for_read(CouponRestaurantExclusion)
+    extra = set(
+        CouponRestaurantExclusion.objects.using(alias)
+        .filter(coupon_type__code=coupon_type_code)
+        .values_list("restaurant_id", flat=True)
+    )
+    return base | extra
 
 
 def _build_benefit_snapshot(
@@ -124,7 +169,7 @@ def _select_restaurant_for_coupon(ct: CouponType, *, db_alias: str | None = None
     if not restaurant_ids:
         raise ValidationError("no restaurants available for coupon assignment")
 
-    excluded_ids = COUPON_TYPE_EXCLUDED_RESTAURANTS.get(ct.code, set())
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
 
     counts = {}
     qs = (
@@ -239,6 +284,75 @@ def issue_signup_coupon(user: User):
     )
 
 
+def issue_app_open_coupon(user: User):
+    """
+    앱 접속(로그인/토큰 갱신 등) 시점에 발급되는 쿠폰.
+    - APP_OPEN_PERIOD(DAILY/WEEKLY)에 따라 issue_key를 구성해 기간당 1회만 발급.
+    - APP_OPEN_COUPON_TYPE_CODE / APP_OPEN_CAMPAIGN_CODE 환경변수로
+      사용할 CouponType / Campaign을 교체할 수 있다.
+    - Campaign 의 active, start_at, end_at 을 기준으로 발급 가능 기간을 제어한다.
+    """
+    alias = router.db_for_write(Coupon)
+
+    try:
+        ct = CouponType.objects.using(alias).get(code=APP_OPEN_COUPON_TYPE_CODE)
+        camp = Campaign.objects.using(alias).get(
+            code=APP_OPEN_CAMPAIGN_CODE, active=True
+        )
+    except CouponType.DoesNotExist:
+        logger.warning(
+            "app-open coupon not issued: CouponType %s does not exist",
+            APP_OPEN_COUPON_TYPE_CODE,
+        )
+        return None
+    except Campaign.DoesNotExist:
+        logger.warning(
+            "app-open coupon not issued: Campaign %s does not exist or inactive",
+            APP_OPEN_CAMPAIGN_CODE,
+        )
+        return None
+
+    now = timezone.now()
+    if camp.start_at and now < camp.start_at:
+        # 아직 캠페인 시작 전이면 발급하지 않음
+        return None
+    if camp.end_at and now > camp.end_at:
+        # 캠페인 종료 후에는 발급하지 않음
+        return None
+
+    issue_key = _build_app_open_issue_key(user)
+
+    # 이미 같은 기간에 발급된 쿠폰이 있으면 그대로 반환 (중복 발급 방지)
+    existing = (
+        Coupon.objects.using(alias)
+        .filter(user=user, coupon_type=ct, campaign=camp, issue_key=issue_key)
+        .first()
+    )
+    if existing:
+        return existing
+
+    try:
+        return _create_coupon_with_restaurant(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key=issue_key,
+            db_alias=alias,
+        )
+    except IntegrityError:
+        # 동시 요청 등에 의해 유니크 제약에 걸린 경우 이미 발급된 쿠폰을 재조회
+        logger.info(
+            "app-open coupon duplicate detected (user=%s, issue_key=%s)",
+            user.id,
+            issue_key,
+        )
+        return (
+            Coupon.objects.using(alias)
+            .filter(user=user, coupon_type=ct, campaign=camp, issue_key=issue_key)
+            .first()
+        )
+
+
 @transaction.atomic
 def issue_ambassador_coupons(user: User):
     """
@@ -263,8 +377,8 @@ def issue_ambassador_coupons(user: User):
     if not restaurant_ids:
         raise ValidationError("no restaurants available for coupon assignment")
     
-    # 제외된 식당 필터링
-    excluded_ids = COUPON_TYPE_EXCLUDED_RESTAURANTS.get(ct.code, set())
+    # 제외된 식당 필터링 (하드코딩 + DB 설정 반영)
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
     valid_restaurant_ids = [rid for rid in restaurant_ids if rid not in excluded_ids]
     
     if not valid_restaurant_ids:
@@ -374,8 +488,8 @@ def issue_final_exam_coupons(user: User):
     if not restaurant_ids:
         raise ValidationError("no restaurants available for coupon assignment")
     
-    # 제외된 식당 필터링
-    excluded_ids = COUPON_TYPE_EXCLUDED_RESTAURANTS.get(ct.code, set())
+    # 제외된 식당 필터링 (하드코딩 + DB 설정 반영)
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
     valid_restaurant_ids = [rid for rid in restaurant_ids if rid not in excluded_ids]
     
     if not valid_restaurant_ids:

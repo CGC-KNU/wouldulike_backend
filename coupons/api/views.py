@@ -4,6 +4,7 @@ from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
+import logging
 
 from ..models import Coupon
 from ..service import (
@@ -18,8 +19,12 @@ from ..service import (
     get_stamp_status,
     check_and_expire_coupon,
     claim_final_exam_coupon,
+    issue_app_open_coupon,
 )
 from .serializers import CouponSerializer, InviteCodeSerializer
+
+
+logger = logging.getLogger(__name__)
 
 
 class MyCouponsView(generics.ListAPIView):
@@ -28,9 +33,24 @@ class MyCouponsView(generics.ListAPIView):
     serializer_class = CouponSerializer
 
     def get_queryset(self):
+        user = self.request.user
+
+        # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
+        if getattr(user, "is_authenticated", False):
+            try:
+                issue_app_open_coupon(user)
+            except Exception as exc:  # noqa: BLE001
+                # 쿠폰 발급 실패가 내 쿠폰 목록 조회 자체를 막지 않도록 예외는 로깅만 하고 무시
+                logger.warning(
+                    "failed to issue app-open coupon on my coupons list for user %s: %s",
+                    getattr(user, "id", None),
+                    exc,
+                    exc_info=True,
+                )
+
         qs = (
             Coupon.objects.select_related("coupon_type", "campaign")
-            .filter(user=self.request.user)
+            .filter(user=user)
             .order_by("-issued_at")
         )
         status_q = self.request.query_params.get("status")

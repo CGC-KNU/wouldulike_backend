@@ -7,7 +7,13 @@ from django.db import connections, router, transaction
 from django.utils import timezone
 
 from restaurants.models import AffiliateRestaurant
-from coupons.models import CouponType, Coupon, MerchantPin, RestaurantCouponBenefit
+from coupons.models import (
+    CouponType,
+    Coupon,
+    MerchantPin,
+    RestaurantCouponBenefit,
+    CouponRestaurantExclusion,
+)
 
 
 class Command(BaseCommand):
@@ -84,6 +90,15 @@ class Command(BaseCommand):
             "--no-input",
             action="store_true",
             help="확인 프롬프트 없이 바로 실행합니다.",
+        )
+        parser.add_argument(
+            "--stamp-only",
+            action="store_true",
+            help=(
+                "이 식당을 스탬프 전용으로 설정합니다. "
+                "신규가입/친구초대/특정 이벤트(WELCOME_3000, REFERRAL_BONUS_*, FINAL_EXAM_SPECIAL) "
+                "쿠폰 발급 대상에서 제외합니다."
+            ),
         )
 
         # 신규가입 쿠폰 (WELCOME_3000)
@@ -317,6 +332,13 @@ class Command(BaseCommand):
                 restaurant_id=restaurant_id
             ).update(pin_secret=final_pin, pin_updated_at=now)
 
+        # 실제 실행 시 최종 PIN 을 터미널에 출력하여 확인할 수 있도록 함
+        self.stdout.write(
+            self.style.SUCCESS(
+                f"PIN 설정 완료 - restaurant_id={restaurant_id} pin={final_pin}"
+            )
+        )
+
     def _upsert_benefit(
         self,
         *,
@@ -373,6 +395,7 @@ class Command(BaseCommand):
         pin: str | None = options.get("pin")
         dry_run: bool = options["dry_run"]
         no_input: bool = options["no_input"]
+        stamp_only: bool = options["stamp_only"]
 
         # restaurant_id 자동 배정
         if restaurant_id is None:
@@ -392,27 +415,42 @@ class Command(BaseCommand):
                 )
 
         # 어떤 쿠폰 타입이 설정 대상인지 미리 체크 (있으면 쿠폰 설정, 없으면 건너뜀)
-        has_any_benefit = any(
-            [
-                options.get("signup_title"),
-                options.get("signup_benefit_json"),
-                options.get("referral_title"),
-                options.get("referral_benefit_json"),
-                options.get("stamp5_title"),
-                options.get("stamp5_benefit_json"),
-                options.get("stamp10_title"),
-                options.get("stamp10_benefit_json"),
-            ]
+        signup_configured = bool(
+            options.get("signup_title") or options.get("signup_benefit_json")
         )
+        referral_configured = bool(
+            options.get("referral_title") or options.get("referral_benefit_json")
+        )
+        stamp5_configured = bool(
+            options.get("stamp5_title") or options.get("stamp5_benefit_json")
+        )
+        stamp10_configured = bool(
+            options.get("stamp10_title") or options.get("stamp10_benefit_json")
+        )
+
+        has_any_benefit = any(
+            [signup_configured, referral_configured, stamp5_configured, stamp10_configured]
+        )
+
         if has_any_benefit and not dry_run and not no_input:
-            self.stdout.write(
-                self.style.WARNING(
-                    f"식당 ID {restaurant_id} 에 대해 제휴 식당 및 쿠폰 내용을 설정합니다.\n"
-                    f" - 신규가입: WELCOME_3000\n"
-                    f" - 친구초대: REFERRAL_BONUS_REFERRER / REFERRAL_BONUS_REFEREE\n"
-                    f" - 스탬프 보상: STAMP_REWARD_5 / STAMP_REWARD_10\n"
-                )
-            )
+            lines: list[str] = [
+                f"식당 ID {restaurant_id} 에 대해 제휴 식당 및 쿠폰 내용을 설정합니다."
+            ]
+            if signup_configured:
+                lines.append(" - 신규가입: WELCOME_3000")
+            if referral_configured:
+                lines.append(" - 친구초대: REFERRAL_BONUS_REFERRER / REFERRAL_BONUS_REFEREE")
+            if stamp5_configured or stamp10_configured:
+                stamp_types: list[str] = []
+                if stamp5_configured:
+                    stamp_types.append("STAMP_REWARD_5")
+                if stamp10_configured:
+                    stamp_types.append("STAMP_REWARD_10")
+                joined = " / ".join(stamp_types)
+                lines.append(f" - 스탬프 보상: {joined}")
+
+            message = "\n".join(lines) + "\n"
+            self.stdout.write(self.style.WARNING(message))
             confirm = input('계속하려면 "yes" 를 입력하세요: ')
             if confirm.lower() != "yes":
                 raise CommandError("작업이 취소되었습니다.")
@@ -451,6 +489,43 @@ class Command(BaseCommand):
                     f"기존 제휴 식당 사용: restaurant_id={restaurant_id}, name='{restaurant.name}'"
                 )
             )
+
+        # 4-a) 스탬프 전용 식당 설정: 지정된 쿠폰 타입에서 제외
+        if stamp_only:
+            excluded_codes = [
+                "WELCOME_3000",
+                "REFERRAL_BONUS_REFERRER",
+                "REFERRAL_BONUS_REFEREE",
+                "FINAL_EXAM_SPECIAL",
+            ]
+            alias = router.db_for_write(CouponRestaurantExclusion)
+            if dry_run:
+                self.stdout.write(
+                    "[DRY-RUN] 스탬프 전용 식당 설정 예정 - "
+                    f"restaurant_id={restaurant_id}, excluded_coupon_types={excluded_codes}"
+                )
+            else:
+                for code in excluded_codes:
+                    try:
+                        ct = CouponType.objects.using(alias).get(code=code)
+                    except CouponType.DoesNotExist:
+                        self.stdout.write(
+                            self.style.WARNING(
+                                f"스탬프 전용 설정: CouponType(code='{code}') 를 찾을 수 없어 건너뜁니다."
+                            )
+                        )
+                        continue
+                    CouponRestaurantExclusion.objects.using(alias).update_or_create(
+                        coupon_type=ct,
+                        restaurant_id=restaurant_id,
+                        defaults={},
+                    )
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        "스탬프 전용 식당으로 설정되었습니다: "
+                        f"restaurant_id={restaurant_id}, excluded_coupon_types={excluded_codes}"
+                    )
+                )
 
         # 2) 식당 PIN 설정
         # - 새로 생성된 식당: pin 이 없으면 랜덤 생성
@@ -501,7 +576,7 @@ class Command(BaseCommand):
                             )
                         )
 
-        # 4) 쿠폰 내용 설정
+        # 5) 쿠폰 내용 설정
         results = []
 
         # 신규가입 (WELCOME_3000)

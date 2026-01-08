@@ -19,7 +19,7 @@ import logging
 from .models import User
 from guests.models import GuestUser
 from .jwt_utils import generate_tokens_for_user
-from coupons.service import issue_signup_coupon
+from coupons.service import issue_signup_coupon, issue_app_open_coupon
 from .utils import merge_guest_data
 
 logger = logging.getLogger(__name__)
@@ -161,7 +161,22 @@ class KakaoLoginView(APIView):
                     coupon = issue_signup_coupon(user)
                     signup_coupon_code = coupon.code
                 except Exception as exc:
-                    logger.warning('failed to issue signup coupon for user %s: %s', user.id, exc)
+                    logger.warning(
+                        "failed to issue signup coupon for user %s: %s",
+                        user.id,
+                        exc,
+                    )
+
+            # 앱 접속(로그인) 쿠폰 발급 - 실패해도 로그인은 계속 진행
+            try:
+                issue_app_open_coupon(user)
+            except Exception as exc:
+                logger.warning(
+                    "failed to issue app-open coupon on login for user %s: %s",
+                    user.id,
+                    exc,
+                    exc_info=True,
+                )
 
             # 3) JWT 발급
             try:
@@ -256,6 +271,19 @@ class CustomTokenRefreshView(BaseTokenRefreshView):
                     'access_expires_at': new_access['exp'],  # Unix timestamp
                     'refresh_expires_at': refresh['exp'],  # Unix timestamp
                 }
+
+            # 앱 접속(토큰 갱신) 쿠폰 발급 - 실패해도 토큰 갱신은 계속 진행
+            try:
+                user = getattr(refresh, "user", None)
+                if user is not None:
+                    issue_app_open_coupon(user)
+            except Exception as exc:
+                logger.warning(
+                    "failed to issue app-open coupon on token refresh for user %s: %s",
+                    getattr(user, "id", None),
+                    exc,
+                    exc_info=True,
+                )
 
             # 캐시에 저장 (5초 동안 유효) - 동시 요청 방지
             cache.set(cache_key, response_data, timeout=5)

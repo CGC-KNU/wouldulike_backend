@@ -42,3 +42,5 @@ class Command(BaseCommand):
         self.stdout.write(f"- updated_at: {trend.updated_at}")
 
 
+
+

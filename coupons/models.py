@@ -218,3 +218,28 @@ class StampEvent(models.Model):
 
     def __str__(self):
         return f"StampEvent u={self.user_id} r={self.restaurant_id} d={self.delta} @ {self.created_at:%Y-%m-%d %H:%M:%S}"
+
+
+class CouponRestaurantExclusion(models.Model):
+    """
+    특정 쿠폰 타입에서 제외할 제휴 식당 설정.
+    - 예: 스탬프 전용 식당을 위해 신규가입/친구초대/이벤트 쿠폰 발급 대상에서 제외.
+    """
+
+    coupon_type = models.ForeignKey(
+        CouponType,
+        on_delete=models.CASCADE,
+        related_name="excluded_restaurants",
+    )
+    restaurant_id = models.IntegerField(db_index=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["coupon_type", "restaurant_id"],
+                name="uq_coupon_restaurant_exclusion",
+            )
+        ]
+
+    def __str__(self):
+        return f"Exclude:{self.coupon_type.code}:{self.restaurant_id}"
