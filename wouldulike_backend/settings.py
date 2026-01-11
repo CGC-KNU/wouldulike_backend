@@ -312,6 +312,10 @@ LOGGING = {
     },
 }
 
+# 내부 스케줄 트리거 보호용 토큰
+# GCP Cloud Scheduler 등에서 X-CRON-TOKEN 헤더로 함께 전송해야 함.
+CRON_SECRET_TOKEN = os.getenv("CRON_SECRET_TOKEN")
+
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
