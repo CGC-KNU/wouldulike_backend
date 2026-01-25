@@ -254,8 +254,18 @@ def get_affiliate_restaurants(request):
 
         # 제휴식당 목록을 무작위로 섞어서 반환
         random.shuffle(rows)
-
         restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
+
+        # 제휴식당 리스트 로그로 간단히 확인
+        try:
+            logger.info(
+                "affiliate restaurants response (count=%s, sample_names=%s)",
+                len(restaurants),
+                [r.get("name") for r in restaurants[:10]],
+            )
+        except Exception:
+            # 로깅 자체에서 오류가 나더라도 본 로직에는 영향 주지 않도록 방어
+            logger.exception("Failed to log affiliate restaurants response")
 
         return JsonResponse(
             {'restaurants': restaurants},
