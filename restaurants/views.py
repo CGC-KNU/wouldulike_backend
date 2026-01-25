@@ -252,8 +252,7 @@ def get_affiliate_restaurants(request):
             )
             rows = cursor.fetchall()
 
-        # 제휴식당 목록을 무작위로 섞어서 반환
-        random.shuffle(rows)
+        # 제휴식당 목록을 그대로 반환 (DB에서 조회된 순서 유지)
         restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
 
         # 제휴식당 리스트 로그로 간단히 확인
