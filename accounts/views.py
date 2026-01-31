@@ -39,6 +39,10 @@ def _serialize_user(user: User):
     return {
         'id': user.id,
         'kakao_id': user.kakao_id,
+        'nickname': user.nickname,
+        'student_id': user.student_id,
+        'department': user.department,
+        'school': user.school,
         'type_code': user.type_code,
         'favorite_restaurants': favorites_payload,
         'fcm_token': user.fcm_token,
@@ -488,9 +492,29 @@ class UserMeView(APIView):
         return Response(_serialize_user(request.user), status=status.HTTP_200_OK)
 
     def patch(self, request):
+        """
+        프로필 일부 또는 전체 수정. 닉네임/학번/학과/학교는 한 번에 보내도 되고, 필요한 것만 보내도 됨.
+        """
         user = request.user
         data = request.data or {}
         update_fields = set()
+
+        for attr, max_len in (('nickname', 50), ('student_id', 20), ('department', 100), ('school', 100)):
+            if attr not in data:
+                continue
+            value = data.get(attr)
+            if value is not None and value != '':
+                value = str(value).strip()
+                if max_len and len(value) > max_len:
+                    return Response(
+                        {'detail': f'{attr} must be at most {max_len} characters'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                value = None
+            if getattr(user, attr) != value:
+                setattr(user, attr, value)
+                update_fields.add(attr)
 
         if 'type_code' in data:
             type_code = data.get('type_code')

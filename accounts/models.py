@@ -25,6 +25,10 @@ class UserManager(BaseUserManager):
 
 class User(AbstractBaseUser, PermissionsMixin):
     kakao_id = models.BigIntegerField(unique=True, db_index=True)
+    nickname = models.CharField(max_length=50, null=True, blank=True)
+    student_id = models.CharField(max_length=20, null=True, blank=True)
+    department = models.CharField(max_length=100, null=True, blank=True)
+    school = models.CharField(max_length=100, null=True, blank=True)
     type_code = models.CharField(max_length=4, null=True, blank=True)
     favorite_restaurants = models.TextField(null=True, blank=True)
     fcm_token = models.CharField(max_length=255, null=True, blank=True)
