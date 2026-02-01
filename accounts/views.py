@@ -25,16 +25,22 @@ from .utils import merge_guest_data
 logger = logging.getLogger(__name__)
 
 
-def _serialize_user(user: User):
-    favorites = user.favorite_restaurants
-    favorites_payload = []
-    if isinstance(favorites, list):
-        favorites_payload = favorites
-    elif favorites:
+def _parse_favorite_restaurants(value):
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
         try:
-            favorites_payload = json.loads(favorites)
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
         except (TypeError, json.JSONDecodeError):
-            favorites_payload = favorites
+            return []
+    return []
+
+
+def _serialize_user(user: User):
+    favorites_payload = _parse_favorite_restaurants(user.favorite_restaurants)
 
     return {
         'id': user.id,
@@ -51,6 +57,69 @@ def _serialize_user(user: User):
         'created_at': user.created_at,
         'updated_at': user.updated_at,
     }
+
+
+def _save_user_favorites(user: User, favorites):
+    serialized = json.dumps(favorites)
+    if serialized == user.favorite_restaurants:
+        return
+
+    user.favorite_restaurants = serialized
+    user.save(update_fields=["favorite_restaurants", "updated_at"])
+
+    for guest in GuestUser.objects.filter(linked_user=user):
+        guest.favorite_restaurants = serialized
+        guest.save(update_fields=["favorite_restaurants", "updated_at"])
+
+
+class UserFavoritesView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        favorites = _parse_favorite_restaurants(request.user.favorite_restaurants)
+        return Response({"ok": True, "favorites": favorites}, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        restaurant_id = request.data.get("restaurantId") or request.data.get("restaurant_id")
+        if not restaurant_id:
+            return Response({"detail": "restaurantId is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        restaurant_id = str(restaurant_id).strip()
+        if not restaurant_id:
+            return Response({"detail": "restaurantId is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        favorites = _parse_favorite_restaurants(user.favorite_restaurants)
+        if restaurant_id not in favorites:
+            favorites.append(restaurant_id)
+            _save_user_favorites(user, favorites)
+
+        return Response(
+            {"ok": True, "added": restaurant_id, "favorites": favorites},
+            status=status.HTTP_200_OK,
+        )
+
+
+class UserFavoriteDeleteView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request, restaurant_id):
+        restaurant_id = str(restaurant_id).strip()
+        if not restaurant_id:
+            return Response({"detail": "restaurantId is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        favorites = _parse_favorite_restaurants(user.favorite_restaurants)
+        if restaurant_id in favorites:
+            favorites = [fav for fav in favorites if fav != restaurant_id]
+            _save_user_favorites(user, favorites)
+
+        return Response(
+            {"ok": True, "removed": restaurant_id, "favorites": favorites},
+            status=status.HTTP_200_OK,
+        )
 
 
 class KakaoLoginView(APIView):
