@@ -240,6 +240,10 @@ OPERATIONS_ADMIN_RESET_PASSWORDS=0
 
 ### 레스토랑 (`/restaurants/`)
 - 레스토랑 검색 및 조회 API
+- `GET /restaurants/affiliate-restaurants/active/` - 진행 중 제휴식당/전체 제휴식당 조회
+  - 인증: `Authorization: Bearer <access_token>`
+  - 동작: 진행 중 식당이 0~2개면 전체 제휴식당, 그 외엔 진행 중 식당만 반환
+  - 응답 필드: `source` (`active` | `all`), `restaurants` (기존 제휴식당 응답과 동일)
 
 ### 트렌드 (`/trends/`)
 - 트렌드 정보 조회 API
