@@ -1,12 +1,18 @@
 from django.http import JsonResponse
+from django.contrib.auth import get_user_model
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.db import connections
+from rest_framework_simplejwt.tokens import AccessToken
+from rest_framework_simplejwt.exceptions import TokenError
 import json
 import random
 import logging
 
+from coupons.service import get_active_affiliate_restaurant_ids_for_user
+
 logger = logging.getLogger(__name__)
+User = get_user_model()
 
 
 def _normalize_restaurant_name(name):
@@ -48,6 +54,37 @@ def _serialize_affiliate_restaurant(row):
         'url': url,
         's3_image_urls': list(s3_image_urls) if s3_image_urls else [],
     }
+
+
+def _get_user_from_bearer_token(request):
+    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
+    if not auth_header.startswith('Bearer '):
+        return None, JsonResponse(
+            {'error_code': 'UNAUTHORIZED', 'message': 'Authorization header required'},
+            status=401,
+        )
+    token_string = auth_header.split(' ', 1)[1]
+    try:
+        access_token = AccessToken(token_string)
+        user_id = access_token.get('user_id')
+        if not user_id:
+            return None, JsonResponse(
+                {'error_code': 'UNAUTHORIZED', 'message': 'Invalid token payload'},
+                status=401,
+            )
+        user = User.objects.get(id=user_id)
+        return user, None
+    except (TokenError, User.DoesNotExist):
+        return None, JsonResponse(
+            {'error_code': 'UNAUTHORIZED', 'message': 'Invalid or expired token'},
+            status=401,
+        )
+    except Exception as exc:
+        logger.exception("Failed to authenticate user")
+        return None, JsonResponse(
+            {'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(exc)}'},
+            status=500,
+        )
 
 @csrf_exempt
 def get_random_restaurants(request):
@@ -264,6 +301,70 @@ def get_affiliate_restaurants(request):
         )
     except Exception as exc:
         logger.exception("Failed to fetch affiliate restaurants")
+        return JsonResponse(
+            {'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(exc)}'},
+            status=500,
+        )
+
+
+@require_http_methods(["GET"])
+def get_active_affiliate_restaurants(request):
+    """Return affiliate restaurants where user has active coupon or stamp progress."""
+    user, error_response = _get_user_from_bearer_token(request)
+    if error_response:
+        return error_response
+
+    try:
+        restaurant_ids = get_active_affiliate_restaurant_ids_for_user(user)
+        with connections['cloudsql'].cursor() as cursor:
+            if len(restaurant_ids) <= 2:
+                source = "all"
+                cursor.execute(
+                    """
+                    SELECT
+                        restaurant_id,
+                        name,
+                        description,
+                        address,
+                        category,
+                        zone,
+                        phone_number,
+                        url,
+                        s3_image_urls
+                    FROM restaurants_affiliate
+                    """
+                )
+                rows = cursor.fetchall()
+                random.shuffle(rows)
+            else:
+                source = "active"
+                placeholders = ", ".join(["%s"] * len(restaurant_ids))
+                query = f"""
+                    SELECT
+                        restaurant_id,
+                        name,
+                        description,
+                        address,
+                        category,
+                        zone,
+                        phone_number,
+                        url,
+                        s3_image_urls
+                    FROM restaurants_affiliate
+                    WHERE restaurant_id IN ({placeholders})
+                    ORDER BY restaurant_id
+                """
+                cursor.execute(query, restaurant_ids)
+                rows = cursor.fetchall()
+
+        restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
+        return JsonResponse(
+            {'source': source, 'restaurants': restaurants},
+            status=200,
+            json_dumps_params={'ensure_ascii': False},
+        )
+    except Exception as exc:
+        logger.exception("Failed to fetch active affiliate restaurants")
         return JsonResponse(
             {'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(exc)}'},
             status=500,

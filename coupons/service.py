@@ -1151,6 +1151,33 @@ def get_all_stamp_statuses(user: User):
     return results
 
 
+def get_active_affiliate_restaurant_ids_for_user(user: User) -> list[int]:
+    """사용자 기준 진행 중 제휴식당 ID 목록 반환."""
+    now = timezone.now()
+    coupon_alias = router.db_for_read(Coupon)
+    stamp_alias = router.db_for_read(StampWallet)
+
+    coupon_ids = (
+        Coupon.objects.using(coupon_alias)
+        .filter(
+            user=user,
+            status="ISSUED",
+            expires_at__gte=now,
+            restaurant_id__isnull=False,
+        )
+        .values_list("restaurant_id", flat=True)
+        .distinct()
+    )
+    stamp_ids = (
+        StampWallet.objects.using(stamp_alias)
+        .filter(user=user, stamps__gt=0)
+        .values_list("restaurant_id", flat=True)
+        .distinct()
+    )
+
+    return sorted(set(coupon_ids) | set(stamp_ids))
+
+
 def get_stamp_status(user: User, restaurant_id: int):
     try:
         w = StampWallet.objects.get(user=user, restaurant_id=restaurant_id)
