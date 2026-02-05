@@ -6,6 +6,12 @@ class AffiliateRestaurant(models.Model):
 
     restaurant_id = models.IntegerField(primary_key=True)
     name = models.CharField(max_length=255)
+    address = models.CharField(max_length=255, null=True, blank=True)
+    phone_number = models.CharField(max_length=50, null=True, blank=True)
+    zone = models.CharField(max_length=255, null=True, blank=True)
+    category = models.CharField(max_length=255, null=True, blank=True)
+    url = models.CharField(max_length=500, null=True, blank=True)
+    s3_image_urls = models.JSONField(null=True, blank=True, default=list)
     description = models.TextField(null=True, blank=True)
     pin_secret = models.CharField(max_length=128, null=True, blank=True)
     pin_updated_at = models.DateTimeField(null=True, blank=True)
