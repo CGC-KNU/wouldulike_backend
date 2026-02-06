@@ -285,6 +285,7 @@ def get_affiliate_restaurants(request):
                     url,
                     s3_image_urls
                 FROM restaurants_affiliate
+                WHERE is_affiliate = TRUE
                 """
             )
             rows = cursor.fetchall()
@@ -332,6 +333,7 @@ def get_active_affiliate_restaurants(request):
                         url,
                         s3_image_urls
                     FROM restaurants_affiliate
+                    WHERE is_affiliate = TRUE
                     """
                 )
                 rows = cursor.fetchall()
@@ -352,6 +354,7 @@ def get_active_affiliate_restaurants(request):
                         s3_image_urls
                     FROM restaurants_affiliate
                     WHERE restaurant_id IN ({placeholders})
+                      AND is_affiliate = TRUE
                     ORDER BY restaurant_id
                 """
                 cursor.execute(query, restaurant_ids)
@@ -386,7 +389,7 @@ def get_affiliate_restaurant_detail(request):
         with connections['cloudsql'].cursor() as cursor:
             # Try exact match first for stability.
             cursor.execute(
-                "SELECT * FROM restaurants_affiliate WHERE name = %s",
+                "SELECT * FROM restaurants_affiliate WHERE name = %s AND is_affiliate = TRUE",
                 [name_query],
             )
             rows = cursor.fetchall()
@@ -394,7 +397,7 @@ def get_affiliate_restaurant_detail(request):
 
             if not rows:
                 cursor.execute(
-                    "SELECT * FROM restaurants_affiliate WHERE name ILIKE %s",
+                    "SELECT * FROM restaurants_affiliate WHERE name ILIKE %s AND is_affiliate = TRUE",
                     [f'%{name_query}%'],
                 )
                 rows = cursor.fetchall()

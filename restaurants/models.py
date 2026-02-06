@@ -1,4 +1,5 @@
 from django.db import models
+from django.contrib.postgres.fields import ArrayField
 
 
 class AffiliateRestaurant(models.Model):
@@ -6,13 +7,23 @@ class AffiliateRestaurant(models.Model):
 
     restaurant_id = models.IntegerField(primary_key=True)
     name = models.CharField(max_length=255)
+    is_affiliate = models.BooleanField(null=True, blank=True)
     address = models.CharField(max_length=255, null=True, blank=True)
     phone_number = models.CharField(max_length=50, null=True, blank=True)
     zone = models.CharField(max_length=255, null=True, blank=True)
     category = models.CharField(max_length=255, null=True, blank=True)
     url = models.CharField(max_length=500, null=True, blank=True)
-    s3_image_urls = models.JSONField(null=True, blank=True, default=list)
+    s3_image_urls = ArrayField(models.TextField(), null=True, blank=True, default=list)
     description = models.TextField(null=True, blank=True)
+    main_menu = models.CharField(max_length=255, null=True, blank=True)
+    naver_alarm_coupon_enabled = models.BooleanField(null=True, blank=True)
+    naver_alarm_coupon_content = models.TextField(null=True, blank=True)
+    people_counts = ArrayField(models.CharField(max_length=20), null=True, blank=True, default=list)
+    meal_purpose = models.CharField(max_length=20, null=True, blank=True)
+    pub_option = models.CharField(max_length=10, null=True, blank=True)
+    soup_option = models.CharField(max_length=10, null=True, blank=True)
+    spicy_option = models.CharField(max_length=10, null=True, blank=True)
+    main_ingredients = ArrayField(models.CharField(max_length=20), null=True, blank=True, default=list)
     pin_secret = models.CharField(max_length=128, null=True, blank=True)
     pin_updated_at = models.DateTimeField(null=True, blank=True)
 
