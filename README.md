@@ -282,7 +282,7 @@ python manage.py create_test_invite_code \
   --type-code ISTJ
 ```
 
-### 쿠폰 만료 처리
+### 만료 쿠폰 삭제
 ```bash
 python manage.py expire_coupons
 ```

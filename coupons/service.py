@@ -30,7 +30,7 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
-GLOBAL_COUPON_EXPIRY = datetime(2026, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
+GLOBAL_COUPON_EXPIRY = datetime(2027, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
 REFERRAL_MAX_REWARDS_PER_REFERRER = 5
 
 # 운영진 계정 카카오 ID 목록 (환경 변수에서 읽어옴, 쉼표로 구분)
