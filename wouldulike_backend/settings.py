@@ -275,9 +275,9 @@ from datetime import timedelta
 
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(days=30),  # 30일
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=90),  # 90일 (장기간 로그인 유지)
-    'ROTATE_REFRESH_TOKENS': True,  # 토큰 갱신 시 새로운 refresh token 발급
-    'BLACKLIST_AFTER_ROTATION': True,  # 토큰 갱신 후 기존 refresh token을 blacklist에 추가
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=180),  # 180일 (로그인 유지 기간 연장)
+    'ROTATE_REFRESH_TOKENS': False,  # 프론트 수정 없이 동일 refresh token 재사용
+    'BLACKLIST_AFTER_ROTATION': False,  # rotation 비활성화와 함께 blacklist도 비활성화
     'ALGORITHM': 'HS256',
     'SIGNING_KEY': SECRET_KEY,
     'AUTH_HEADER_TYPES': ('Bearer',),

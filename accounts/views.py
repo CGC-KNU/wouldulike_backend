@@ -25,6 +25,64 @@ from .utils import merge_guest_data
 logger = logging.getLogger(__name__)
 
 
+def _parse_json_safely(response):
+    try:
+        return response.json() or {}
+    except ValueError:
+        return {}
+
+
+def _is_kakao_token_expired_response(response):
+    """Kakao non-200 응답 중 만료/무효 토큰 케이스를 식별한다."""
+    if response.status_code not in (400, 401):
+        return False
+
+    payload = _parse_json_safely(response)
+    raw_code = payload.get("code")
+    raw_error = payload.get("error")
+    raw_msg = payload.get("msg") or payload.get("message") or payload.get("error_description")
+
+    text_parts = [
+        str(raw_code or "").lower(),
+        str(raw_error or "").lower(),
+        str(raw_msg or "").lower(),
+        (response.text or "")[:300].lower(),
+    ]
+    joined = " ".join(text_parts)
+    return any(keyword in joined for keyword in ("expired", "invalid token", "token", "만료", "-401"))
+
+
+def _log_kakao_non_200(user_agent, client_ip, response, is_token_expired):
+    """
+    카카오 비정상 응답 로그를 샘플링한다.
+    - 만료/무효 토큰은 info 레벨(노이즈 완화)
+    - 그 외는 warning 레벨 유지
+    """
+    kind = "token" if is_token_expired else "error"
+    cache_key = f"kakao_login_non200:{kind}:{response.status_code}:{client_ip}"
+    if not cache.add(cache_key, "1", timeout=60):
+        return
+
+    log_msg = (
+        f"Kakao API non-200 ({'token_expired_or_invalid' if is_token_expired else 'unexpected'}) "
+        f"status={response.status_code} - User-Agent: {user_agent}, "
+        f"Response: {(response.text or '')[:200]}"
+    )
+    if is_token_expired:
+        logger.info(log_msg)
+    else:
+        logger.warning(log_msg)
+
+
+def _mint_tokens_with_expiry(user):
+    tokens = generate_tokens_for_user(user)
+    refresh = RefreshToken(tokens["refresh"])
+    access_token_obj = refresh.access_token
+    tokens["access_expires_at"] = access_token_obj["exp"]
+    tokens["refresh_expires_at"] = refresh["exp"]
+    return tokens
+
+
 def _parse_favorite_restaurants(value):
     if value in (None, ""):
         return []
@@ -128,19 +186,72 @@ class KakaoLoginView(APIView):
     authentication_classes = []
 
     def post(self, request):
-        # 요청 스펙: JSON body로 access_token(필수), guest_uuid(선택)
+        # 요청 스펙: JSON body로 refresh(선택), access_token(선택), guest_uuid(선택)
         user_agent = request.META.get('HTTP_USER_AGENT', 'Unknown')
         client_ip = request.META.get('REMOTE_ADDR', 'Unknown')
         
         try:
+            refresh_token = request.data.get('refresh') or request.data.get('refresh_token')
             access_token = request.data.get('access_token') or request.data.get('accessToken')
             guest_uuid = request.data.get('guest_uuid')
             
-            logger.info(f'Login attempt - User-Agent: {user_agent}, IP: {client_ip}, Has token: {bool(access_token)}')
-            
+            logger.info(
+                f'Login attempt - User-Agent: {user_agent}, IP: {client_ip}, '
+                f'Has kakao_access_token: {bool(access_token)}, Has refresh_token: {bool(refresh_token)}'
+            )
+
+            # 0) 우리 refresh token이 있으면 카카오 검증보다 우선 처리
+            if refresh_token:
+                try:
+                    refresh_obj = RefreshToken(refresh_token)
+                    user = refresh_obj.user
+                    tokens = _mint_tokens_with_expiry(user)
+
+                    # 앱 접속(로그인) 쿠폰 발급 - 실패해도 로그인은 계속 진행
+                    try:
+                        issue_app_open_coupon(user)
+                    except Exception as exc:
+                        logger.warning(
+                            "failed to issue app-open coupon on refresh-first login for user %s: %s",
+                            user.id,
+                            exc,
+                            exc_info=True,
+                        )
+
+                    resp = {
+                        'token': tokens,
+                        'user': {
+                            'id': user.id,
+                            'kakao_id': user.kakao_id,
+                            'nickname': user.nickname or '',
+                            'profile_image_url': '',
+                        },
+                        'is_new': False,
+                        'auth_method': 'refresh',
+                    }
+                    logger.info(
+                        f'Refresh-first login successful - User-Agent: {user_agent}, '
+                        f'IP: {client_ip}, User ID: {user.id}'
+                    )
+                    return Response(resp, status=status.HTTP_200_OK)
+                except TokenError as exc:
+                    logger.info(
+                        f'Refresh-first login unavailable (invalid/expired refresh): '
+                        f'User-Agent: {user_agent}, IP: {client_ip}, Error: {str(exc)}'
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        f'Refresh-first login failed unexpectedly - User-Agent: {user_agent}, '
+                        f'IP: {client_ip}, Error: {str(exc)}',
+                        exc_info=True,
+                    )
+
             if not access_token:
-                logger.warning(f'Login failed: access_token missing - User-Agent: {user_agent}')
-                return Response({'detail': 'access_token is required'}, status=status.HTTP_400_BAD_REQUEST)
+                logger.warning(f'Login failed: access_token and refresh missing - User-Agent: {user_agent}')
+                return Response(
+                    {'detail': 'access_token or refresh is required', 'code': 'invalid_request'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             # 1) Kakao 프로필 조회
             try:
@@ -160,8 +271,21 @@ class KakaoLoginView(APIView):
                 return Response({'detail': 'kakao_api_error', 'code': 'unknown'}, status=status.HTTP_502_BAD_GATEWAY)
 
             if kakao_response.status_code != 200:
-                logger.warning(f'Kakao API returned non-200 status: {kakao_response.status_code} - User-Agent: {user_agent}, Response: {kakao_response.text[:200]}')
-                return Response({'detail': 'kakao_token_invalid', 'code': f'http_{kakao_response.status_code}'}, status=status.HTTP_401_UNAUTHORIZED)
+                is_token_expired = _is_kakao_token_expired_response(kakao_response)
+                _log_kakao_non_200(
+                    user_agent=user_agent,
+                    client_ip=client_ip,
+                    response=kakao_response,
+                    is_token_expired=is_token_expired,
+                )
+                return Response(
+                    {
+                        'detail': 'kakao_token_invalid',
+                        'code': 'kakao_token_expired' if is_token_expired else f'http_{kakao_response.status_code}',
+                        'relogin_required': True if is_token_expired else False,
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
 
             # JSON 파싱 처리 (UTF-8 BOM 및 잘못된 MIME 타입 대비)
             try:
@@ -253,13 +377,7 @@ class KakaoLoginView(APIView):
 
             # 3) JWT 발급
             try:
-                tokens = generate_tokens_for_user(user)
-                
-                # 토큰 만료 시간 정보 추가
-                refresh = RefreshToken(tokens['refresh'])
-                access_token_obj = refresh.access_token
-                tokens['access_expires_at'] = access_token_obj['exp']  # Unix timestamp
-                tokens['refresh_expires_at'] = refresh['exp']  # Unix timestamp
+                tokens = _mint_tokens_with_expiry(user)
             except Exception as e:
                 logger.error(f'Token generation error - User-Agent: {user_agent}, IP: {client_ip}, User ID: {user.id}, Error: {str(e)}', exc_info=True)
                 return Response({'detail': 'internal_error', 'code': 'token_generation_failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
