@@ -7,4 +7,7 @@ from .models import Coupon
 @shared_task
 def expire_coupons():
     now = timezone.now()
-    Coupon.objects.filter(status="ISSUED", expires_at__lt=now).update(status="EXPIRED")
+    Coupon.objects.filter(
+        status__in=["ISSUED", "EXPIRED"],
+        expires_at__lt=now,
+    ).delete()

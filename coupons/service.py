@@ -31,7 +31,7 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
-GLOBAL_COUPON_EXPIRY = datetime(2026, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
+GLOBAL_COUPON_EXPIRY = datetime(2027, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
 REFERRAL_MAX_REWARDS_PER_REFERRER = 5
 
 # 운영진 계정 카카오 ID 목록 (환경 변수에서 읽어옴, 쉼표로 구분)
@@ -1359,6 +1359,33 @@ def get_all_stamp_statuses(user: User):
         )
 
     return results
+
+
+def get_active_affiliate_restaurant_ids_for_user(user: User) -> list[int]:
+    """사용자 기준 진행 중 제휴식당 ID 목록 반환."""
+    now = timezone.now()
+    coupon_alias = router.db_for_read(Coupon)
+    stamp_alias = router.db_for_read(StampWallet)
+
+    coupon_ids = (
+        Coupon.objects.using(coupon_alias)
+        .filter(
+            user=user,
+            status="ISSUED",
+            expires_at__gte=now,
+            restaurant_id__isnull=False,
+        )
+        .values_list("restaurant_id", flat=True)
+        .distinct()
+    )
+    stamp_ids = (
+        StampWallet.objects.using(stamp_alias)
+        .filter(user=user, stamps__gt=0)
+        .values_list("restaurant_id", flat=True)
+        .distinct()
+    )
+
+    return sorted(set(coupon_ids) | set(stamp_ids))
 
 
 def get_stamp_status(user: User, restaurant_id: int):
