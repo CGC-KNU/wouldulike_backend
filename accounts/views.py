@@ -1,7 +1,6 @@
 import json
 import requests
 from django.conf import settings
-from django.db import connection
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -16,7 +15,6 @@ from django.views.decorators.csrf import csrf_exempt
 from django.core.cache import cache
 import os
 import logging
-import time
 
 from .models import User
 from guests.models import GuestUser
@@ -27,7 +25,9 @@ from .utils import merge_guest_data
 logger = logging.getLogger(__name__)
 
 KAKAO_USERINFO_TIMEOUT_SECONDS = float(os.getenv("KAKAO_USERINFO_TIMEOUT_SECONDS", "10"))
-KAKAO_LOGIN_SLOW_STAGE_MS = int(os.getenv("KAKAO_LOGIN_SLOW_STAGE_MS", "1000"))
+AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN = os.getenv("AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN", "1") in ("1", "true", "True")
+AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN = os.getenv("AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN", "1") in ("1", "true", "True")
+AUTH_ISSUE_APP_OPEN_COUPON_ON_REFRESH = os.getenv("AUTH_ISSUE_APP_OPEN_COUPON_ON_REFRESH", "1") in ("1", "true", "True")
 
 
 def _parse_json_safely(response):
@@ -86,106 +86,6 @@ def _mint_tokens_with_expiry(user):
     tokens["access_expires_at"] = access_token_obj["exp"]
     tokens["refresh_expires_at"] = refresh["exp"]
     return tokens
-
-
-def _log_kakao_stage(request_id, stage, started_at):
-    elapsed_ms = int((time.perf_counter() - started_at) * 1000)
-    level = logging.WARNING if elapsed_ms >= KAKAO_LOGIN_SLOW_STAGE_MS else logging.INFO
-    logger.log(level, "[kakao_login][%s] %s elapsed_ms=%s", request_id, stage, elapsed_ms)
-    return elapsed_ms
-
-
-def _log_pg_lock_wait_snapshot(request_id, stage):
-    """
-    현재 요청을 처리하는 DB 세션의 lock wait 상태를 로깅한다.
-    PostgreSQL이 아닐 경우 no-op.
-    """
-    if connection.vendor != "postgresql":
-        return
-
-    try:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT
-                    a.pid,
-                    a.state,
-                    a.wait_event_type,
-                    a.wait_event,
-                    COALESCE(EXTRACT(EPOCH FROM (now() - a.query_start)), 0),
-                    pg_blocking_pids(a.pid)
-                FROM pg_stat_activity a
-                WHERE a.pid = pg_backend_pid()
-                """
-            )
-            row = cursor.fetchone()
-
-            if not row:
-                return
-
-            pid, state, wait_event_type, wait_event, query_age_seconds, blocking_pids = row
-            blocking_pids = blocking_pids or []
-
-            logger.info(
-                "[kakao_login][%s] db_activity stage=%s pid=%s state=%s wait_event_type=%s wait_event=%s query_age_s=%.3f blocking_pids=%s",
-                request_id,
-                stage,
-                pid,
-                state,
-                wait_event_type,
-                wait_event,
-                float(query_age_seconds or 0),
-                blocking_pids,
-            )
-
-            if not blocking_pids:
-                return
-
-            cursor.execute(
-                """
-                SELECT
-                    pid,
-                    usename,
-                    state,
-                    wait_event_type,
-                    wait_event,
-                    COALESCE(EXTRACT(EPOCH FROM (now() - query_start)), 0),
-                    left(query, 300)
-                FROM pg_stat_activity
-                WHERE pid = ANY(%s)
-                """,
-                [blocking_pids],
-            )
-            blockers = cursor.fetchall()
-            for blocker in blockers:
-                (
-                    blocker_pid,
-                    blocker_user,
-                    blocker_state,
-                    blocker_wait_event_type,
-                    blocker_wait_event,
-                    blocker_query_age_seconds,
-                    blocker_query,
-                ) = blocker
-                logger.warning(
-                    "[kakao_login][%s] db_blocker stage=%s blocker_pid=%s blocker_user=%s blocker_state=%s blocker_wait_event_type=%s blocker_wait_event=%s blocker_query_age_s=%.3f blocker_query=%s",
-                    request_id,
-                    stage,
-                    blocker_pid,
-                    blocker_user,
-                    blocker_state,
-                    blocker_wait_event_type,
-                    blocker_wait_event,
-                    float(blocker_query_age_seconds or 0),
-                    blocker_query,
-                )
-    except Exception as exc:
-        logger.warning(
-            "[kakao_login][%s] failed to inspect pg lock wait: %s",
-            request_id,
-            exc,
-            exc_info=True,
-        )
 
 
 def _parse_favorite_restaurants(value):
@@ -294,8 +194,6 @@ class KakaoLoginView(APIView):
         # 요청 스펙: JSON body로 refresh(선택), access_token(선택), guest_uuid(선택)
         user_agent = request.META.get('HTTP_USER_AGENT', 'Unknown')
         client_ip = request.META.get('REMOTE_ADDR', 'Unknown')
-        request_started_at = time.perf_counter()
-        request_id = f"{int(request_started_at * 1000)}-{client_ip}"
         
         try:
             refresh_token = request.data.get('refresh') or request.data.get('refresh_token')
@@ -315,15 +213,16 @@ class KakaoLoginView(APIView):
                     tokens = _mint_tokens_with_expiry(user)
 
                     # 앱 접속(로그인) 쿠폰 발급 - 실패해도 로그인은 계속 진행
-                    try:
-                        issue_app_open_coupon(user)
-                    except Exception as exc:
-                        logger.warning(
-                            "failed to issue app-open coupon on refresh-first login for user %s: %s",
-                            user.id,
-                            exc,
-                            exc_info=True,
-                        )
+                    if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
+                        try:
+                            issue_app_open_coupon(user)
+                        except Exception as exc:
+                            logger.warning(
+                                "failed to issue app-open coupon on refresh-first login for user %s: %s",
+                                user.id,
+                                exc,
+                                exc_info=True,
+                            )
 
                     resp = {
                         'token': tokens,
@@ -361,7 +260,6 @@ class KakaoLoginView(APIView):
                 )
 
             # 1) Kakao 프로필 조회
-            kakao_userinfo_started_at = time.perf_counter()
             try:
                 kakao_response = requests.get(
                     'https://kapi.kakao.com/v2/user/me',
@@ -394,7 +292,6 @@ class KakaoLoginView(APIView):
                     },
                     status=status.HTTP_401_UNAUTHORIZED,
                 )
-            _log_kakao_stage(request_id, "kakao_user_me_done", kakao_userinfo_started_at)
 
             # JSON 파싱 처리 (UTF-8 BOM 및 잘못된 MIME 타입 대비)
             try:
@@ -447,16 +344,11 @@ class KakaoLoginView(APIView):
                 return Response({'detail': 'kakao_profile_invalid'}, status=status.HTTP_400_BAD_REQUEST)
 
             # 2) 사용자 매핑/생성: kakao_id 기준
-            logger.info("[kakao_login][%s] db_get_or_create_start", request_id)
-            _log_pg_lock_wait_snapshot(request_id, "before_db_get_or_create")
-            db_get_or_create_started_at = time.perf_counter()
             try:
                 user, created = User.objects.get_or_create(kakao_id=kakao_id)
             except Exception as e:
                 logger.error(f'User creation/retrieval error - User-Agent: {user_agent}, IP: {client_ip}, Kakao ID: {kakao_id}, Error: {str(e)}', exc_info=True)
                 return Response({'detail': 'internal_error', 'code': 'user_creation_failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            _log_kakao_stage(request_id, "db_get_or_create_done", db_get_or_create_started_at)
-            _log_pg_lock_wait_snapshot(request_id, "after_db_get_or_create")
 
             # guest_uuid가 있으면 게스트 데이터 귀속 (선택 구현)
             if guest_uuid:
@@ -467,9 +359,7 @@ class KakaoLoginView(APIView):
                     # 게스트 데이터 병합 실패는 치명적이지 않으므로 계속 진행
 
             signup_coupon_code = None
-            if created:
-                signup_coupon_started_at = time.perf_counter()
-                logger.info("[kakao_login][%s] signup_coupon_issue_start user_id=%s", request_id, user.id)
+            if created and AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN:
                 try:
                     coupon = issue_signup_coupon(user)
                     signup_coupon_code = coupon.code
@@ -479,31 +369,25 @@ class KakaoLoginView(APIView):
                         user.id,
                         exc,
                     )
-                _log_kakao_stage(request_id, "signup_coupon_issue_done", signup_coupon_started_at)
 
             # 앱 접속(로그인) 쿠폰 발급 - 실패해도 로그인은 계속 진행
-            app_open_coupon_started_at = time.perf_counter()
-            logger.info("[kakao_login][%s] app_open_coupon_issue_start user_id=%s", request_id, user.id)
-            try:
-                issue_app_open_coupon(user)
-            except Exception as exc:
-                logger.warning(
-                    "failed to issue app-open coupon on login for user %s: %s",
-                    user.id,
-                    exc,
-                    exc_info=True,
-                )
-            _log_kakao_stage(request_id, "app_open_coupon_issue_done", app_open_coupon_started_at)
+            if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
+                try:
+                    issue_app_open_coupon(user)
+                except Exception as exc:
+                    logger.warning(
+                        "failed to issue app-open coupon on login for user %s: %s",
+                        user.id,
+                        exc,
+                        exc_info=True,
+                    )
 
             # 3) JWT 발급
-            logger.info("[kakao_login][%s] jwt_mint_start user_id=%s", request_id, user.id)
-            jwt_mint_started_at = time.perf_counter()
             try:
                 tokens = _mint_tokens_with_expiry(user)
             except Exception as e:
                 logger.error(f'Token generation error - User-Agent: {user_agent}, IP: {client_ip}, User ID: {user.id}, Error: {str(e)}', exc_info=True)
                 return Response({'detail': 'internal_error', 'code': 'token_generation_failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-            _log_kakao_stage(request_id, "jwt_mint_done", jwt_mint_started_at)
 
             # 응답 스키마: token/access+refresh, user/id+kakao_id+nickname+profile_image_url
             resp = {
@@ -519,7 +403,6 @@ class KakaoLoginView(APIView):
             if signup_coupon_code:
                 resp['signup_coupon_code'] = signup_coupon_code
             
-            _log_kakao_stage(request_id, "before_response", request_started_at)
             logger.info(f'Login successful - User-Agent: {user_agent}, IP: {client_ip}, User ID: {user.id}, Kakao ID: {kakao_id}, Is New: {created}')
             return Response(resp, status=status.HTTP_200_OK)
             
@@ -561,14 +444,25 @@ class CustomTokenRefreshView(BaseTokenRefreshView):
         try:
             # 기존 refresh token 검증
             refresh = RefreshToken(refresh_token)
+            user_id = refresh.get("user_id")
+            user = User.objects.filter(id=user_id).first() if user_id else None
             
             # ROTATE_REFRESH_TOKENS가 True일 때, 새로운 refresh token 생성
             # BaseTokenRefreshView의 로직을 따름
             if settings.SIMPLE_JWT.get('ROTATE_REFRESH_TOKENS', False):
                 # 기존 refresh token을 blacklist에 추가
                 refresh.blacklist()
+                if user is None:
+                    logger.warning("Token refresh failed: user not found for user_id=%s", user_id)
+                    return Response(
+                        {
+                            'detail': 'Token is invalid or expired',
+                            'code': 'token_not_valid'
+                        },
+                        status=status.HTTP_401_UNAUTHORIZED
+                    )
                 # 새로운 refresh token 생성
-                new_refresh = RefreshToken.for_user(refresh.user)
+                new_refresh = RefreshToken.for_user(user)
                 new_access = new_refresh.access_token
                 
                 response_data = {
@@ -588,22 +482,24 @@ class CustomTokenRefreshView(BaseTokenRefreshView):
                 }
 
             # 앱 접속(토큰 갱신) 쿠폰 발급 - 실패해도 토큰 갱신은 계속 진행
-            try:
-                user = getattr(refresh, "user", None)
-                if user is not None:
-                    issue_app_open_coupon(user)
-            except Exception as exc:
-                logger.warning(
-                    "failed to issue app-open coupon on token refresh for user %s: %s",
-                    getattr(user, "id", None),
-                    exc,
-                    exc_info=True,
-                )
+            if AUTH_ISSUE_APP_OPEN_COUPON_ON_REFRESH:
+                try:
+                    if user is not None:
+                        issue_app_open_coupon(user)
+                except Exception as exc:
+                    logger.warning(
+                        "failed to issue app-open coupon on token refresh for user %s: %s",
+                        getattr(user, "id", None),
+                        exc,
+                        exc_info=True,
+                    )
+            else:
+                logger.info("app-open coupon issue skipped on token refresh by env")
 
             # 캐시에 저장 (5초 동안 유효) - 동시 요청 방지
             cache.set(cache_key, response_data, timeout=5)
 
-            logger.info(f'Token refreshed successfully for user {refresh.user.id}')
+            logger.info("Token refreshed successfully for user %s", user_id)
             return Response(response_data, status=status.HTTP_200_OK)
 
         except TokenError as e:
