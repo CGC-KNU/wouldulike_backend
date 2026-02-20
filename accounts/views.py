@@ -1,6 +1,7 @@
 import json
 import requests
 from django.conf import settings
+from django.db import router
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -86,6 +87,20 @@ def _mint_tokens_with_expiry(user):
     tokens["access_expires_at"] = access_token_obj["exp"]
     tokens["refresh_expires_at"] = refresh["exp"]
     return tokens
+
+
+def _resolve_user_from_refresh_token(refresh_token: str):
+    refresh_obj = RefreshToken(refresh_token)
+    user_id = refresh_obj.get("user_id")
+    if not user_id:
+        raise TokenError("token_missing_user_id")
+
+    user_db_alias = router.db_for_read(User)
+    user = User.objects.using(user_db_alias).filter(id=user_id).first()
+    if user is None:
+        raise TokenError("token_user_not_found")
+
+    return refresh_obj, user, user_id, user_db_alias
 
 
 def _parse_favorite_restaurants(value):
@@ -208,21 +223,8 @@ class KakaoLoginView(APIView):
             # 0) 우리 refresh token이 있으면 카카오 검증보다 우선 처리
             if refresh_token:
                 try:
-                    refresh_obj = RefreshToken(refresh_token)
-                    user = refresh_obj.user
+                    refresh_obj, user, _, _ = _resolve_user_from_refresh_token(refresh_token)
                     tokens = _mint_tokens_with_expiry(user)
-
-                    # 앱 접속(로그인) 쿠폰 발급 - 실패해도 로그인은 계속 진행
-                    if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
-                        try:
-                            issue_app_open_coupon(user)
-                        except Exception as exc:
-                            logger.warning(
-                                "failed to issue app-open coupon on refresh-first login for user %s: %s",
-                                user.id,
-                                exc,
-                                exc_info=True,
-                            )
 
                     resp = {
                         'token': tokens,
@@ -443,24 +445,13 @@ class CustomTokenRefreshView(BaseTokenRefreshView):
 
         try:
             # 기존 refresh token 검증
-            refresh = RefreshToken(refresh_token)
-            user_id = refresh.get("user_id")
-            user = User.objects.filter(id=user_id).first() if user_id else None
+            refresh, user, user_id, user_db_alias = _resolve_user_from_refresh_token(refresh_token)
             
             # ROTATE_REFRESH_TOKENS가 True일 때, 새로운 refresh token 생성
             # BaseTokenRefreshView의 로직을 따름
             if settings.SIMPLE_JWT.get('ROTATE_REFRESH_TOKENS', False):
                 # 기존 refresh token을 blacklist에 추가
                 refresh.blacklist()
-                if user is None:
-                    logger.warning("Token refresh failed: user not found for user_id=%s", user_id)
-                    return Response(
-                        {
-                            'detail': 'Token is invalid or expired',
-                            'code': 'token_not_valid'
-                        },
-                        status=status.HTTP_401_UNAUTHORIZED
-                    )
                 # 새로운 refresh token 생성
                 new_refresh = RefreshToken.for_user(user)
                 new_access = new_refresh.access_token
@@ -499,7 +490,7 @@ class CustomTokenRefreshView(BaseTokenRefreshView):
             # 캐시에 저장 (5초 동안 유효) - 동시 요청 방지
             cache.set(cache_key, response_data, timeout=5)
 
-            logger.info("Token refreshed successfully for user %s", user_id)
+            logger.info("Token refreshed successfully for user %s (db=%s)", user_id, user_db_alias)
             return Response(response_data, status=status.HTTP_200_OK)
 
         except TokenError as e:
