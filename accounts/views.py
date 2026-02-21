@@ -20,13 +20,15 @@ import logging
 from .models import User
 from guests.models import GuestUser
 from .jwt_utils import generate_tokens_for_user
-from coupons.service import issue_signup_coupon
+from coupons.service import issue_signup_coupon, issue_app_open_coupon
 from .utils import merge_guest_data
 
 logger = logging.getLogger(__name__)
 
 KAKAO_USERINFO_TIMEOUT_SECONDS = float(os.getenv("KAKAO_USERINFO_TIMEOUT_SECONDS", "10"))
 AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN = os.getenv("AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN", "1") in ("1", "true", "True")
+AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN = os.getenv("AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN", "1") in ("1", "true", "True")
+AUTH_ISSUE_APP_OPEN_COUPON_ON_REFRESH = os.getenv("AUTH_ISSUE_APP_OPEN_COUPON_ON_REFRESH", "1") in ("1", "true", "True")
 
 
 def _parse_json_safely(response):
@@ -224,6 +226,18 @@ class KakaoLoginView(APIView):
                     refresh_obj, user, _, _ = _resolve_user_from_refresh_token(refresh_token)
                     tokens = _mint_tokens_with_expiry(user)
 
+                    # 앱 접속(로그인) 쿠폰 발급 - 실패해도 로그인은 계속 진행
+                    if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
+                        try:
+                            issue_app_open_coupon(user)
+                        except Exception as exc:
+                            logger.warning(
+                                "failed to issue app-open coupon on refresh-first login for user %s: %s",
+                                user.id,
+                                exc,
+                                exc_info=True,
+                            )
+
                     resp = {
                         'token': tokens,
                         'user': {
@@ -370,6 +384,18 @@ class KakaoLoginView(APIView):
                         exc,
                     )
 
+            # 앱 접속(로그인) 쿠폰 발급 - 실패해도 로그인은 계속 진행
+            if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
+                try:
+                    issue_app_open_coupon(user)
+                except Exception as exc:
+                    logger.warning(
+                        "failed to issue app-open coupon on login for user %s: %s",
+                        user.id,
+                        exc,
+                        exc_info=True,
+                    )
+
             # 3) JWT 발급
             try:
                 tokens = _mint_tokens_with_expiry(user)
@@ -457,6 +483,19 @@ class CustomTokenRefreshView(BaseTokenRefreshView):
                     'access_expires_at': new_access['exp'],  # Unix timestamp
                     'refresh_expires_at': refresh['exp'],  # Unix timestamp
                 }
+
+            # 앱 접속(토큰 갱신) 쿠폰 발급 - 실패해도 토큰 갱신은 계속 진행
+            if AUTH_ISSUE_APP_OPEN_COUPON_ON_REFRESH:
+                try:
+                    if user is not None:
+                        issue_app_open_coupon(user)
+                except Exception as exc:
+                    logger.warning(
+                        "failed to issue app-open coupon on token refresh for user %s: %s",
+                        getattr(user, "id", None),
+                        exc,
+                        exc_info=True,
+                    )
 
             # 캐시에 저장 (5초 동안 유효) - 동시 요청 방지
             cache.set(cache_key, response_data, timeout=5)

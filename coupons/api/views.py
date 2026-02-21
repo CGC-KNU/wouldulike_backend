@@ -19,6 +19,7 @@ from ..service import (
     get_stamp_status,
     check_and_expire_coupon,
     claim_final_exam_coupon,
+    issue_app_open_coupon,
 )
 from .serializers import CouponSerializer, InviteCodeSerializer
 
@@ -35,6 +36,30 @@ class MyCouponsView(generics.ListAPIView):
         user = self.request.user
         request_id = getattr(self.request, "_request_id", "n/a")
         logger.info("[req:%s] MyCouponsView.get_queryset start user=%s", request_id, getattr(user, "id", None))
+
+        # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
+        if getattr(user, "is_authenticated", False):
+            try:
+                coupons = issue_app_open_coupon(user)
+                if coupons:
+                    codes = [c.code for c in coupons]
+                    logger.info(
+                        "app-open coupons ensured on my coupons list (user=%s, codes=%s)",
+                        user.id,
+                        codes,
+                    )
+                else:
+                    logger.info(
+                        "no app-open coupon issued on my coupons list (user=%s, reason=already_issued_or_campaign_inactive_or_out_of_period)",
+                        user.id,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "failed to issue app-open coupon on my coupons list for user %s: %s",
+                    getattr(user, "id", None),
+                    exc,
+                    exc_info=True,
+                )
 
         qs = (
             Coupon.objects.select_related("coupon_type", "campaign")
