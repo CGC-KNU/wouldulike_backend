@@ -5,7 +5,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 import logging
-import time
 
 from ..models import Coupon
 from ..service import (
@@ -20,7 +19,6 @@ from ..service import (
     get_stamp_status,
     check_and_expire_coupon,
     claim_final_exam_coupon,
-    issue_app_open_coupon,
 )
 from .serializers import CouponSerializer, InviteCodeSerializer
 
@@ -37,44 +35,6 @@ class MyCouponsView(generics.ListAPIView):
         user = self.request.user
         request_id = getattr(self.request, "_request_id", "n/a")
         logger.info("[req:%s] MyCouponsView.get_queryset start user=%s", request_id, getattr(user, "id", None))
-
-        # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
-        if getattr(user, "is_authenticated", False):
-            issue_started_at = time.perf_counter()
-            try:
-                coupons = issue_app_open_coupon(user)
-                if coupons:
-                    codes = [c.code for c in coupons]
-                    logger.info(
-                        "app-open coupons ensured on my coupons list "
-                        "(user=%s, codes=%s)",
-                        user.id,
-                        codes,
-                    )
-                else:
-                    logger.info(
-                        "no app-open coupon issued on my coupons list "
-                        "(user=%s, reason=already_issued_or_campaign_inactive_or_out_of_period)",
-                        user.id,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                # 쿠폰 발급 실패가 내 쿠폰 목록 조회 자체를 막지 않도록 예외는 로깅만 하고 무시
-                logger.warning(
-                    "failed to issue app-open coupon on my coupons list for user %s: %s",
-                    getattr(user, "id", None),
-                    exc,
-                    exc_info=True,
-                )
-            finally:
-                elapsed_ms = int((time.perf_counter() - issue_started_at) * 1000)
-                level = logging.WARNING if elapsed_ms >= 3000 else logging.INFO
-                logger.log(
-                    level,
-                    "[req:%s] issue_app_open_coupon in MyCouponsView elapsed_ms=%s user=%s",
-                    request_id,
-                    elapsed_ms,
-                    getattr(user, "id", None),
-                )
 
         qs = (
             Coupon.objects.select_related("coupon_type", "campaign")
