@@ -5,6 +5,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
 import logging
+import time
 
 from ..models import Coupon
 from ..service import (
@@ -34,9 +35,12 @@ class MyCouponsView(generics.ListAPIView):
 
     def get_queryset(self):
         user = self.request.user
+        request_id = getattr(self.request, "_request_id", "n/a")
+        logger.info("[req:%s] MyCouponsView.get_queryset start user=%s", request_id, getattr(user, "id", None))
 
         # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
         if getattr(user, "is_authenticated", False):
+            issue_started_at = time.perf_counter()
             try:
                 coupons = issue_app_open_coupon(user)
                 if coupons:
@@ -61,6 +65,16 @@ class MyCouponsView(generics.ListAPIView):
                     exc,
                     exc_info=True,
                 )
+            finally:
+                elapsed_ms = int((time.perf_counter() - issue_started_at) * 1000)
+                level = logging.WARNING if elapsed_ms >= 3000 else logging.INFO
+                logger.log(
+                    level,
+                    "[req:%s] issue_app_open_coupon in MyCouponsView elapsed_ms=%s user=%s",
+                    request_id,
+                    elapsed_ms,
+                    getattr(user, "id", None),
+                )
 
         qs = (
             Coupon.objects.select_related("coupon_type", "campaign")
@@ -70,6 +84,7 @@ class MyCouponsView(generics.ListAPIView):
         status_q = self.request.query_params.get("status")
         if status_q:
             qs = qs.filter(status=status_q)
+        logger.info("[req:%s] MyCouponsView.get_queryset end user=%s", request_id, getattr(user, "id", None))
         return qs
 
 
