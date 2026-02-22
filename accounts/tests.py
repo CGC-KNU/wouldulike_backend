@@ -166,3 +166,76 @@ class UserMeTests(DisableCouponSignalMixin, APITestCase):
         self.assertEqual(response.status_code, 200)
         self.user.refresh_from_db()
         self.assertEqual(self.user.type_code, 'MILD')
+
+    def test_patch_rejects_nickname_with_spaces(self):
+        self.authenticate()
+        response = self.client.patch('/api/users/me/', {'nickname': 'jae min'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data.get('code'), 'nickname_invalid_format')
+
+    def test_patch_rejects_nickname_with_special_chars(self):
+        self.authenticate()
+        response = self.client.patch('/api/users/me/', {'nickname': 'jaemin!'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data.get('code'), 'nickname_invalid_format')
+
+    def test_patch_rejects_nickname_too_long(self):
+        self.authenticate()
+        response = self.client.patch('/api/users/me/', {'nickname': 'a' * 16}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data.get('code'), 'nickname_too_long')
+
+    def test_patch_rejects_duplicated_nickname_case_insensitive(self):
+        User.objects.create_user(kakao_id=99999, nickname='Jaemin')
+        self.authenticate()
+        response = self.client.patch('/api/users/me/', {'nickname': 'jaemin'}, format='json')
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.data.get('code'), 'nickname_duplicated')
+
+    def test_patch_updates_profile_codes(self):
+        self.authenticate()
+        payload = {
+            'school_code': 'knu',
+            'college_code': 'eng',
+            'department_code': 'cse',
+        }
+        response = self.client.patch('/api/users/me/', payload, format='json')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['school_code'], 'KNU')
+        self.assertEqual(response.data['college_code'], 'ENG')
+        self.assertEqual(response.data['department_code'], 'CSE')
+
+    def test_patch_rejects_invalid_profile_code(self):
+        self.authenticate()
+        response = self.client.patch('/api/users/me/', {'school_code': 'KNU-1'}, format='json')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data.get('code'), 'invalid_profile_code')
+
+
+class NicknameAvailabilityTests(DisableCouponSignalMixin, APITestCase):
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(kakao_id=11111)
+        self.client.force_authenticate(user=self.user)
+
+    def test_nickname_availability_returns_false_when_duplicated(self):
+        User.objects.create_user(kakao_id=22222, nickname='Tester')
+        response = self.client.get('/api/users/nickname-availability?nickname=tester')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['available'])
+        self.assertEqual(response.data['code'], 'nickname_duplicated')
+
+    def test_nickname_availability_rejects_invalid_format(self):
+        response = self.client.get('/api/users/nickname-availability?nickname=test er')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data.get('code'), 'nickname_invalid_format')
+
+    def test_nickname_availability_rejects_nickname_too_long(self):
+        response = self.client.get(f"/api/users/nickname-availability?nickname={'a' * 16}")
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data.get('code'), 'nickname_too_long')
+
+    def test_nickname_availability_with_slash_path(self):
+        response = self.client.get('/api/users/nickname-availability/?nickname=tester2')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['available'])

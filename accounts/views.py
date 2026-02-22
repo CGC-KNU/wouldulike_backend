@@ -1,7 +1,9 @@
 import json
+import re
 import requests
 from django.conf import settings
 from django.db import router
+from django.db import IntegrityError
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
@@ -29,6 +31,9 @@ KAKAO_USERINFO_TIMEOUT_SECONDS = float(os.getenv("KAKAO_USERINFO_TIMEOUT_SECONDS
 AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN = os.getenv("AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN", "1") in ("1", "true", "True")
 AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN = os.getenv("AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN", "1") in ("1", "true", "True")
 AUTH_ISSUE_APP_OPEN_COUPON_ON_REFRESH = os.getenv("AUTH_ISSUE_APP_OPEN_COUPON_ON_REFRESH", "1") in ("1", "true", "True")
+NICKNAME_PATTERN = re.compile(r"^[A-Za-z0-9가-힣]+$")
+NICKNAME_MAX_LENGTH = 15
+PROFILE_CODE_PATTERN = re.compile(r"^[A-Z0-9_]+$")
 
 
 def _parse_json_safely(response):
@@ -127,6 +132,9 @@ def _serialize_user(user: User):
         'student_id': user.student_id,
         'department': user.department,
         'school': user.school,
+        'school_code': user.school_code,
+        'college_code': user.college_code,
+        'department_code': user.department_code,
         'type_code': user.type_code,
         'favorite_restaurants': favorites_payload,
         'fcm_token': user.fcm_token,
@@ -720,6 +728,50 @@ class DevLoginView(APIView):
         return Response(resp, status=status.HTTP_200_OK)
 
 
+class NicknameAvailabilityView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        raw_nickname = request.query_params.get("nickname")
+        if raw_nickname is None:
+            return Response(
+                {"detail": "nickname is required", "code": "invalid_request"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        nickname = str(raw_nickname).strip()
+        if not nickname:
+            return Response(
+                {"detail": "nickname is required", "code": "invalid_request"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if len(nickname) > NICKNAME_MAX_LENGTH:
+            return Response(
+                {"detail": f"nickname must be at most {NICKNAME_MAX_LENGTH} characters", "code": "nickname_too_long"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not NICKNAME_PATTERN.fullmatch(nickname):
+            return Response(
+                {
+                    "detail": "nickname allows only Korean/English letters and numbers (no spaces/special chars)",
+                    "code": "nickname_invalid_format",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        exists = User.objects.filter(nickname__iexact=nickname).exclude(id=request.user.id).exists()
+        if exists:
+            return Response(
+                {"available": False, "code": "nickname_duplicated"},
+                status=status.HTTP_200_OK,
+            )
+
+        return Response({"available": True}, status=status.HTTP_200_OK)
+
+
 class UserMeView(APIView):
     authentication_classes = [JWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -735,7 +787,39 @@ class UserMeView(APIView):
         data = request.data or {}
         update_fields = set()
 
-        for attr, max_len in (('nickname', 50), ('student_id', 20), ('department', 100), ('school', 100)):
+        if 'nickname' in data:
+            raw_nickname = data.get('nickname')
+            if raw_nickname is not None and raw_nickname != '':
+                nickname = str(raw_nickname).strip()
+                if len(nickname) > NICKNAME_MAX_LENGTH:
+                    return Response(
+                        {'detail': f'nickname must be at most {NICKNAME_MAX_LENGTH} characters', 'code': 'nickname_too_long'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not NICKNAME_PATTERN.fullmatch(nickname):
+                    return Response(
+                        {
+                            'detail': 'nickname allows only Korean/English letters and numbers (no spaces/special chars)',
+                            'code': 'nickname_invalid_format',
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                nickname = None
+
+            if nickname:
+                is_duplicated = User.objects.filter(nickname__iexact=nickname).exclude(id=user.id).exists()
+                if is_duplicated:
+                    return Response(
+                        {'detail': 'nickname already exists', 'code': 'nickname_duplicated'},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+
+            if user.nickname != nickname:
+                user.nickname = nickname
+                update_fields.add('nickname')
+
+        for attr, max_len in (('student_id', 20), ('department', 100), ('school', 100)):
             if attr not in data:
                 continue
             value = data.get(attr)
@@ -748,6 +832,29 @@ class UserMeView(APIView):
                     )
             else:
                 value = None
+            if getattr(user, attr) != value:
+                setattr(user, attr, value)
+                update_fields.add(attr)
+
+        for attr in ('school_code', 'college_code', 'department_code'):
+            if attr not in data:
+                continue
+            value = data.get(attr)
+            if value is not None and value != '':
+                value = str(value).strip().upper()
+                if len(value) > 20:
+                    return Response(
+                        {'detail': f'{attr} must be at most 20 characters', 'code': 'invalid_profile_code'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                if not PROFILE_CODE_PATTERN.fullmatch(value):
+                    return Response(
+                        {'detail': f'{attr} allows only uppercase letters, numbers, and underscore', 'code': 'invalid_profile_code'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+            else:
+                value = None
+
             if getattr(user, attr) != value:
                 setattr(user, attr, value)
                 update_fields.add(attr)
@@ -791,7 +898,15 @@ class UserMeView(APIView):
         if update_fields:
             update_fields = set(update_fields)
             update_fields.add('updated_at')
-            user.save(update_fields=list(update_fields))
+            try:
+                user.save(update_fields=list(update_fields))
+            except IntegrityError:
+                if 'nickname' in update_fields:
+                    return Response(
+                        {'detail': 'nickname already exists', 'code': 'nickname_duplicated'},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                raise
 
             sync_fields = {}
             for field in ('type_code', 'favorite_restaurants', 'fcm_token'):
