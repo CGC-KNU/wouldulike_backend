@@ -29,8 +29,55 @@ def _normalize_restaurant_name(name):
     return name
 
 
+def _parse_positive_int(value, default, max_value=None):
+    """Parse querystring int safely with sane bounds."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+
+    if parsed < 0:
+        return default
+    if max_value is not None:
+        return min(parsed, max_value)
+    return parsed
+
+
+def _parse_bool(value, default=True):
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _serialize_affiliate_restaurant(row):
     """Convert a raw row from restaurants_affiliate into a JSON-serializable dict."""
+    (
+        restaurant_id,
+        name,
+        description,
+        address,
+        category,
+        zone,
+        phone_number,
+        url,
+        s3_image_urls,
+    ) = row
+
+    return {
+        'restaurant_id': restaurant_id,
+        'name': _normalize_restaurant_name(name),
+        'description': description,
+        'address': address,
+        'category': category,
+        'zone': zone,
+        'phone_number': phone_number,
+        'url': url,
+        's3_image_urls': list(s3_image_urls) if s3_image_urls else [],
+    }
+
+
+def _serialize_general_restaurant(row):
+    """Convert a non-affiliate restaurant row for list response."""
     (
         restaurant_id,
         name,
@@ -265,6 +312,119 @@ def get_nearby_restaurants(request):
     except Exception as e:
         logger.exception("Unexpected error")
         return JsonResponse({'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(e)}'}, status=500)
+
+
+@require_http_methods(["GET"])
+def get_restaurant_tab_list(request):
+    """
+    Return restaurants for the restaurant tab:
+    - affiliate_restaurants: always on top (optional include)
+    - general_restaurants: paginated for infinite scroll
+    Supports name search via query param `q`.
+    """
+    q = (request.GET.get('q') or '').strip()
+    limit = _parse_positive_int(request.GET.get('limit'), default=20, max_value=50)
+    offset = _parse_positive_int(request.GET.get('offset'), default=0)
+    include_affiliates = _parse_bool(request.GET.get('include_affiliates'), default=True)
+
+    where_keyword = ""
+    params = []
+    if q:
+        where_keyword = " AND name ILIKE %s"
+        params.append(f"%{q}%")
+
+    try:
+        affiliate_restaurants = []
+        general_restaurants = []
+        total_general_count = 0
+
+        with connections['cloudsql'].cursor() as cursor:
+            if include_affiliates:
+                cursor.execute(
+                    f"""
+                    SELECT
+                        restaurant_id,
+                        name,
+                        description,
+                        address,
+                        category,
+                        zone,
+                        phone_number,
+                        url,
+                        s3_image_urls
+                    FROM restaurants_affiliate
+                    WHERE is_affiliate = TRUE
+                    {where_keyword}
+                    ORDER BY restaurant_id
+                    """,
+                    params,
+                )
+                affiliate_rows = cursor.fetchall()
+                affiliate_restaurants = [
+                    _serialize_affiliate_restaurant(row) for row in affiliate_rows
+                ]
+
+            cursor.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM restaurants_affiliate
+                WHERE (is_affiliate = FALSE OR is_affiliate IS NULL)
+                {where_keyword}
+                """,
+                params,
+            )
+            total_general_count = cursor.fetchone()[0]
+
+            general_query_params = [*params, limit, offset]
+            cursor.execute(
+                f"""
+                SELECT
+                    restaurant_id,
+                    name,
+                    description,
+                    address,
+                    category,
+                    zone,
+                    phone_number,
+                    url,
+                    s3_image_urls
+                FROM restaurants_affiliate
+                WHERE (is_affiliate = FALSE OR is_affiliate IS NULL)
+                {where_keyword}
+                ORDER BY restaurant_id
+                LIMIT %s OFFSET %s
+                """,
+                general_query_params,
+            )
+            general_rows = cursor.fetchall()
+            general_restaurants = [_serialize_general_restaurant(row) for row in general_rows]
+
+        has_more = offset + len(general_restaurants) < total_general_count
+        next_offset = offset + len(general_restaurants) if has_more else None
+
+        return JsonResponse(
+            {
+                'affiliate_restaurants': affiliate_restaurants,
+                'general_restaurants': general_restaurants,
+                'general_pagination': {
+                    'limit': limit,
+                    'offset': offset,
+                    'next_offset': next_offset,
+                    'returned_count': len(general_restaurants),
+                    'total_count': total_general_count,
+                    'has_more': has_more,
+                },
+                'search_query': q,
+            },
+            status=200,
+            json_dumps_params={'ensure_ascii': False},
+        )
+    except Exception as exc:
+        logger.exception("Failed to fetch restaurant tab list")
+        return JsonResponse(
+            {'error_code': 'UNKNOWN_ERROR', 'message': f'Unexpected error: {str(exc)}'},
+            status=500,
+        )
 
 
 @require_http_methods(["GET"])

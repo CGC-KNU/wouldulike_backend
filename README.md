@@ -240,6 +240,9 @@ OPERATIONS_ADMIN_RESET_PASSWORDS=0
 
 ### 레스토랑 (`/restaurants/`)
 - 레스토랑 검색 및 조회 API
+- `GET /restaurants/tab-restaurants/` - 탭용 식당 목록(제휴+일반) 조회
+  - 쿼리: `q`(식당명 검색), `limit`(일반식당 페이지 크기, 기본 20), `offset`(일반식당 시작 위치, 기본 0), `include_affiliates`(제휴식당 포함 여부, 기본 true)
+  - 응답 필드: `affiliate_restaurants`, `general_restaurants`, `general_pagination`(`has_more`, `next_offset` 포함)
 - `GET /restaurants/affiliate-restaurants/active/` - 진행 중 제휴식당/전체 제휴식당 조회
   - 인증: `Authorization: Bearer <access_token>`
   - 동작: 진행 중 식당이 0~2개면 전체 제휴식당, 그 외엔 진행 중 식당만 반환
