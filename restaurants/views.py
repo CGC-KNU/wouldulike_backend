@@ -397,6 +397,8 @@ def get_restaurant_tab_list(request):
                 general_query_params,
             )
             general_rows = cursor.fetchall()
+            # 일반식당은 고정 순서 대신 요청마다 한 번 섞어서 반환
+            random.shuffle(general_rows)
             general_restaurants = [_serialize_general_restaurant(row) for row in general_rows]
 
         has_more = offset + len(general_restaurants) < total_general_count
@@ -506,7 +508,6 @@ def get_active_affiliate_restaurants(request):
                     """
                 )
                 rows = cursor.fetchall()
-                random.shuffle(rows)
             else:
                 source = "active"
                 placeholders = ", ".join(["%s"] * len(restaurant_ids))
@@ -529,6 +530,7 @@ def get_active_affiliate_restaurants(request):
                 cursor.execute(query, restaurant_ids)
                 rows = cursor.fetchall()
 
+        random.shuffle(rows)
         restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
         return JsonResponse(
             {'source': source, 'restaurants': restaurants},
