@@ -52,6 +52,7 @@ class RestaurantCouponBenefit(models.Model):
     title = models.CharField(max_length=120)
     subtitle = models.CharField(max_length=255, blank=True, default="")
     benefit_json = models.JSONField(default=dict, blank=True)
+    notes = models.TextField(blank=True, default="")  # 쿠폰 사용 가능 조건 (예: 최소 주문 1만원, 음료만 사용 가능)
     active = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -218,6 +219,31 @@ class StampEvent(models.Model):
 
     def __str__(self):
         return f"StampEvent u={self.user_id} r={self.restaurant_id} d={self.delta} @ {self.created_at:%Y-%m-%d %H:%M:%S}"
+
+
+class StampRewardRule(models.Model):
+    """
+    식당별 스탬프 보상 규칙.
+    - THRESHOLD: 스탬프 누적 개수 기준 (예: 1, 3, 5, 7, 10개)
+    - VISIT: 방문 횟수 기준 (예: 1~4회→A, 5~9회→B, 10회→C)
+    """
+
+    RULE_TYPE = (
+        ("THRESHOLD", "Threshold"),  # 스탬프 개수 기준
+        ("VISIT", "Visit"),  # 방문 횟수 기준
+    )
+
+    restaurant_id = models.IntegerField(db_index=True, unique=True)
+    rule_type = models.CharField(max_length=20, choices=RULE_TYPE)
+    # THRESHOLD: {"thresholds": [{"stamps": 1, "coupon_type_code": "STAMP_1"}, ...], "cycle_target": 10}
+    # VISIT: {"ranges": [{"min_visit": 1, "max_visit": 4, "coupon_type_code": "..."}, ...], "cycle_target": 10}
+    config_json = models.JSONField(default=dict)
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"StampRule:{self.restaurant_id}({self.rule_type})"
 
 
 class CouponRestaurantExclusion(models.Model):

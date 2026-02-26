@@ -20,6 +20,7 @@ from .models import (
     MerchantPin,
     StampWallet,
     StampEvent,
+    StampRewardRule,
     RestaurantCouponBenefit,
     CouponRestaurantExclusion,
 )
@@ -31,7 +32,7 @@ User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
-GLOBAL_COUPON_EXPIRY = datetime(2027, 1, 31, 23, 59, 59, tzinfo=timezone.utc)
+GLOBAL_COUPON_EXPIRY = datetime(2026, 7, 31, 23, 59, 59, tzinfo=timezone.utc)
 REFERRAL_MAX_REWARDS_PER_REFERRER = 5
 
 # 운영진 계정 카카오 ID 목록 (환경 변수에서 읽어옴, 쉼표로 구분)
@@ -114,6 +115,7 @@ def _build_benefit_snapshot(
         "benefit": coupon_type.benefit_json,
         "title": coupon_type.title,
         "subtitle": "",
+        "notes": "",
     }
 
     benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
@@ -134,6 +136,7 @@ def _build_benefit_snapshot(
                 "title": benefit.title,
                 "subtitle": benefit.subtitle,
                 "benefit": benefit.benefit_json or coupon_type.benefit_json,
+                "notes": benefit.notes or "",
                 # coupon_type_title은 항상 CouponType의 title을 사용 (식당별 쿠폰 내용과 무관하게)
                 "coupon_type_title": coupon_type.title,
             }
@@ -751,6 +754,7 @@ def check_and_expire_coupon(user: User, coupon_code: str) -> dict:
             "benefit": coupon.coupon_type.benefit_json,
             "title": coupon.coupon_type.title,
             "subtitle": "",
+            "notes": "",
         }
 
     restaurant_name = benefit_snapshot.get("restaurant_name")
@@ -1168,14 +1172,122 @@ def claim_flash_drop(user: User, campaign_code: str, idem_key: str):
 
 # ---- Stamp (Punch) Card Service ----
 
-# 목표 개수 및 보상 정의 (시드로 생성 필요)
-STAMP_THRESHOLDS = (5, 10)
-STAMP_CYCLE_TARGET = max(STAMP_THRESHOLDS)
-REWARD_COUPON_CODES = {
+# 레거시 기본값 (규칙 없을 때 폴백)
+STAMP_LEGACY_THRESHOLDS = (5, 10)
+STAMP_LEGACY_CYCLE_TARGET = 10
+STAMP_LEGACY_REWARD_CODES = {
     5: "STAMP_REWARD_5",
     10: "STAMP_REWARD_10",
 }
 REWARD_CAMPAIGN_CODE = "STAMP_REWARD"
+
+STAMP_DB_ALIAS = "cloudsql"
+
+
+def _get_stamp_reward_rule(restaurant_id: int) -> StampRewardRule | None:
+    """식당별 스탬프 보상 규칙 조회. 없으면 None."""
+    try:
+        return StampRewardRule.objects.using(STAMP_DB_ALIAS).get(
+            restaurant_id=restaurant_id, active=True
+        )
+    except StampRewardRule.DoesNotExist:
+        return None
+
+
+def _get_legacy_config() -> dict:
+    """레거시(5, 10) 규칙용 config."""
+    return {
+        "thresholds": [
+            {"stamps": 5, "coupon_type_code": "STAMP_REWARD_5"},
+            {"stamps": 10, "coupon_type_code": "STAMP_REWARD_10"},
+        ],
+        "cycle_target": 10,
+    }
+
+
+def _get_cycle_target_for_restaurant(restaurant_id: int) -> int:
+    """식당별 cycle_target 반환 (규칙 없으면 10)."""
+    rule = _get_stamp_reward_rule(restaurant_id)
+    if rule and rule.config_json:
+        return rule.config_json.get("cycle_target", 10)
+    return STAMP_LEGACY_CYCLE_TARGET
+
+
+def get_stamp_rewards_for_restaurant(restaurant_id: int) -> list[dict]:
+    """
+    식당별 스탬프 적립 시 발급되는 쿠폰 목록 반환.
+    프론트에서 "N개 적립 시 ~ 혜택" 표시용.
+    """
+    alias = STAMP_DB_ALIAS
+    rule = _get_stamp_reward_rule(restaurant_id)
+
+    if not rule:
+        config = _get_legacy_config()
+        rule_type = "THRESHOLD"
+    else:
+        config = rule.config_json
+        rule_type = rule.rule_type
+
+    rewards: list[dict] = []
+    benefit_map: dict[str, dict] = {}
+
+    if rule_type == "THRESHOLD":
+        thresholds = config.get("thresholds", [])
+        coupon_codes = [t["coupon_type_code"] for t in thresholds]
+    else:
+        ranges = config.get("ranges", [])
+        coupon_codes = [r["coupon_type_code"] for r in ranges]
+
+    if coupon_codes:
+        benefits = RestaurantCouponBenefit.objects.using(alias).filter(
+            restaurant_id=restaurant_id,
+            coupon_type__code__in=coupon_codes,
+            active=True,
+        ).select_related("coupon_type")
+        for b in benefits:
+            benefit_map[b.coupon_type.code] = {
+                "title": b.title,
+                "subtitle": b.subtitle,
+                "notes": b.notes or "",
+                "benefit": b.benefit_json or {},
+            }
+
+    if rule_type == "THRESHOLD":
+        for t in sorted(config.get("thresholds", []), key=lambda x: x["stamps"]):
+            code = t["coupon_type_code"]
+            b = benefit_map.get(code, {})
+            ct = CouponType.objects.using(alias).filter(code=code).first()
+            default_benefit = ct.benefit_json if ct else {}
+            rewards.append({
+                "stamps": t["stamps"],
+                "title": b.get("title") or (ct.title if ct else code),
+                "subtitle": b.get("subtitle", ""),
+                "notes": b.get("notes", ""),
+                "benefit": b.get("benefit") or default_benefit,
+                "coupon_type_code": code,
+            })
+    else:
+        for r in config.get("ranges", []):
+            min_v, max_v = r.get("min_visit"), r.get("max_visit")
+            code = r.get("coupon_type_code")
+            if min_v is None or max_v is None or not code:
+                continue
+            b = benefit_map.get(code, {})
+            ct = CouponType.objects.using(alias).filter(code=code).first()
+            default_benefit = ct.benefit_json if ct else {}
+            key = f"{min_v}_{max_v}" if min_v != max_v else str(min_v)
+            rewards.append({
+                "visit_range": key,
+                "min_visit": min_v,
+                "max_visit": max_v,
+                "title": b.get("title") or (ct.title if ct else code),
+                "subtitle": b.get("subtitle", ""),
+                "notes": b.get("notes", ""),
+                "benefit": b.get("benefit") or default_benefit,
+                "coupon_type_code": code,
+            })
+
+    return rewards
 
 
 def _verify_pin(restaurant_id: int, pin: str) -> bool:
@@ -1198,13 +1310,15 @@ def _issue_reward_coupon(
     *,
     coupon_type_code: str,
     issue_key_suffix: str,
+    db_alias: str | None = None,
 ):
-    ct = CouponType.objects.get(code=coupon_type_code)
-    camp = Campaign.objects.get(code=REWARD_CAMPAIGN_CODE, active=True)
+    alias = db_alias or router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code=coupon_type_code)
+    camp = Campaign.objects.using(alias).get(code=REWARD_CAMPAIGN_CODE, active=True)
     issue_key = f"STAMP_REWARD:{user.id}:{issue_key_suffix}"
     expires_at = _expires_at(ct)
-    benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id)
-    return Coupon.objects.create(
+    benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, db_alias=alias)
+    return Coupon.objects.using(alias).create(
         code=make_coupon_code(),
         user=user,
         coupon_type=ct,
@@ -1216,7 +1330,7 @@ def _issue_reward_coupon(
     )
 
 
-@transaction.atomic
+@transaction.atomic(using=STAMP_DB_ALIAS)
 def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = None):
     # 멱등(같은 요청 재발급 방지)
     if idem_key:
@@ -1236,76 +1350,126 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
         now = timezone.now()
         today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
-        
-        today_stamp_count = StampEvent.objects.using('cloudsql').filter(
+
+        today_stamp_count = StampEvent.objects.using(STAMP_DB_ALIAS).filter(
             user=user,
             restaurant_id=restaurant_id,
-            delta=+1,  # 적립만 카운트 (정정은 제외)
+            delta=+1,
             created_at__gte=today_start,
-            created_at__lte=today_end
+            created_at__lte=today_end,
         ).count()
-        
-        if today_stamp_count >= 2:
+
+        if today_stamp_count >= 3:
             raise ValidationError(
-                f"하루 최대 2번까지만 스탬프를 적립할 수 있습니다. "
+                f"하루 최대 3번까지만 스탬프를 적립할 수 있습니다. "
                 f"오늘 이미 {today_stamp_count}번 적립하셨습니다."
             )
-        
-        wallet, _ = StampWallet.objects.using('cloudsql').get_or_create(
+
+        wallet, _ = StampWallet.objects.using(STAMP_DB_ALIAS).get_or_create(
             user=user, restaurant_id=restaurant_id
         )
 
         prev_stamps = wallet.stamps
         wallet.stamps += 1
-        StampEvent.objects.using('cloudsql').create(
+        StampEvent.objects.using(STAMP_DB_ALIAS).create(
             user=user, restaurant_id=restaurant_id, delta=+1, source="PIN"
         )
+
+        # 규칙 조회 (없으면 레거시 5, 10 사용)
+        rule = _get_stamp_reward_rule(restaurant_id)
+        if rule:
+            rule_type = rule.rule_type
+            config = rule.config_json
+            cycle_target = config.get("cycle_target", 10)
+        else:
+            rule_type = "THRESHOLD"
+            config = _get_legacy_config()
+            cycle_target = STAMP_LEGACY_CYCLE_TARGET
+
         reward_codes = []
         reward_details = []
         now_suffix = timezone.now().strftime("%Y%m%d%H%M%S%f")
-        max_threshold = max(STAMP_THRESHOLDS)
-        max_threshold_reached = False
+        max_reached = False
 
-        for threshold in STAMP_THRESHOLDS:
-            if prev_stamps < threshold <= wallet.stamps:
-                coupon_type_code = REWARD_COUPON_CODES.get(threshold)
+        if rule_type == "THRESHOLD":
+            thresholds = config.get("thresholds", [])
+            threshold_stamps = sorted(t["stamps"] for t in thresholds)
+            max_threshold = max(threshold_stamps) if threshold_stamps else 0
+
+            for t in thresholds:
+                th = t["stamps"]
+                coupon_type_code = t.get("coupon_type_code")
                 if not coupon_type_code:
-                    raise ValidationError(f"stamp reward coupon type missing for threshold={threshold}")
-                suffix = f"{restaurant_id}:{now_suffix}:T{threshold}"
-                reward = _issue_reward_coupon(
-                    user,
-                    restaurant_id,
-                    coupon_type_code=coupon_type_code,
-                    issue_key_suffix=suffix,
-                )
-                logger.info(
-                    "Stamp reward issued user=%s restaurant=%s threshold=%s coupon_type=%s coupon_code=%s",
-                    user.id,
-                    restaurant_id,
-                    threshold,
-                    reward.coupon_type.code,
-                    reward.code,
-                )
-                reward_codes.append(reward.code)
-                reward_details.append(
-                    {
-                        "threshold": threshold,
-                        "coupon_code": reward.code,
-                        "coupon_type": reward.coupon_type.code,
-                    }
-                )
-                if threshold == max_threshold:
-                    max_threshold_reached = True
+                    raise ValidationError(f"stamp reward coupon type missing for threshold={th}")
+                if prev_stamps < th <= wallet.stamps:
+                    suffix = f"{restaurant_id}:{now_suffix}:T{th}"
+                    reward = _issue_reward_coupon(
+                        user,
+                        restaurant_id,
+                        coupon_type_code=coupon_type_code,
+                        issue_key_suffix=suffix,
+                        db_alias=STAMP_DB_ALIAS,
+                    )
+                    logger.info(
+                        "Stamp reward issued user=%s restaurant=%s threshold=%s coupon_type=%s coupon_code=%s",
+                        user.id,
+                        restaurant_id,
+                        th,
+                        reward.coupon_type.code,
+                        reward.code,
+                    )
+                    reward_codes.append(reward.code)
+                    reward_details.append(
+                        {"threshold": th, "coupon_code": reward.code, "coupon_type": reward.coupon_type.code}
+                    )
+                    if th == max_threshold:
+                        max_reached = True
 
-        if max_threshold_reached:
-            wallet.stamps -= max_threshold
+        else:  # VISIT
+            ranges = config.get("ranges", [])
+            visit_number = wallet.stamps
+
+            for r in ranges:
+                min_v = r.get("min_visit")
+                max_v = r.get("max_visit")
+                coupon_type_code = r.get("coupon_type_code")
+                if min_v is None or max_v is None or not coupon_type_code:
+                    continue
+                if min_v <= visit_number <= max_v:
+                    suffix = f"{restaurant_id}:{now_suffix}:V{visit_number}"
+                    reward = _issue_reward_coupon(
+                        user,
+                        restaurant_id,
+                        coupon_type_code=coupon_type_code,
+                        issue_key_suffix=suffix,
+                        db_alias=STAMP_DB_ALIAS,
+                    )
+                    logger.info(
+                        "Stamp visit reward issued user=%s restaurant=%s visit=%s coupon_type=%s coupon_code=%s",
+                        user.id,
+                        restaurant_id,
+                        visit_number,
+                        reward.coupon_type.code,
+                        reward.code,
+                    )
+                    reward_codes.append(reward.code)
+                    reward_details.append(
+                        {"visit": visit_number, "coupon_code": reward.code, "coupon_type": reward.coupon_type.code}
+                    )
+                    break
+
+            if visit_number >= cycle_target:
+                max_reached = True
+
+        if max_reached:
+            wallet.stamps -= cycle_target
 
         wallet.save()
 
     result = {
         "ok": True,
         "current": wallet.stamps,
-        "target": STAMP_CYCLE_TARGET,
+        "target": cycle_target,
         "reward_coupon_code": reward_codes[-1] if reward_codes else None,
     }
     if reward_codes:
@@ -1328,8 +1492,17 @@ def get_all_stamp_statuses(user: User):
     except DatabaseError:
         accessible_ids = []
 
-    wallet_qs = StampWallet.objects.filter(user=user)
+    wallet_qs = StampWallet.objects.using(STAMP_DB_ALIAS).filter(user=user)
     wallet_map = {wallet.restaurant_id: wallet for wallet in wallet_qs}
+
+    all_rids = set(accessible_ids) | set(wallet_map.keys())
+    rule_qs = StampRewardRule.objects.using(STAMP_DB_ALIAS).filter(
+        restaurant_id__in=all_rids, active=True
+    )
+    target_map = {r.restaurant_id: r.config_json.get("cycle_target", 10) for r in rule_qs}
+
+    def _target(rid: int) -> int:
+        return target_map.get(rid, STAMP_LEGACY_CYCLE_TARGET)
 
     results: list[dict] = []
     seen_ids: set[int] = set()
@@ -1340,7 +1513,8 @@ def get_all_stamp_statuses(user: User):
             {
                 "restaurant_id": restaurant_id,
                 "current": wallet.stamps if wallet else 0,
-                "target": STAMP_CYCLE_TARGET,
+                "target": _target(restaurant_id),
+                "rewards": get_stamp_rewards_for_restaurant(restaurant_id),
                 "updated_at": wallet.updated_at if wallet else None,
             }
         )
@@ -1353,7 +1527,8 @@ def get_all_stamp_statuses(user: User):
             {
                 "restaurant_id": restaurant_id,
                 "current": wallet.stamps,
-                "target": STAMP_CYCLE_TARGET,
+                "target": _target(restaurant_id),
+                "rewards": get_stamp_rewards_for_restaurant(restaurant_id),
                 "updated_at": wallet.updated_at,
             }
         )
@@ -1389,12 +1564,15 @@ def get_active_affiliate_restaurant_ids_for_user(user: User) -> list[int]:
 
 
 def get_stamp_status(user: User, restaurant_id: int):
+    target = _get_cycle_target_for_restaurant(restaurant_id)
+    rewards = get_stamp_rewards_for_restaurant(restaurant_id)
     try:
-        w = StampWallet.objects.get(user=user, restaurant_id=restaurant_id)
+        w = StampWallet.objects.using(STAMP_DB_ALIAS).get(user=user, restaurant_id=restaurant_id)
         return {
             "current": w.stamps,
-            "target": STAMP_CYCLE_TARGET,
+            "target": target,
+            "rewards": rewards,
             "updated_at": w.updated_at,
         }
     except StampWallet.DoesNotExist:
-        return {"current": 0, "target": STAMP_CYCLE_TARGET, "updated_at": None}
+        return {"current": 0, "target": target, "rewards": rewards, "updated_at": None}

@@ -8,6 +8,7 @@ from .models import (
     MerchantPin,
     StampWallet,
     StampEvent,
+    StampRewardRule,
     RestaurantCouponBenefit,
 )
 
@@ -48,6 +49,7 @@ class RestaurantCouponBenefitAdmin(admin.ModelAdmin):
         "restaurant_id",
         "restaurant_name",
         "title",
+        "notes",
         "active",
         "updated_at",
     )
@@ -105,3 +107,10 @@ class StampEventAdmin(admin.ModelAdmin):
     list_display = ("user", "restaurant_id", "delta", "source", "created_at")
     list_filter = ("source",)
     search_fields = ("user__kakao_id", "restaurant_id")
+
+
+@admin.register(StampRewardRule)
+class StampRewardRuleAdmin(admin.ModelAdmin):
+    list_display = ("restaurant_id", "rule_type", "active", "updated_at")
+    list_filter = ("rule_type", "active")
+    search_fields = ("restaurant_id",)

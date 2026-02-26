@@ -47,6 +47,7 @@ class CouponSerializer(serializers.ModelSerializer):
             "benefit": obj.coupon_type.benefit_json,
             "title": obj.coupon_type.title,
             "subtitle": "",
+            "notes": "",
         }
         restaurant_name = self.get_restaurant_name(obj)
         if restaurant_name:
