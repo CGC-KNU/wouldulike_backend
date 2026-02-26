@@ -1214,6 +1214,85 @@ def _get_cycle_target_for_restaurant(restaurant_id: int) -> int:
     return STAMP_LEGACY_CYCLE_TARGET
 
 
+def _build_rewards_for_restaurants_batch(
+    restaurant_ids: set[int],
+    rule_map: dict[int, StampRewardRule],
+    ct_map: dict[str, CouponType],
+    benefit_map: dict[tuple[int, str], dict],
+) -> dict[int, list[dict]]:
+    """
+    식당 ID 목록에 대해 rewards를 배치로 생성.
+    rule_map, ct_map, benefit_map은 이미 프리페치된 데이터.
+    반환: {restaurant_id: [reward_dict, ...]}
+    """
+    legacy_config = _get_legacy_config()
+    result: dict[int, list[dict]] = {}
+
+    for restaurant_id in restaurant_ids:
+        rule = rule_map.get(restaurant_id)
+        if not rule:
+            config = legacy_config
+            rule_type = "THRESHOLD"
+        else:
+            config = rule.config_json
+            rule_type = rule.rule_type
+
+        rewards: list[dict] = []
+        restaurant_benefit_map: dict[str, dict] = {}
+        if rule_type == "THRESHOLD":
+            coupon_codes = [t["coupon_type_code"] for t in config.get("thresholds", [])]
+        else:
+            coupon_codes = [r["coupon_type_code"] for r in config.get("ranges", [])]
+
+        for code in coupon_codes:
+            b = benefit_map.get((restaurant_id, code))
+            if b:
+                restaurant_benefit_map[code] = {
+                    "title": b.get("title", ""),
+                    "subtitle": b.get("subtitle", ""),
+                    "notes": b.get("notes", ""),
+                    "benefit": b.get("benefit", {}),
+                }
+
+        if rule_type == "THRESHOLD":
+            for t in sorted(config.get("thresholds", []), key=lambda x: x["stamps"]):
+                code = t["coupon_type_code"]
+                b = restaurant_benefit_map.get(code, {})
+                ct = ct_map.get(code)
+                default_benefit = ct.benefit_json if ct else {}
+                rewards.append({
+                    "stamps": t["stamps"],
+                    "title": b.get("title") or (ct.title if ct else code),
+                    "subtitle": b.get("subtitle", ""),
+                    "notes": b.get("notes", ""),
+                    "benefit": b.get("benefit") or default_benefit,
+                    "coupon_type_code": code,
+                })
+        else:
+            for r in config.get("ranges", []):
+                min_v, max_v = r.get("min_visit"), r.get("max_visit")
+                code = r.get("coupon_type_code")
+                if min_v is None or max_v is None or not code:
+                    continue
+                b = restaurant_benefit_map.get(code, {})
+                ct = ct_map.get(code)
+                default_benefit = ct.benefit_json if ct else {}
+                key = f"{min_v}_{max_v}" if min_v != max_v else str(min_v)
+                rewards.append({
+                    "visit_range": key,
+                    "min_visit": min_v,
+                    "max_visit": max_v,
+                    "title": b.get("title") or (ct.title if ct else code),
+                    "subtitle": b.get("subtitle", ""),
+                    "notes": b.get("notes", ""),
+                    "benefit": b.get("benefit") or default_benefit,
+                    "coupon_type_code": code,
+                })
+        result[restaurant_id] = rewards
+
+    return result
+
+
 def get_stamp_rewards_for_restaurant(restaurant_id: int) -> list[dict]:
     """
     식당별 스탬프 적립 시 발급되는 쿠폰 목록 반환.
@@ -1500,7 +1579,44 @@ def get_all_stamp_statuses(user: User):
     rule_qs = StampRewardRule.objects.using(STAMP_DB_ALIAS).filter(
         restaurant_id__in=all_rids, active=True
     )
+    rule_map = {r.restaurant_id: r for r in rule_qs}
     target_map = {r.restaurant_id: r.config_json.get("cycle_target", 10) for r in rule_qs}
+
+    # 배치 프리페치: rewards 생성에 필요한 CouponType, RestaurantCouponBenefit
+    rewards_map: dict[int, list[dict]] = {}
+    if all_rids:
+        alias = STAMP_DB_ALIAS
+        legacy_config = _get_legacy_config()
+        all_codes = {t["coupon_type_code"] for t in legacy_config["thresholds"]}
+        for rule in rule_map.values():
+            cfg = rule.config_json
+            if rule.rule_type == "THRESHOLD":
+                for t in cfg.get("thresholds", []):
+                    all_codes.add(t.get("coupon_type_code"))
+            else:
+                for r in cfg.get("ranges", []):
+                    all_codes.add(r.get("coupon_type_code"))
+        all_codes.discard(None)
+
+        ct_map = {ct.code: ct for ct in CouponType.objects.using(alias).filter(code__in=all_codes)}
+
+        benefits_qs = RestaurantCouponBenefit.objects.using(alias).filter(
+            restaurant_id__in=all_rids,
+            coupon_type__code__in=all_codes,
+            active=True,
+        ).select_related("coupon_type")
+        benefit_map = {}
+        for b in benefits_qs:
+            benefit_map[(b.restaurant_id, b.coupon_type.code)] = {
+                "title": b.title,
+                "subtitle": b.subtitle or "",
+                "notes": b.notes or "",
+                "benefit": b.benefit_json or {},
+            }
+
+        rewards_map = _build_rewards_for_restaurants_batch(
+            all_rids, rule_map, ct_map, benefit_map
+        )
 
     def _target(rid: int) -> int:
         return target_map.get(rid, STAMP_LEGACY_CYCLE_TARGET)
@@ -1515,7 +1631,7 @@ def get_all_stamp_statuses(user: User):
                 "restaurant_id": restaurant_id,
                 "current": wallet.stamps if wallet else 0,
                 "target": _target(restaurant_id),
-                "rewards": get_stamp_rewards_for_restaurant(restaurant_id),
+                "rewards": rewards_map.get(restaurant_id, []),
                 "updated_at": wallet.updated_at if wallet else None,
             }
         )
@@ -1529,7 +1645,7 @@ def get_all_stamp_statuses(user: User):
                 "restaurant_id": restaurant_id,
                 "current": wallet.stamps,
                 "target": _target(restaurant_id),
-                "rewards": get_stamp_rewards_for_restaurant(restaurant_id),
+                "rewards": rewards_map.get(restaurant_id, []),
                 "updated_at": wallet.updated_at,
             }
         )
