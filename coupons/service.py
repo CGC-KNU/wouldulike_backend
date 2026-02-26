@@ -788,6 +788,7 @@ def check_and_expire_coupon(user: User, coupon_code: str) -> dict:
         "restaurant_id": coupon.restaurant_id,
         "restaurant_name": restaurant_name,
         "benefit": benefit_snapshot,
+        "issue_key": coupon.issue_key,
     }
 
 

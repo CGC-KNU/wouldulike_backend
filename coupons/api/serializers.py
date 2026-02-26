@@ -25,6 +25,7 @@ class CouponSerializer(serializers.ModelSerializer):
             "restaurant_id",
             "restaurant_name",
             "benefit",
+            "issue_key",
         )
 
     def get_benefit(self, obj: Coupon):
