@@ -100,9 +100,22 @@ def idem_set(key: str, value: Any, ttl: int = 300) -> None:
     cache.set(key, value, ttl)
 
 
+def format_issued_coupons(coupons) -> list[dict]:
+    """발급된 쿠폰 목록을 API 응답 형식으로 변환."""
+    return [
+        {
+            "code": c.code,
+            "restaurant_id": getattr(c, "restaurant_id", None),
+            "issue_key": c.issue_key or "",
+        }
+        for c in coupons
+    ]
+
+
 __all__ = [
     "make_coupon_code",
     "redis_lock",
     "idem_get",
     "idem_set",
+    "format_issued_coupons",
 ]

@@ -112,7 +112,7 @@ class ReferralLimitTests(TestCase):
     def test_referral_acceptance_capped_at_five(self):
         for idx in range(5):
             referee = self.user_model.objects.create_user(kakao_id=2000 + idx, password="pass")
-            referral = accept_referral(referee=referee, ref_code=self.invite_code.code)
+            referral, _ = accept_referral(referee=referee, ref_code=self.invite_code.code)
             self.assertEqual(referral.referrer, self.referrer)
 
         self.assertEqual(Referral.objects.filter(referrer=self.referrer).count(), 5)

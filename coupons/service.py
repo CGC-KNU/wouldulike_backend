@@ -863,7 +863,7 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                         )
                 
                 # 특별한 Referral 생성 (referrer는 자기 자신, campaign_code로 구분)
-                return base_qs.create(
+                referral = base_qs.create(
                     referrer=referee,  # 자기 자신을 referrer로 설정 (campaign_code로 구분)
                     referee=referee,
                     code_used=ref_code.upper(),
@@ -871,6 +871,7 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                     status="QUALIFIED",  # 바로 QUALIFIED 상태로 설정
                     qualified_at=timezone.now(),
                 )
+                return referral, result["coupons"]
         except IntegrityError:
             raise ValidationError(
                 "이미 기말고사 특별 쿠폰을 발급받았습니다.",
@@ -989,16 +990,13 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
 
                         )
 
-            return base_qs.create(
-
+            referral = base_qs.create(
                 referrer=referrer,
-
                 referee=referee,
-
                 code_used=ref_code,
                 campaign_code=campaign_code,
-
             )
+            return referral, []
 
     except IntegrityError:
 
@@ -1010,24 +1008,21 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
 
         )
 
-def qualify_referral_and_grant(referee: User):
 
-    # referee 가???료 ?점 ?에??출
-
+def qualify_referral_and_grant(referee: User) -> tuple[Referral | None, list]:
     db_alias = router.db_for_write(Referral)
+    issued_coupons: list = []
 
     with transaction.atomic(using=db_alias):
-
         locked_qs = Referral.objects.using(db_alias).select_for_update()
 
         # PENDING 상태인 모든 Referral 처리 (이벤트와 일반 모두)
         pending_refs = locked_qs.filter(referee=referee, status="PENDING")
-        
+
         if not pending_refs.exists():
-            # 이미 처리된 Referral이 있는지 확인
             existing_refs = Referral.objects.using(db_alias).filter(referee=referee)
-            return existing_refs.first() if existing_refs.exists() else None
-        
+            return (existing_refs.first() if existing_refs.exists() else None, [])
+
         results = []
         for ref in pending_refs:
             # 기말고사 이벤트 쿠폰 처리
@@ -1044,9 +1039,8 @@ def qualify_referral_and_grant(referee: User):
                 )
                 
                 if not existing_coupons.exists():
-                    # 쿠폰이 없으면 발급
-                    issue_final_exam_coupons(referee)
-                
+                    result = issue_final_exam_coupons(referee)
+                    issued_coupons.extend(result["coupons"])
                 # 이미 QUALIFIED 상태로 설정되어 있을 수 있음
                 if ref.status != "QUALIFIED":
                     ref.status = "QUALIFIED"
@@ -1074,14 +1068,14 @@ def qualify_referral_and_grant(referee: User):
                     event_ct = CouponType.objects.using(db_alias).get(code=coupon_type_code)
                     
                     # 이벤트 보상 쿠폰 발급 (referee에게만)
-                    _create_coupon_with_restaurant(
+                    coupon = _create_coupon_with_restaurant(
                         user=referee,
                         coupon_type=event_ct,
                         campaign=event_camp,
                         issue_key=f"EVENT_REWARD:{referee.id}:{ref.code_used}",
                         db_alias=db_alias,
                     )
-                    
+                    issued_coupons.append(coupon)
                     ref.status = "QUALIFIED"
                     ref.qualified_at = timezone.now()
                     ref.save(update_fields=["status", "qualified_at"], using=db_alias)
@@ -1115,36 +1109,36 @@ def qualify_referral_and_grant(referee: User):
 
 
             if can_reward_referrer:
-                _create_coupon_with_restaurant(
+                ref_coupon = _create_coupon_with_restaurant(
                     user=ref.referrer,
                     coupon_type=ref_ct,
                     campaign=ref_camp,
                     issue_key=f"REFERRAL_REFERRER:{ref.referrer_id}:{referee.id}",
                     db_alias=db_alias,
                 )
+                issued_coupons.append(ref_coupon)
 
             new_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFEREE")
-
-            _create_coupon_with_restaurant(
+            referee_coupon = _create_coupon_with_restaurant(
                 user=referee,
                 coupon_type=new_ct,
                 campaign=ref_camp,
                 issue_key=f"REFERRAL_REFEREE:{referee.id}",
                 db_alias=db_alias,
             )
+            issued_coupons.append(referee_coupon)
             results.append(ref)
-        
-        return results[0] if results else None
+
+        return (results[0] if results else None, issued_coupons)
 
 
 
-def claim_flash_drop(user: User, campaign_code: str, idem_key: str):
+def claim_flash_drop(user: User, campaign_code: str, idem_key: str) -> Coupon:
     cache_key = f"idem:{idem_key}"
     prev = idem_get(cache_key)
     if prev:
-        return prev
-
-
+        alias = router.db_for_read(Coupon)
+        return Coupon.objects.using(alias).get(user=user, code=prev)
 
     coupon_alias = router.db_for_write(Coupon)
     camp = Campaign.objects.using(coupon_alias).get(code=campaign_code, active=True)
@@ -1166,7 +1160,7 @@ def claim_flash_drop(user: User, campaign_code: str, idem_key: str):
             db_alias=coupon_alias,
         )
     idem_set(cache_key, coupon.code, ttl=300)
-    return coupon.code
+    return coupon
 
 
 

@@ -7,6 +7,7 @@ from rest_framework_simplejwt.authentication import JWTAuthentication
 import logging
 
 from ..models import Coupon
+from ..utils import format_issued_coupons
 from ..service import (
     issue_signup_coupon,
     redeem_coupon,
@@ -38,10 +39,12 @@ class MyCouponsView(generics.ListAPIView):
         logger.info("[req:%s] MyCouponsView.get_queryset start user=%s", request_id, getattr(user, "id", None))
 
         # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
+        self._issued_app_open_coupons = []
         if getattr(user, "is_authenticated", False):
             try:
                 coupons = issue_app_open_coupon(user)
                 if coupons:
+                    self._issued_app_open_coupons = coupons
                     codes = [c.code for c in coupons]
                     logger.info(
                         "app-open coupons ensured on my coupons list (user=%s, codes=%s)",
@@ -72,6 +75,13 @@ class MyCouponsView(generics.ListAPIView):
         logger.info("[req:%s] MyCouponsView.get_queryset end user=%s", request_id, getattr(user, "id", None))
         return qs
 
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        issued = getattr(self, "_issued_app_open_coupons", [])
+        if issued:
+            response.data["issued_coupons"] = format_issued_coupons(issued)
+        return response
+
 
 class SignupCompleteView(APIView):
     authentication_classes = [JWTAuthentication]
@@ -83,7 +93,8 @@ class SignupCompleteView(APIView):
             c = issue_signup_coupon(request.user)
         except Exception as e:
             return Response({"detail": str(e)}, status=200)
-        return Response({"coupon_code": c.code}, status=201)
+        payload = {"coupon_code": c.code, "issued_coupons": format_issued_coupons([c])}
+        return Response(payload, status=201)
 
 
 class RedeemView(APIView):
@@ -163,7 +174,7 @@ class AcceptReferralView(APIView):
             raise DRFValidationError({"ref_code": "필수 필드입니다."})
 
         try:
-            referral = accept_referral(referee=request.user, ref_code=ref_code)
+            referral, ref_issued = accept_referral(referee=request.user, ref_code=ref_code)
         except DjangoValidationError as exc:
             if hasattr(exc, "message_dict") and exc.message_dict:
                 payload = exc.message_dict
@@ -180,10 +191,15 @@ class AcceptReferralView(APIView):
         # 기말고사 이벤트의 경우 이미 쿠폰이 발급되었고 Referral이 QUALIFIED 상태이므로
         # qualify_referral_and_grant를 호출하지 않음 (호출해도 처리할 것이 없음)
         # 일반 추천인 코드의 경우에만 qualify_referral_and_grant 호출
+        qual_issued = []
         if referral.campaign_code != "FINAL_EXAM_EVENT":
-            qualify_referral_and_grant(request.user)
+            _, qual_issued = qualify_referral_and_grant(request.user)
 
-        return Response({"ok": True, "referral_id": referral.id}, status=status.HTTP_200_OK)
+        issued_coupons = format_issued_coupons(ref_issued + qual_issued)
+        payload = {"ok": True, "referral_id": referral.id}
+        if issued_coupons:
+            payload["issued_coupons"] = issued_coupons
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class QualifyReferralView(APIView):
@@ -192,8 +208,11 @@ class QualifyReferralView(APIView):
 
     def post(self, request):
         # 예: 가입 플로우 마지막 단계에서 호출
-        ref = qualify_referral_and_grant(request.user)
-        return Response({"ok": True, "status": ref.status if ref else "NONE"})
+        ref, issued = qualify_referral_and_grant(request.user)
+        payload = {"ok": True, "status": ref.status if ref else "NONE"}
+        if issued:
+            payload["issued_coupons"] = format_issued_coupons(issued)
+        return Response(payload)
 
 
 class FlashClaimView(APIView):
@@ -204,10 +223,11 @@ class FlashClaimView(APIView):
         idem_key = request.headers.get("Idempotency-Key") or request.data.get("idem_key")
         if not idem_key:
             return Response({"detail": "Idempotency-Key required"}, status=400)
-        code = claim_flash_drop(
+        coupon = claim_flash_drop(
             request.user, campaign_code="FLASH_8PM", idem_key=idem_key
         )
-        return Response({"coupon_code": code}, status=201)
+        payload = {"coupon_code": coupon.code, "issued_coupons": format_issued_coupons([coupon])}
+        return Response(payload, status=201)
 
 
 class AddStampView(APIView):
@@ -256,11 +276,13 @@ class ClaimFinalExamCouponView(APIView):
         
         try:
             result = claim_final_exam_coupon(request.user, coupon_code)
-            return Response({
+            payload = {
                 "ok": True,
                 "total_issued": result["total_issued"],
                 "coupon_codes": [c.code for c in result["coupons"]],
-            }, status=201)
+                "issued_coupons": format_issued_coupons(result["coupons"]),
+            }
+            return Response(payload, status=201)
         except DjangoValidationError as e:
             msg = str(e)
             if "invalid coupon code" in msg.lower():
