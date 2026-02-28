@@ -1,6 +1,7 @@
 import json
 import re
 import requests
+import jwt
 from django.conf import settings
 from django.db import router
 from django.db import IntegrityError
@@ -19,9 +20,11 @@ from django.core.cache import cache
 import os
 import logging
 
-from .models import User
+from .models import User, SocialAccount
 from guests.models import GuestUser
 from .jwt_utils import generate_tokens_for_user
+from .serializers import AppleLoginSerializer
+from .services.apple_auth import verify_identity_token
 from coupons.service import issue_signup_coupon, issue_app_open_coupon
 from .utils import merge_guest_data
 
@@ -128,6 +131,8 @@ def _serialize_user(user: User):
     return {
         'id': user.id,
         'kakao_id': user.kakao_id,
+        'apple_id': user.apple_id,
+        'email': user.email,
         'nickname': user.nickname,
         'student_id': user.student_id,
         'department': user.department,
@@ -367,7 +372,10 @@ class KakaoLoginView(APIView):
 
             # 2) 사용자 매핑/생성: kakao_id 기준
             try:
-                user, created = User.objects.get_or_create(kakao_id=kakao_id)
+                user, created = User.objects.get_or_create(
+                    kakao_id=kakao_id,
+                    defaults={"username": str(kakao_id)},
+                )
             except Exception as e:
                 logger.error(f'User creation/retrieval error - User-Agent: {user_agent}, IP: {client_ip}, Kakao ID: {kakao_id}, Error: {str(e)}', exc_info=True)
                 return Response({'detail': 'internal_error', 'code': 'user_creation_failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -431,6 +439,189 @@ class KakaoLoginView(APIView):
         except Exception as e:
             logger.error(f'Unexpected error in KakaoLoginView - User-Agent: {user_agent}, IP: {client_ip}, Error: {str(e)}', exc_info=True)
             return Response({'detail': 'internal_error', 'code': 'unexpected_error'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AppleLoginView(APIView):
+    """
+    Sign in with Apple 로그인 엔드포인트.
+    Flutter 클라이언트가 identity_token(JWT)을 전달하면 검증 후 유저 생성/로그인 처리.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        user_agent = request.META.get('HTTP_USER_AGENT', 'Unknown')
+        client_ip = request.META.get('REMOTE_ADDR', 'Unknown')
+
+        serializer = AppleLoginSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {'detail': 'identity_token is required', 'code': 'invalid_request'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        identity_token = serializer.validated_data['identity_token']
+        full_name = (serializer.validated_data.get('full_name') or '').strip()
+        email_from_request = (serializer.validated_data.get('email') or '').strip() or None
+        guest_uuid = request.data.get('guest_uuid')
+
+        try:
+            # 1) identity_token 검증
+            claims = verify_identity_token(identity_token)
+        except jwt.InvalidTokenError as e:
+            logger.warning(
+                'Apple identity_token invalid - User-Agent: %s, IP: %s, Error: %s',
+                user_agent, client_ip, str(e),
+            )
+            return Response(
+                {'detail': 'apple_token_invalid', 'code': 'apple_token_invalid'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+        except ValueError as e:
+            logger.warning(
+                'Apple identity_token verification error - User-Agent: %s, IP: %s, Error: %s',
+                user_agent, client_ip, str(e),
+            )
+            return Response(
+                {'detail': 'apple_token_invalid', 'code': 'apple_token_invalid'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        sub = claims.get('sub')
+        if not sub:
+            logger.warning('Apple token missing sub - User-Agent: %s, IP: %s', user_agent, client_ip)
+            return Response(
+                {'detail': 'apple_token_invalid', 'code': 'apple_token_invalid'},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        email_from_token = claims.get('email')
+        email = email_from_request or email_from_token
+
+        # 2) 유저 매핑/생성
+        try:
+            social = SocialAccount.objects.filter(
+                provider=SocialAccount.PROVIDER_APPLE,
+                provider_user_id=sub,
+            ).select_related('user').first()
+
+            if social:
+                user = social.user
+                created = False
+                # 기존 유저: email이 없고 새로 받았으면 업데이트
+                if email and not user.email:
+                    user.email = email
+                    user.save(update_fields=['email', 'updated_at'])
+                if social.email != email and email:
+                    social.email = email
+                    social.save(update_fields=['email'])
+            else:
+                # apple_id로 기존 User 확인 (SocialAccount 없이 생성된 경우 대비)
+                user = User.objects.filter(apple_id=sub).first()
+                if user:
+                    created = False
+                    SocialAccount.objects.get_or_create(
+                        provider=SocialAccount.PROVIDER_APPLE,
+                        provider_user_id=sub,
+                        defaults={'user': user, 'email': email},
+                    )
+                    if email and not user.email:
+                        user.email = email
+                        user.save(update_fields=['email', 'updated_at'])
+                else:
+                    # 신규 유저 생성
+                    user = User.objects.create_user(apple_id=sub)
+                    created = True
+                    SocialAccount.objects.create(
+                        provider=SocialAccount.PROVIDER_APPLE,
+                        provider_user_id=sub,
+                        user=user,
+                        email=email,
+                    )
+                    if email:
+                        user.email = email
+                        user.save(update_fields=['email', 'updated_at'])
+                    if full_name and not user.nickname:
+                        user.nickname = full_name[:50]
+                        user.save(update_fields=['nickname', 'updated_at'])
+        except IntegrityError as e:
+            logger.error(
+                'Apple user creation error - User-Agent: %s, IP: %s, sub: %s, Error: %s',
+                user_agent, client_ip, sub, str(e),
+                exc_info=True,
+            )
+            return Response(
+                {'detail': 'internal_error', 'code': 'user_creation_failed'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        # guest_uuid가 있으면 게스트 데이터 귀속
+        if guest_uuid:
+            try:
+                merge_guest_data(guest_uuid, user)
+            except Exception as exc:
+                logger.warning(
+                    'Failed to merge guest data - User-Agent: %s, Guest UUID: %s, Error: %s',
+                    user_agent, guest_uuid, str(exc),
+                    exc_info=True,
+                )
+
+        signup_coupon_code = None
+        if created and AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN:
+            try:
+                coupon = issue_signup_coupon(user)
+                signup_coupon_code = coupon.code
+            except Exception as exc:
+                logger.warning(
+                    'failed to issue signup coupon for Apple user %s: %s',
+                    user.id, exc,
+                )
+
+        if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
+            try:
+                issue_app_open_coupon(user)
+            except Exception as exc:
+                logger.warning(
+                    'failed to issue app-open coupon on Apple login for user %s: %s',
+                    user.id, exc,
+                    exc_info=True,
+                )
+
+        # 3) JWT 발급
+        try:
+            tokens = _mint_tokens_with_expiry(user)
+        except Exception as e:
+            logger.error(
+                'Token generation error - User-Agent: %s, IP: %s, User ID: %s, Error: %s',
+                user_agent, client_ip, user.id, str(e),
+                exc_info=True,
+            )
+            return Response(
+                {'detail': 'internal_error', 'code': 'token_generation_failed'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        resp = {
+            'access': tokens['access'],
+            'refresh': tokens['refresh'],
+            'access_expires_at': tokens.get('access_expires_at'),
+            'refresh_expires_at': tokens.get('refresh_expires_at'),
+            'user': {
+                'id': user.id,
+                'email': user.email,
+                'nickname': user.nickname or '',
+                'apple_id': user.apple_id,
+            },
+            'is_new': created,
+        }
+        if signup_coupon_code:
+            resp['signup_coupon_code'] = signup_coupon_code
+
+        logger.info(
+            'Apple login successful - User-Agent: %s, IP: %s, User ID: %s, sub: %s, Is New: %s',
+            user_agent, client_ip, user.id, sub, created,
+        )
+        return Response(resp, status=status.HTTP_200_OK)
 
 
 class CustomTokenRefreshView(BaseTokenRefreshView):
@@ -698,7 +889,10 @@ class DevLoginView(APIView):
                 user = User.objects.get(id=int(user_id))
             elif kakao_id:
                 kakao_id_int = int(kakao_id)
-                user, created = User.objects.get_or_create(kakao_id=kakao_id_int)
+                user, created = User.objects.get_or_create(
+                    kakao_id=kakao_id_int,
+                    defaults={"username": str(kakao_id_int)},
+                )
             else:
                 return Response({"detail": "kakao_id or user_id required"}, status=status.HTTP_400_BAD_REQUEST)
         except User.DoesNotExist:

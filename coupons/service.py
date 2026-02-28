@@ -53,7 +53,7 @@ APP_OPEN_PERIOD = os.getenv("APP_OPEN_PERIOD", "DAILY").upper()
 
 def _is_event_admin_user(user: User) -> bool:
     """운영진 계정인지 확인"""
-    return user.kakao_id in EVENT_ADMIN_KAKAO_IDS
+    return user.kakao_id is not None and user.kakao_id in EVENT_ADMIN_KAKAO_IDS
 
 
 def _build_app_open_issue_key(user: User) -> str:

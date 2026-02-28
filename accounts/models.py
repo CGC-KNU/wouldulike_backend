@@ -5,10 +5,19 @@ from django.contrib.auth.models import (
 
 
 class UserManager(BaseUserManager):
-    def create_user(self, kakao_id, password=None, **extra_fields):
-        if kakao_id is None:
-            raise ValueError('Users must have a kakao_id')
-        user = self.model(kakao_id=kakao_id, **extra_fields)
+    def create_user(self, kakao_id=None, apple_id=None, password=None, **extra_fields):
+        if kakao_id is None and apple_id is None:
+            raise ValueError('Users must have either kakao_id or apple_id')
+        if kakao_id is not None:
+            username = str(kakao_id)
+        else:
+            username = f"apple_{apple_id}"
+        user = self.model(
+            kakao_id=kakao_id,
+            apple_id=apple_id,
+            username=username,
+            **extra_fields
+        )
         user.set_password(password)
         user.save(using=self._db)
         return user
@@ -20,11 +29,14 @@ class UserManager(BaseUserManager):
             raise ValueError('Superuser must have is_staff=True.')
         if extra_fields.get('is_superuser') is not True:
             raise ValueError('Superuser must have is_superuser=True.')
-        return self.create_user(kakao_id, password, **extra_fields)
+        return self.create_user(kakao_id=kakao_id, password=password, **extra_fields)
 
 
 class User(AbstractBaseUser, PermissionsMixin):
-    kakao_id = models.BigIntegerField(unique=True, db_index=True)
+    username = models.CharField(max_length=255, unique=True, db_index=True)
+    kakao_id = models.BigIntegerField(unique=True, db_index=True, null=True, blank=True)
+    apple_id = models.CharField(max_length=255, unique=True, db_index=True, null=True, blank=True)
+    email = models.EmailField(max_length=254, null=True, blank=True)
     nickname = models.CharField(max_length=50, null=True, blank=True)
     student_id = models.CharField(max_length=20, null=True, blank=True)
     department = models.CharField(max_length=100, null=True, blank=True)
@@ -43,10 +55,35 @@ class User(AbstractBaseUser, PermissionsMixin):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-    USERNAME_FIELD = 'kakao_id'
+    USERNAME_FIELD = 'username'
     REQUIRED_FIELDS = []
 
     objects = UserManager()
 
     def __str__(self):
-        return f"User {self.kakao_id}"
+        if self.kakao_id is not None:
+            return f"User {self.kakao_id}"
+        if self.apple_id:
+            return f"User(apple:{self.apple_id})"
+        return f"User {self.username}"
+
+
+class SocialAccount(models.Model):
+    """소셜 로그인 계정 매핑 (Apple 등)"""
+    PROVIDER_APPLE = "apple"
+    PROVIDER_CHOICES = [(PROVIDER_APPLE, "Apple")]
+
+    provider = models.CharField(max_length=32, choices=PROVIDER_CHOICES)
+    provider_user_id = models.CharField(max_length=255, db_index=True)
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="social_accounts",
+    )
+    email = models.EmailField(null=True, blank=True)
+
+    class Meta:
+        unique_together = [("provider", "provider_user_id")]
+
+    def __str__(self):
+        return f"{self.provider}:{self.provider_user_id}"

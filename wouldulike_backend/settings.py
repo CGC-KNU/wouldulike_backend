@@ -293,6 +293,12 @@ SIMPLE_JWT = {
 
 KAKAO_ADMIN_KEY = os.getenv('KAKAO_ADMIN_KEY')
 
+# Sign in with Apple (App Store Review Guideline 4.8)
+APPLE_AUDIENCE = os.getenv('APPLE_AUDIENCE')  # 서비스 ID 또는 Bundle ID (예: com.example.app)
+APPLE_TEAM_ID = os.getenv('APPLE_TEAM_ID')  # authorization_code 교환 시 사용 (선택)
+APPLE_KEY_ID = os.getenv('APPLE_KEY_ID')  # authorization_code 교환 시 사용 (선택)
+APPLE_PRIVATE_KEY = os.getenv('APPLE_PRIVATE_KEY')  # authorization_code 교환 시 사용 (선택)
+
 LOGGING = {
     'version': 1,
     'disable_existing_loggers': False,

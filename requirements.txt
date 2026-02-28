@@ -30,3 +30,4 @@ redis==5.0.1
 django-environ==0.10.0
 ulid-py==1.1.0
 google-auth==2.35.0
+PyJWT[crypto]==2.9.0
