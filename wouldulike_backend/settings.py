@@ -294,7 +294,13 @@ SIMPLE_JWT = {
 KAKAO_ADMIN_KEY = os.getenv('KAKAO_ADMIN_KEY')
 
 # Sign in with Apple (App Store Review Guideline 4.8)
-APPLE_AUDIENCE = os.getenv('APPLE_AUDIENCE')  # 서비스 ID 또는 Bundle ID (예: com.example.app)
+# identity_token의 aud( audience) 검증에 사용. 앱 Bundle ID와 일치해야 함.
+# WouldULike 앱: com.coggiri.wouldulike0117
+# 쉼표로 구분 시 여러 값 허용 (Bundle ID, Services ID 등)
+APPLE_AUDIENCE_RAW = os.getenv('APPLE_AUDIENCE', 'com.coggiri.wouldulike0117')
+APPLE_AUDIENCE = [
+    a.strip() for a in APPLE_AUDIENCE_RAW.split(',') if a.strip()
+] if ',' in APPLE_AUDIENCE_RAW else APPLE_AUDIENCE_RAW.strip() or None
 APPLE_TEAM_ID = os.getenv('APPLE_TEAM_ID')  # authorization_code 교환 시 사용 (선택)
 APPLE_KEY_ID = os.getenv('APPLE_KEY_ID')  # authorization_code 교환 시 사용 (선택)
 APPLE_PRIVATE_KEY = os.getenv('APPLE_PRIVATE_KEY')  # authorization_code 교환 시 사용 (선택)

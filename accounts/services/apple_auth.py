@@ -80,6 +80,9 @@ def verify_identity_token(
     aud = audience or getattr(settings, "APPLE_AUDIENCE", None)
     if not aud:
         raise ValueError("APPLE_AUDIENCE is required for Apple token verification")
+    # 리스트면 PyJWT에 그대로 전달 (여러 audience 허용)
+    if isinstance(aud, str):
+        aud = [aud] if aud else None
 
     # 헤더에서 kid 추출 (서명 검증 전)
     try:
