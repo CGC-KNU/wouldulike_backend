@@ -453,21 +453,30 @@ def issue_app_open_coupon(user: User):
 
 
 @transaction.atomic
-def issue_ambassador_coupons(user: User):
+def issue_ambassador_coupons(
+    user: User,
+    *,
+    campaign_code: str | None = None,
+    coupon_type_code: str | None = None,
+):
     """
-    엠버서더 보상을 위해 특정 사용자에게 전체 제휴식당 쿠폰을 발급합니다.
-    신규가입 쿠폰과 동일한 쿠폰 타입(WELCOME_3000)을 사용하지만,
+    엠버서더/일괄 전송을 위해 특정 사용자에게 전체 제휴식당 쿠폰을 발급합니다.
+    신규가입 쿠폰과 동일한 쿠폰 타입(WELCOME_3000)을 기본 사용하지만,
     각 식당마다 고유한 issue_key를 사용하여 중복 발급 방지 제약조건을 통과합니다.
-    
+
     Args:
         user: 쿠폰을 발급받을 사용자
-        
+        campaign_code: 캠페인 코드 (기본: SIGNUP_WELCOME). 기획전 구분용.
+        coupon_type_code: 쿠폰 타입 코드 (기본: WELCOME_3000).
+
     Returns:
         발급된 쿠폰 리스트
     """
     alias = router.db_for_write(Coupon)
-    ct = CouponType.objects.using(alias).get(code="WELCOME_3000")
-    camp = Campaign.objects.using(alias).get(code="SIGNUP_WELCOME", active=True)
+    ct_code = coupon_type_code or "WELCOME_3000"
+    camp_code = campaign_code or "SIGNUP_WELCOME"
+    ct = CouponType.objects.using(alias).get(code=ct_code)
+    camp = Campaign.objects.using(alias).get(code=camp_code, active=True)
     
     # 전체 제휴식당 목록 가져오기
     restaurant_ids = list(

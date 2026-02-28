@@ -20,6 +20,18 @@ class Command(BaseCommand):
             help="쿠폰을 발급받을 사용자의 카카오 ID",
         )
         parser.add_argument(
+            "--campaign-code",
+            type=str,
+            default=None,
+            help="캠페인 코드 (기본: SIGNUP_WELCOME). 기획전 구분용. 예: BULK_EVENT_202502",
+        )
+        parser.add_argument(
+            "--coupon-type-code",
+            type=str,
+            default=None,
+            help="쿠폰 타입 코드 (기본: WELCOME_3000)",
+        )
+        parser.add_argument(
             "--dry-run",
             action="store_true",
             help="실제로 발급하지 않고 미리보기만 표시",
@@ -27,6 +39,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         kakao_id = options["kakao_id"]
+        campaign_code = options.get("campaign_code")
+        coupon_type_code = options.get("coupon_type_code")
         dry_run = options.get("dry_run", False)
 
         if dry_run:
@@ -53,7 +67,11 @@ class Command(BaseCommand):
 
         # 쿠폰 발급
         try:
-            result = issue_ambassador_coupons(user)
+            result = issue_ambassador_coupons(
+                user,
+                campaign_code=campaign_code,
+                coupon_type_code=coupon_type_code,
+            )
             coupons = result["coupons"]
             total_issued = result["total_issued"]
             failed_restaurants = result["failed_restaurants"]

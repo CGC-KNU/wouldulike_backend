@@ -101,12 +101,24 @@ def idem_set(key: str, value: Any, ttl: int = 300) -> None:
 
 
 def format_issued_coupons(coupons) -> list[dict]:
-    """발급된 쿠폰 목록을 API 응답 형식으로 변환."""
+    """발급된 쿠폰 목록을 API 응답 형식으로 변환.
+    campaign_code, coupon_type_code로 기획전 종류·발급 경로를 구분 가능.
+    """
+    if not coupons:
+        return []
+    # N+1 방지: campaign, coupon_type prefetch
+    try:
+        from django.db.models import prefetch_related_objects
+        prefetch_related_objects(coupons, "campaign", "coupon_type")
+    except Exception:
+        pass
     return [
         {
             "code": c.code,
             "restaurant_id": getattr(c, "restaurant_id", None),
             "issue_key": c.issue_key or "",
+            "campaign_code": c.campaign.code if c.campaign_id and c.campaign else None,
+            "coupon_type_code": c.coupon_type.code if c.coupon_type_id and c.coupon_type else None,
         }
         for c in coupons
     ]
