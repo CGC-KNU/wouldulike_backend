@@ -16,8 +16,14 @@ class Command(BaseCommand):
         parser.add_argument(
             "--kakao-id",
             type=int,
-            required=True,
+            default=None,
             help="쿠폰을 발급받을 사용자의 카카오 ID",
+        )
+        parser.add_argument(
+            "--apple-id",
+            type=str,
+            default=None,
+            help="쿠폰을 발급받을 사용자의 Apple ID (우주라이크 ID 형식)",
         )
         parser.add_argument(
             "--campaign-code",
@@ -38,29 +44,42 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        kakao_id = options["kakao_id"]
+        kakao_id = options.get("kakao_id")
+        apple_id = options.get("apple_id")
         campaign_code = options.get("campaign_code")
         coupon_type_code = options.get("coupon_type_code")
         dry_run = options.get("dry_run", False)
+
+        if not kakao_id and not apple_id:
+            raise CommandError("--kakao-id 또는 --apple-id 중 하나를 지정해주세요.")
+        if kakao_id and apple_id:
+            raise CommandError("--kakao-id와 --apple-id 둘 다 지정할 수 없습니다. 하나만 지정해주세요.")
 
         if dry_run:
             self.stdout.write(self.style.WARNING("=== DRY-RUN 모드: 실제 발급 없음 ===\n"))
 
         # 사용자 조회
         try:
-            user = User.objects.get(kakao_id=kakao_id)
+            if kakao_id:
+                user = User.objects.get(kakao_id=kakao_id)
+                user_identifier = f"카카오 ID {kakao_id}"
+            else:
+                user = User.objects.get(apple_id=apple_id)
+                user_identifier = f"Apple ID {apple_id}"
         except User.DoesNotExist:
-            raise CommandError(f"카카오 ID {kakao_id}에 해당하는 사용자를 찾을 수 없습니다.")
+            ident = f"카카오 ID {kakao_id}" if kakao_id else f"Apple ID {apple_id}"
+            raise CommandError(f"{ident}(으)로 사용자를 찾을 수 없습니다.")
 
         self.stdout.write(f"사용자 정보:")
         self.stdout.write(f"  - User ID: {user.id}")
         self.stdout.write(f"  - Kakao ID: {user.kakao_id}")
+        self.stdout.write(f"  - Apple ID: {user.apple_id}")
         self.stdout.write("")
 
         if dry_run:
             self.stdout.write(
                 self.style.SUCCESS(
-                    f"[DRY-RUN] 카카오 ID {kakao_id} 사용자에게 전체 제휴식당 쿠폰을 발급할 예정입니다."
+                    f"[DRY-RUN] {user_identifier} 사용자에게 전체 제휴식당 쿠폰을 발급할 예정입니다."
                 )
             )
             return

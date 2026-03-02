@@ -962,14 +962,17 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
 
     db_alias = router.db_for_write(Referral)
 
+    # 대소문자 구분 없이 조회 (앱 안내: "추천 코드는 대소문자를 구분하지 않아요")
+    ref_code = (ref_code or "").strip().upper()
+
     # 차단된 쿠폰 코드 목록
     BLOCKED_CODES = {"01KBWVFS", "01KBWVFSSNEE"}
     
-    if ref_code.upper() in BLOCKED_CODES:
+    if ref_code in BLOCKED_CODES:
         raise ValidationError("invalid referral code")
     
     # 기말고사 이벤트 쿠폰 코드 처리
-    if ref_code.upper() == "WOULDULIKEEX":
+    if ref_code == "WOULDULIKEEX":
         # 이미 발급받은 쿠폰이 있는지 확인
         alias = router.db_for_write(Coupon)
         ct = CouponType.objects.using(alias).get(code="FINAL_EXAM_SPECIAL")
@@ -1031,7 +1034,7 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                 referral = base_qs.create(
                     referrer=referee,  # 자기 자신을 referrer로 설정 (campaign_code로 구분)
                     referee=referee,
-                    code_used=ref_code.upper(),
+                    code_used=ref_code,
                     campaign_code="FINAL_EXAM_EVENT",
                     status="QUALIFIED",  # 바로 QUALIFIED 상태로 설정
                     qualified_at=timezone.now(),
