@@ -4,7 +4,7 @@ CSV 기반 식당별 스탬프 보상 규칙(StampRewardRule) 및 쿠폰 혜택(
 26-1 우주라이크 제휴 식당 CSV 내용을 반영합니다.
 - 프리미엄: 1, 2, 3, 5, 7, 10개 스탬프 (정든밤은 VISIT 패턴)
 - 일반: 1, 3, 5, 6, 7, 9, 10개 스탬프
-- 제외: Better, 와비사비, 고니식탁 (포차1번지먹새통은 스탬프만 포함)
+- 제외: Better, 와비사비 (고니식탁·포차1번지먹새통은 스탬프만 포함)
 """
 from django.core.management.base import BaseCommand
 from django.db import router
@@ -191,18 +191,30 @@ STAMP_DATA = {
             "notes": "",
         },
     },
-    56: {  # 다이와스시
+    56: {  # 다이와스시: 5, 10
         "rule_type": "THRESHOLD",
         "config": {
             "thresholds": [
-                (3, "타코야끼 10개", ""),
+                (5, "타코야끼 10개", ""),
                 (10, "만원 할인", ""),
             ],
             "cycle_target": 10,
             "notes": "",
         },
     },
-    249: {  # 고씨네 (general.csv: 3, 6, 9 패턴)
+    30: {  # 고니식탁: 3, 5, 10
+        "rule_type": "THRESHOLD",
+        "config": {
+            "thresholds": [
+                (3, "음료 서비스", ""),
+                (5, "계란말이 서비스", ""),
+                (10, "찌개 1인분 서비스", ""),
+            ],
+            "cycle_target": 10,
+            "notes": "",
+        },
+    },
+    249: {  # 고씨네: 3, 6, 9
         "rule_type": "THRESHOLD",
         "config": {
             "thresholds": [
