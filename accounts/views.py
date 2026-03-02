@@ -391,8 +391,8 @@ class KakaoLoginView(APIView):
             signup_coupon_code = None
             if created and AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN:
                 try:
-                    coupon = issue_signup_coupon(user)
-                    signup_coupon_code = coupon.code
+                    coupons = issue_signup_coupon(user)
+                    signup_coupon_code = coupons[0].code if coupons else None
                 except Exception as exc:
                     logger.warning(
                         "failed to issue signup coupon for user %s: %s",
@@ -569,8 +569,8 @@ class AppleLoginView(APIView):
         signup_coupon_code = None
         if created and AUTH_ISSUE_SIGNUP_COUPON_ON_LOGIN:
             try:
-                coupon = issue_signup_coupon(user)
-                signup_coupon_code = coupon.code
+                coupons = issue_signup_coupon(user)
+                signup_coupon_code = coupons[0].code if coupons else None
             except Exception as exc:
                 logger.warning(
                     'failed to issue signup coupon for Apple user %s: %s',

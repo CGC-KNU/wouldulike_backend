@@ -49,17 +49,19 @@ class RestaurantCouponBenefit(models.Model):
         related_name="coupon_benefits",
         db_constraint=False,
     )
+    sort_order = models.PositiveSmallIntegerField(default=0)  # 식당당 여러 쿠폰 시 구분
     title = models.CharField(max_length=120)
     subtitle = models.CharField(max_length=255, blank=True, default="")
     benefit_json = models.JSONField(default=dict, blank=True)
-    notes = models.TextField(blank=True, default="")  # 쿠폰 사용 가능 조건 (예: 최소 주문 1만원, 음료만 사용 가능)
+    notes = models.TextField(blank=True, default="")  # 쿠폰 사용 가능 조건 (예: 최소 주문 1만원)
     active = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["coupon_type", "restaurant"], name="uq_coupon_type_restaurant"
+                fields=["coupon_type", "restaurant", "sort_order"],
+                name="uq_coupon_type_restaurant_sort",
             )
         ]
 

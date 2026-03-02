@@ -90,10 +90,13 @@ class SignupCompleteView(APIView):
     def post(self, request):
         # 멱등성: issue_key Unique로 보장 → create 충돌 시 OK 응답
         try:
-            c = issue_signup_coupon(request.user)
+            issued = issue_signup_coupon(request.user)
         except Exception as e:
             return Response({"detail": str(e)}, status=200)
-        payload = {"coupon_code": c.code, "issued_coupons": format_issued_coupons([c])}
+        payload = {
+            "coupon_code": issued[0].code if issued else None,
+            "issued_coupons": format_issued_coupons(issued),
+        }
         return Response(payload, status=201)
 
 

@@ -35,9 +35,12 @@ from coupons.service import STAMP_DB_ALIAS
 # 스탬프 개수 → 쿠폰 타입 코드 기본 매핑
 DEFAULT_THRESHOLD_COUPONS = {
     1: "STAMP_REWARD_1",
+    2: "STAMP_REWARD_2",
     3: "STAMP_REWARD_3",
     5: "STAMP_REWARD_5",
+    6: "STAMP_REWARD_6",
     7: "STAMP_REWARD_7",
+    9: "STAMP_REWARD_9",
     10: "STAMP_REWARD_10",
 }
 
