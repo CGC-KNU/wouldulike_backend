@@ -146,6 +146,7 @@ DATABASES = {
         'PASSWORD': os.getenv('default_db_password'),
         'HOST': os.getenv('default_db_host'),
         'PORT': os.getenv('default_db_port'),
+        'CONN_MAX_AGE': 90,
     },
     'rds': {
         # 유형 데이터베이스
@@ -155,6 +156,7 @@ DATABASES = {
         'PASSWORD': os.getenv('rds_db_password'),
         'HOST': os.getenv('rds_db_host'),
         'PORT': os.getenv('rds_db_port'),
+        'CONN_MAX_AGE': 90,
         'OPTIONS': {
             'options': '-c client_encoding=utf8',
         },
@@ -166,6 +168,7 @@ DATABASES = {
         'PASSWORD': os.getenv('cloudsql_db_password'),
         'HOST': os.getenv('cloudsql_db_host'),
         'PORT': os.getenv('cloudsql_db_port'),
+        'CONN_MAX_AGE': 90,
     }
 }
 
