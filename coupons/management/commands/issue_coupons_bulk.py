@@ -20,6 +20,18 @@ class Command(BaseCommand):
             help="쿠폰을 발급받을 사용자들의 카카오 ID (쉼표로 구분)",
         )
         parser.add_argument(
+            "--campaign-code",
+            type=str,
+            default=None,
+            help="캠페인 코드 (기본: SIGNUP_WELCOME). 기획전 구분용. 예: BULK_EVENT_202502",
+        )
+        parser.add_argument(
+            "--coupon-type-code",
+            type=str,
+            default=None,
+            help="쿠폰 타입 코드 (기본: WELCOME_3000)",
+        )
+        parser.add_argument(
             "--dry-run",
             action="store_true",
             help="실제로 발급하지 않고 미리보기만 표시",
@@ -27,6 +39,8 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         kakao_ids_str = options["kakao_ids"]
+        campaign_code = options.get("campaign_code")
+        coupon_type_code = options.get("coupon_type_code")
         dry_run = options.get("dry_run", False)
 
         # 쉼표로 구분된 카카오 ID 파싱
@@ -41,7 +55,11 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING("=== DRY-RUN 모드: 실제 발급 없음 ===\n"))
 
-        self.stdout.write(f"총 {len(kakao_ids)}명의 사용자에게 쿠폰을 발급합니다.\n")
+        self.stdout.write(f"총 {len(kakao_ids)}명의 사용자에게 쿠폰을 발급합니다.")
+        if campaign_code:
+            self.stdout.write(f"  - Campaign: {campaign_code}")
+        if coupon_type_code:
+            self.stdout.write(f"  - CouponType: {coupon_type_code}")
         self.stdout.write("=" * 80 + "\n")
 
         success_count = 0
@@ -76,7 +94,11 @@ class Command(BaseCommand):
 
             # 쿠폰 발급
             try:
-                result = issue_ambassador_coupons(user)
+                result = issue_ambassador_coupons(
+                    user,
+                    campaign_code=campaign_code,
+                    coupon_type_code=coupon_type_code,
+                )
                 total_issued = result["total_issued"]
                 failed_restaurants = result.get("failed_restaurants", [])
 

@@ -1,7 +1,9 @@
 from unittest.mock import patch
 from types import SimpleNamespace
+import jwt
+from django.test import override_settings
 from rest_framework.test import APITestCase
-from .models import User
+from .models import User, SocialAccount
 from guests.models import GuestUser
 import uuid
 
@@ -239,3 +241,107 @@ class NicknameAvailabilityTests(DisableCouponSignalMixin, APITestCase):
         response = self.client.get('/api/users/nickname-availability/?nickname=tester2')
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.data['available'])
+
+
+class AppleAuthServiceTests(APITestCase):
+    """Apple identity_token 검증 서비스 단위 테스트"""
+
+    @override_settings(APPLE_AUDIENCE=None)
+    def test_verify_identity_token_missing_audience(self):
+        """APPLE_AUDIENCE 미설정 시 ValueError"""
+        from accounts.services.apple_auth import verify_identity_token
+        with self.assertRaises(ValueError) as ctx:
+            verify_identity_token('any.token.here', audience=None)
+        self.assertIn('APPLE_AUDIENCE', str(ctx.exception))
+
+    @override_settings(APPLE_AUDIENCE='com.example.app')
+    def test_verify_identity_token_invalid_jwt(self):
+        """잘못된 JWT 형식 시 InvalidTokenError"""
+        from accounts.services.apple_auth import verify_identity_token
+        with self.assertRaises(jwt.DecodeError):
+            verify_identity_token('invalid.jwt.string', audience='com.example.app')
+
+
+class AppleLoginTests(DisableCouponSignalMixin, APITestCase):
+    """Apple 로그인 엔드포인트 통합 테스트"""
+
+    VALID_CLAIMS = {
+        'sub': '001234.abc123def456.7890',
+        'email': 'user@privaterelay.appleid.com',
+        'email_verified': 'true',
+    }
+
+    @patch('accounts.views.verify_identity_token')
+    def test_apple_login_new_user(self, mock_verify):
+        mock_verify.return_value = self.VALID_CLAIMS
+        response = self.client.post(
+            '/api/auth/apple/login/',
+            {'identity_token': 'valid.jwt.here'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['is_new'])
+        self.assertIn('access', response.data)
+        self.assertIn('refresh', response.data)
+        self.assertIn('user', response.data)
+        self.assertEqual(response.data['user']['apple_id'], self.VALID_CLAIMS['sub'])
+        self.assertEqual(User.objects.count(), 1)
+        self.assertEqual(SocialAccount.objects.filter(provider='apple').count(), 1)
+
+    @patch('accounts.views.verify_identity_token')
+    def test_apple_login_existing_user(self, mock_verify):
+        user = User.objects.create_user(apple_id=self.VALID_CLAIMS['sub'])
+        SocialAccount.objects.create(
+            provider='apple',
+            provider_user_id=self.VALID_CLAIMS['sub'],
+            user=user,
+            email=self.VALID_CLAIMS['email'],
+        )
+        mock_verify.return_value = self.VALID_CLAIMS
+        response = self.client.post(
+            '/api/auth/apple/login/',
+            {'identity_token': 'valid.jwt.here'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.data['is_new'])
+        self.assertEqual(response.data['user']['id'], user.id)
+        self.assertEqual(User.objects.count(), 1)
+
+    @patch('accounts.views.verify_identity_token')
+    def test_apple_login_invalid_token_returns_401(self, mock_verify):
+        mock_verify.side_effect = jwt.InvalidTokenError('invalid')
+        response = self.client.post(
+            '/api/auth/apple/login/',
+            {'identity_token': 'bad.token'},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.data.get('code'), 'apple_token_invalid')
+
+    @patch('accounts.views.verify_identity_token')
+    def test_apple_login_missing_identity_token_returns_400(self, mock_verify):
+        response = self.client.post(
+            '/api/auth/apple/login/',
+            {},
+            format='json',
+        )
+        self.assertEqual(response.status_code, 400)
+        mock_verify.assert_not_called()
+
+    @patch('accounts.views.verify_identity_token')
+    def test_apple_login_with_full_name_and_email(self, mock_verify):
+        mock_verify.return_value = {'sub': '001234.xyz', 'email': None}
+        response = self.client.post(
+            '/api/auth/apple/login/',
+            {
+                'identity_token': 'valid.jwt',
+                'full_name': 'John Doe',
+                'email': 'john@example.com',
+            },
+            format='json',
+        )
+        self.assertEqual(response.status_code, 200)
+        user = User.objects.get(apple_id='001234.xyz')
+        self.assertEqual(user.nickname, 'John Doe')
+        self.assertEqual(user.email, 'john@example.com')

@@ -204,6 +204,10 @@ SECRET_KEY=your_django_secret_key
 DEBUG=True
 KAKAO_ADMIN_KEY=your_kakao_admin_key
 
+# Sign in with Apple (App Store Review 4.8)
+# identity_token의 aud 검증용. 앱 Bundle ID와 일치해야 함.
+APPLE_AUDIENCE=com.coggiri.wouldulike0117  # WouldULike 앱 Bundle ID
+
 # 운영 관리자 계정 설정
 OPERATIONS_ADMIN_ACCOUNTS=ROLE:KAKAO_ID:PASSWORD;ROLE2:KAKAO_ID2:PASSWORD2
 OPERATIONS_ADMIN_DEFAULT_PASSWORD=default_password
@@ -214,6 +218,7 @@ OPERATIONS_ADMIN_RESET_PASSWORDS=0
 
 ### 인증 (`/api/auth/`)
 - `POST /api/auth/kakao` - 카카오 로그인
+- `POST /api/auth/apple/login/` - Sign in with Apple 로그인 (App Store Review 4.8 대응)
 - `POST /api/auth/refresh` - 토큰 갱신
 - `POST /api/auth/verify` - 토큰 검증
 - `POST /api/auth/logout` - 로그아웃

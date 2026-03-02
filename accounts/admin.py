@@ -1,9 +1,9 @@
-﻿from django import forms
+from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.forms import ReadOnlyPasswordHashField
 
-from .models import User
+from .models import User, SocialAccount
 
 
 class UserCreationForm(forms.ModelForm):
@@ -118,3 +118,10 @@ class CustomUserAdmin(UserAdmin):
     )
 
     filter_horizontal = ("groups", "user_permissions")
+
+
+@admin.register(SocialAccount)
+class SocialAccountAdmin(admin.ModelAdmin):
+    list_display = ("provider", "provider_user_id", "user", "email")
+    list_filter = ("provider",)
+    search_fields = ("provider_user_id", "email", "user__username")

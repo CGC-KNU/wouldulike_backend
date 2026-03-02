@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from django.db import DatabaseError, connection
 from coupons.models import Coupon, StampWallet, StampEvent, InviteCode, Referral
 from guests.models import GuestUser
+from accounts.models import SocialAccount
 
 User = get_user_model()
 
@@ -11,14 +12,24 @@ CLOUDSQL_DB = 'cloudsql'
 
 
 class Command(BaseCommand):
-    help = '특정 카카오 사용자 계정의 모든 데이터를 삭제합니다 (쿠폰, 스탬프, 초대코드 등)'
+    help = '특정 사용자 계정의 모든 데이터를 삭제합니다 (쿠폰, 스탬프, 초대코드 등). 카카오 또는 Apple 로그인 사용자 지원.'
 
     def add_arguments(self, parser):
-        parser.add_argument(
+        id_group = parser.add_mutually_exclusive_group(required=True)
+        id_group.add_argument(
             '--kakao-id',
             type=int,
-            required=True,
             help='삭제할 사용자의 카카오 ID',
+        )
+        id_group.add_argument(
+            '--apple-id',
+            type=str,
+            help='삭제할 사용자의 Apple ID. 우주라이크 ID 전체 또는 apple_id 부분 입력 가능',
+        )
+        id_group.add_argument(
+            '--user-id',
+            type=int,
+            help='삭제할 사용자의 DB user id (우주라이크 ID 앞부분, 예: 1528)',
         )
         parser.add_argument(
             '--no-input',
@@ -26,14 +37,62 @@ class Command(BaseCommand):
             help='확인 없이 바로 삭제합니다',
         )
 
+    def _find_user_by_apple_id(self, apple_id: str):
+        """Apple ID 또는 우주라이크 ID 형식으로 사용자 찾기"""
+        apple_id = apple_id.strip()
+        if not apple_id:
+            return None
+
+        # 1) 정확히 일치
+        user = User.objects.filter(apple_id=apple_id).first()
+        if user:
+            return user
+
+        # 2) 우주라이크 ID 형식 (001528.xxx.yyy) - 앞부분이 user id
+        if '.' in apple_id:
+            parts = apple_id.split('.')
+            if parts[0].isdigit():
+                try:
+                    uid = int(parts[0])
+                    user = User.objects.filter(id=uid).first()
+                    if user:
+                        return user
+                except ValueError:
+                    pass
+            # 중간 부분이 apple_id일 수 있음 (UUID 형식)
+            if len(parts) >= 2 and len(parts[1]) == 32:
+                user = User.objects.filter(apple_id=parts[1]).first()
+                if user:
+                    return user
+
+        # 3) apple_id 부분 일치 (contains)
+        user = User.objects.filter(apple_id__icontains=apple_id).first()
+        return user
+
     def handle(self, *args, **options):
-        kakao_id = options['kakao_id']
+        kakao_id = options.get('kakao_id')
+        apple_id = options.get('apple_id')
+        user_id = options.get('user_id')
         no_input = options['no_input']
 
         try:
-            user = User.objects.get(kakao_id=kakao_id)
+            if kakao_id is not None:
+                user = User.objects.get(kakao_id=kakao_id)
+            elif user_id is not None:
+                user = User.objects.get(id=user_id)
+            elif apple_id:
+                user = self._find_user_by_apple_id(apple_id)
+                if not user:
+                    id_desc = f'Apple ID {apple_id}'
+                    raise CommandError(
+                        f'{id_desc}에 해당하는 사용자를 찾을 수 없습니다. '
+                        'python manage.py find_user "<검색어>" 로 사용자를 먼저 검색해보세요.'
+                    )
+            else:
+                raise CommandError('--kakao-id, --apple-id, --user-id 중 하나를 지정해주세요.')
         except User.DoesNotExist:
-            raise CommandError(f'카카오 ID {kakao_id}에 해당하는 사용자를 찾을 수 없습니다.')
+            id_desc = f'카카오 ID {kakao_id}' if kakao_id else f'user id {user_id}'
+            raise CommandError(f'{id_desc}에 해당하는 사용자를 찾을 수 없습니다.')
 
         # 삭제할 데이터 통계 수집
         # 쿠폰 관련 모델은 CloudSQL에서 조회
@@ -64,6 +123,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.WARNING('\n=== 삭제할 데이터 요약 ==='))
         self.stdout.write(f'사용자 ID: {user.id}')
         self.stdout.write(f'카카오 ID: {user.kakao_id}')
+        self.stdout.write(f'Apple ID: {user.apple_id or "-"}')
         self.stdout.write(f'생성일: {user.created_at}')
         self.stdout.write('')
         self.stdout.write('삭제될 데이터:')
@@ -218,6 +278,16 @@ class Command(BaseCommand):
                 self.style.WARNING(f'  ⚠️  JWT 토큰 blacklist 삭제 중 예상치 못한 오류 (무시하고 계속): {str(e)[:100]}')
             )
 
+        # SocialAccount 삭제 (Apple 로그인 등 - default DB)
+        try:
+            social_count = SocialAccount.objects.filter(user_id=user_id).count()
+            SocialAccount.objects.filter(user_id=user_id).delete()
+            if social_count > 0:
+                self.stdout.write(self.style.SUCCESS(f'  ✓ SocialAccount 삭제 완료: {social_count}개'))
+        except Exception as e:
+            self.stdout.write(
+                self.style.WARNING(f'  ⚠️  SocialAccount 삭제 중 오류 (무시하고 계속): {str(e)[:100]}'))
+
         # 마지막으로 사용자 삭제
         # CASCADE 삭제가 CloudSQL 테이블을 찾으려고 하므로, SQL로 직접 삭제
         # 관련 데이터는 이미 모두 삭제했으므로 CASCADE가 필요 없음
@@ -244,5 +314,6 @@ class Command(BaseCommand):
         self.stdout.write(f'삭제된 추천인 기록 (내가 추천한 사람): {deleted_counts["referrals_made"]}개')
         self.stdout.write(f'삭제된 추천인 기록 (나를 추천한 사람): {deleted_counts["referral_from"]}개')
         self.stdout.write(f'연결 해제된 게스트 사용자: {deleted_counts["guest_users"]}개')
-        self.stdout.write(self.style.SUCCESS(f'\n카카오 ID {kakao_id}의 모든 데이터가 성공적으로 삭제되었습니다.'))
+        id_label = f'카카오 ID {kakao_id}' if kakao_id else f'Apple ID {apple_id}' if apple_id else f'user id {user_id}'
+        self.stdout.write(self.style.SUCCESS(f'\n{id_label}의 모든 데이터가 성공적으로 삭제되었습니다.'))
 

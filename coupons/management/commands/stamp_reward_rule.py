@@ -18,6 +18,9 @@
   python manage.py stamp_reward_rule set 103 --type VISIT \\
     --benefits '{"1_4":{"title":"1~4회 보상","subtitle":"3,000원","value":3000},"5_9":{"title":"5~9회 보상","subtitle":"5,000원","value":5000},"10":{"title":"10회 보상","subtitle":"10,000원","value":10000}}'
 
+  # 스탬프 비고만 업데이트 (기존 규칙 유지)
+  python manage.py stamp_reward_rule set-notes 271 --notes "현재는 사용 불가"
+
   # 규칙 삭제 (쿠폰 혜택은 유지)
   python manage.py stamp_reward_rule delete 101
 
@@ -35,9 +38,12 @@ from coupons.service import STAMP_DB_ALIAS
 # 스탬프 개수 → 쿠폰 타입 코드 기본 매핑
 DEFAULT_THRESHOLD_COUPONS = {
     1: "STAMP_REWARD_1",
+    2: "STAMP_REWARD_2",
     3: "STAMP_REWARD_3",
     5: "STAMP_REWARD_5",
+    6: "STAMP_REWARD_6",
     7: "STAMP_REWARD_7",
+    9: "STAMP_REWARD_9",
     10: "STAMP_REWARD_10",
 }
 
@@ -114,7 +120,25 @@ class Command(BaseCommand):
             type=str,
             help='스탬프별 쿠폰 내용 JSON. 값에 notes(비고/사용조건) 포함 가능. 예: {"title":"...","subtitle":"...","value":3000,"notes":"최소 주문 1만원"}',
         )
+        set_parser.add_argument(
+            "--notes",
+            type=str,
+            default="",
+            help="스탬프 비고 (프론트 식당 상세에 표시)",
+        )
         set_parser.add_argument("--inactive", action="store_true", help="비활성화")
+
+        # set-notes: 스탬프 비고만 업데이트 (기존 규칙 유지)
+        set_notes_parser = subparsers.add_parser(
+            "set-notes", help="스탬프 비고만 업데이트 (기존 규칙 유지)"
+        )
+        set_notes_parser.add_argument("restaurant_id", type=int)
+        set_notes_parser.add_argument(
+            "--notes",
+            type=str,
+            required=True,
+            help="스탬프 비고 내용 (프론트 식당 상세에 표시)",
+        )
 
         # delete
         delete_parser = subparsers.add_parser("delete", help="규칙 삭제")
@@ -136,6 +160,8 @@ class Command(BaseCommand):
             self._list(options.get("restaurant_id"))
         elif action == "set":
             self._set(options)
+        elif action == "set-notes":
+            self._set_notes(options["restaurant_id"], options["notes"])
         elif action == "delete":
             self._delete(
                 options["restaurant_id"],
@@ -201,10 +227,15 @@ class Command(BaseCommand):
                     )
                     code = f"STAMP_REWARD_{s}"
                 thresholds.append({"stamps": s, "coupon_type_code": code})
-            config = {"thresholds": thresholds, "cycle_target": cycle}
+            config = {
+                "thresholds": thresholds,
+                "cycle_target": cycle,
+                "notes": (options.get("notes") or "").strip(),
+            }
         else:
             config = dict(DEFAULT_VISIT_CONFIG)
             config["cycle_target"] = options.get("cycle", 10)
+            config["notes"] = (options.get("notes") or "").strip()
 
         rule, created = StampRewardRule.objects.using(STAMP_DB_ALIAS).update_or_create(
             restaurant_id=rid,
@@ -225,6 +256,32 @@ class Command(BaseCommand):
         benefits_raw = options.get("benefits")
         if benefits_raw:
             self._apply_benefits(rid, rule_type, config, json.loads(benefits_raw))
+
+    def _set_notes(self, restaurant_id: int, notes: str) -> None:
+        """기존 StampRewardRule의 config_json.notes만 업데이트."""
+        try:
+            rule = StampRewardRule.objects.using(STAMP_DB_ALIAS).get(
+                restaurant_id=restaurant_id
+            )
+        except StampRewardRule.DoesNotExist:
+            self.stderr.write(
+                self.style.ERROR(
+                    f"규칙 없음: restaurant_id={restaurant_id}. "
+                    "먼저 set 명령으로 규칙을 생성하세요."
+                )
+            )
+            return
+
+        config = dict(rule.config_json)
+        config["notes"] = notes.strip()
+        rule.config_json = config
+        rule.save(update_fields=["config_json", "updated_at"])
+
+        name = get_restaurant_name(restaurant_id)
+        self.stdout.write(
+            self.style.SUCCESS(f"스탬프 비고 업데이트 완료: [{restaurant_id}] {name}")
+        )
+        self.stdout.write(f"  notes: {config['notes']}")
 
     def _apply_benefits(
         self, restaurant_id: int, rule_type: str, config: dict, benefits: dict

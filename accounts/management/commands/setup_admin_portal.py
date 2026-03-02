@@ -283,7 +283,11 @@ class Command(BaseCommand):
     ):
         user, created = user_model.objects.get_or_create(
             kakao_id=kakao_id,
-            defaults={"is_staff": is_staff, "is_superuser": is_superuser},
+            defaults={
+                "username": str(kakao_id),
+                "is_staff": is_staff,
+                "is_superuser": is_superuser,
+            },
         )
         changed = False
         if created or reset_password:
