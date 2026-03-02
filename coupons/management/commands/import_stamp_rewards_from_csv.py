@@ -202,15 +202,15 @@ STAMP_DATA = {
             "notes": "",
         },
     },
-    249: {  # 고씨네
+    249: {  # 고씨네 (general.csv: 3, 6, 9 패턴)
         "rule_type": "THRESHOLD",
         "config": {
             "thresholds": [
                 (3, "고로케 3개", ""),
-                (7, "닭튀김 4개", ""),
-                (10, "돈가스", ""),
+                (6, "닭튀김 4개", ""),
+                (9, "돈가스", ""),
             ],
-            "cycle_target": 10,
+            "cycle_target": 9,
             "notes": "",
         },
     },

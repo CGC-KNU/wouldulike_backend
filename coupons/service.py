@@ -73,11 +73,12 @@ def _build_app_open_issue_key(user: User) -> str:
 MAX_COUPONS_PER_RESTAURANT = 200
 
 # 기본(코드 하드코딩) 제외 식당 설정
-# 30: 고니식탁, 147: 포차1번지먹새통, 148: Better(부재 중), 284: 와비사비(계약 검토 중)
+# 30: 고니식탁, 147: 포차1번지먹새통 (쿠폰 발급 제외, 제휴는 유지)
+# 148(Better), 284(와비사비)는 제휴 아님 → AffiliateRestaurant에 없음
 COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
-    "WELCOME_3000": {30, 147, 148, 284},
-    "REFERRAL_BONUS_REFERRER": {30, 147, 148, 284},
-    "REFERRAL_BONUS_REFEREE": {30, 147, 148, 284},
+    "WELCOME_3000": {30, 147},
+    "REFERRAL_BONUS_REFERRER": {30, 147},
+    "REFERRAL_BONUS_REFEREE": {30, 147},
     "FINAL_EXAM_SPECIAL": {30},  # 고니식탁 제외
 }
 

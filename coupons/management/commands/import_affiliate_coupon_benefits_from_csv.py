@@ -1,8 +1,9 @@
 """
 CSV 파일에서 제휴식당 쿠폰 혜택을 RestaurantCouponBenefit으로 import합니다.
 
-- 프리미엄 CSV: Better, 와비사비, 포차1번지먹새통 제외
-- 일반 CSV: 고니식탁 제외
+- 제휴 18개, 쿠폰 발급 16개 (고니식탁·포차1번지먹새통 제외)
+- Better, 와비사비: 제휴 아님 (CSV에만 있음)
+- EXCLUDE_NAMES: 쿠폰 benefit 생성 제외 (고니식탁, 포차1번지먹새통, Better, 와비사비)
 - 쿠폰 혜택 X = 발급 없음 (benefit 생성 안 함)
 - 여러 행 = 여러 쿠폰 (sort_order로 구분)
 - 쿠폰 비고 = notes (사용 조건)
