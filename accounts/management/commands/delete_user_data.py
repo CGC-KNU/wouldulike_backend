@@ -11,14 +11,24 @@ CLOUDSQL_DB = 'cloudsql'
 
 
 class Command(BaseCommand):
-    help = '특정 카카오 사용자 계정의 모든 데이터를 삭제합니다 (쿠폰, 스탬프, 초대코드 등)'
+    help = '특정 사용자 계정의 모든 데이터를 삭제합니다 (쿠폰, 스탬프, 초대코드 등). 카카오 또는 Apple 로그인 사용자 지원.'
 
     def add_arguments(self, parser):
-        parser.add_argument(
+        id_group = parser.add_mutually_exclusive_group(required=True)
+        id_group.add_argument(
             '--kakao-id',
             type=int,
-            required=True,
             help='삭제할 사용자의 카카오 ID',
+        )
+        id_group.add_argument(
+            '--apple-id',
+            type=str,
+            help='삭제할 사용자의 Apple ID (우주라이크 ID 중간 부분, 예: 90360a381f054339a3aec5d3de29608d)',
+        )
+        id_group.add_argument(
+            '--user-id',
+            type=int,
+            help='삭제할 사용자의 DB user id (우주라이크 ID 앞부분, 예: 1528)',
         )
         parser.add_argument(
             '--no-input',
@@ -27,13 +37,23 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
-        kakao_id = options['kakao_id']
+        kakao_id = options.get('kakao_id')
+        apple_id = options.get('apple_id')
+        user_id = options.get('user_id')
         no_input = options['no_input']
 
         try:
-            user = User.objects.get(kakao_id=kakao_id)
+            if kakao_id is not None:
+                user = User.objects.get(kakao_id=kakao_id)
+            elif apple_id:
+                user = User.objects.get(apple_id=apple_id)
+            elif user_id is not None:
+                user = User.objects.get(id=user_id)
+            else:
+                raise CommandError('--kakao-id, --apple-id, --user-id 중 하나를 지정해주세요.')
         except User.DoesNotExist:
-            raise CommandError(f'카카오 ID {kakao_id}에 해당하는 사용자를 찾을 수 없습니다.')
+            id_desc = f'카카오 ID {kakao_id}' if kakao_id else f'Apple ID {apple_id}' if apple_id else f'user id {user_id}'
+            raise CommandError(f'{id_desc}에 해당하는 사용자를 찾을 수 없습니다.')
 
         # 삭제할 데이터 통계 수집
         # 쿠폰 관련 모델은 CloudSQL에서 조회
@@ -64,6 +84,7 @@ class Command(BaseCommand):
         self.stdout.write(self.style.WARNING('\n=== 삭제할 데이터 요약 ==='))
         self.stdout.write(f'사용자 ID: {user.id}')
         self.stdout.write(f'카카오 ID: {user.kakao_id}')
+        self.stdout.write(f'Apple ID: {user.apple_id or "-"}')
         self.stdout.write(f'생성일: {user.created_at}')
         self.stdout.write('')
         self.stdout.write('삭제될 데이터:')
@@ -244,5 +265,6 @@ class Command(BaseCommand):
         self.stdout.write(f'삭제된 추천인 기록 (내가 추천한 사람): {deleted_counts["referrals_made"]}개')
         self.stdout.write(f'삭제된 추천인 기록 (나를 추천한 사람): {deleted_counts["referral_from"]}개')
         self.stdout.write(f'연결 해제된 게스트 사용자: {deleted_counts["guest_users"]}개')
-        self.stdout.write(self.style.SUCCESS(f'\n카카오 ID {kakao_id}의 모든 데이터가 성공적으로 삭제되었습니다.'))
+        id_label = f'카카오 ID {kakao_id}' if kakao_id else f'Apple ID {apple_id}' if apple_id else f'user id {user_id}'
+        self.stdout.write(self.style.SUCCESS(f'\n{id_label}의 모든 데이터가 성공적으로 삭제되었습니다.'))
 

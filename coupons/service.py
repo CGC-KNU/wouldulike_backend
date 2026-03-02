@@ -1541,6 +1541,7 @@ def _issue_reward_coupon(
     *,
     coupon_type_code: str,
     issue_key_suffix: str,
+    stamp_subtitle: str = "",
     db_alias: str | None = None,
 ):
     alias = db_alias or router.db_for_write(Coupon)
@@ -1549,9 +1550,14 @@ def _issue_reward_coupon(
     issue_key = f"STAMP_REWARD:{user.id}:{issue_key_suffix}"
     expires_at = _expires_at(ct)
     benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, db_alias=alias)
-    # 스탬프 비고(notes)는 발급 쿠폰에 포함하지 않음
     if benefit_snapshot:
-        benefit_snapshot = {**benefit_snapshot, "notes": ""}
+        # 스탬프 비고(notes)는 발급 쿠폰에 포함하지 않음
+        # subtitle에 몇 개 혜택 쿠폰인지 명시 (예: "3개 스탬프 보상")
+        benefit_snapshot = {
+            **benefit_snapshot,
+            "notes": "",
+            "subtitle": stamp_subtitle or benefit_snapshot.get("subtitle", ""),
+        }
     return Coupon.objects.using(alias).create(
         code=make_coupon_code(),
         user=user,
@@ -1642,6 +1648,7 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
                         restaurant_id,
                         coupon_type_code=coupon_type_code,
                         issue_key_suffix=suffix,
+                        stamp_subtitle=f"{th}개 스탬프 보상",
                         db_alias=STAMP_DB_ALIAS,
                     )
                     logger.info(
@@ -1671,11 +1678,17 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
                     continue
                 if min_v <= visit_number <= max_v:
                     suffix = f"{restaurant_id}:{now_suffix}:V{visit_number}"
+                    visit_subtitle = (
+                        f"{visit_number}회 방문 보상"
+                        if min_v == max_v
+                        else f"{min_v}~{max_v}회 방문 보상"
+                    )
                     reward = _issue_reward_coupon(
                         user,
                         restaurant_id,
                         coupon_type_code=coupon_type_code,
                         issue_key_suffix=suffix,
+                        stamp_subtitle=visit_subtitle,
                         db_alias=STAMP_DB_ALIAS,
                     )
                     logger.info(

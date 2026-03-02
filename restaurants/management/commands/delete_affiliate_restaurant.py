@@ -1,11 +1,11 @@
 """
 제휴식당 삭제 명령어
 제휴식당과 관련된 모든 데이터(쿠폰, 스탬프, PIN 등)를 삭제합니다.
-"""
 
+--unlink: 제휴 해제만 (is_affiliate=FALSE로 변경 → 일반식당 탭에 표기). 스탬프/쿠폰 삭제.
+"""
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connections, router, transaction
-from django.db.models import Count
 
 from restaurants.models import AffiliateRestaurant
 from coupons.models import (
@@ -14,7 +14,9 @@ from coupons.models import (
     MerchantPin,
     StampWallet,
     StampEvent,
+    StampRewardRule,
 )
+from coupons.service import STAMP_DB_ALIAS
 
 
 class Command(BaseCommand):
@@ -24,8 +26,9 @@ class Command(BaseCommand):
         parser.add_argument(
             "--restaurant-id",
             type=int,
-            required=True,
-            help="삭제할 제휴식당의 restaurant_id",
+            action="append",
+            dest="restaurant_ids",
+            help="삭제할 제휴식당의 restaurant_id (여러 개 지정 가능)",
         )
         parser.add_argument(
             "--dry-run",
@@ -38,23 +41,51 @@ class Command(BaseCommand):
             help="확인 프롬프트 없이 바로 실행",
         )
         parser.add_argument(
+            "--unlink",
+            action="store_true",
+            help="제휴 해제만 (is_affiliate=FALSE로 변경 → 일반식당 탭에 표기). 스탬프/쿠폰 삭제.",
+        )
+        parser.add_argument(
             "--delete-coupons",
             action="store_true",
-            help="해당 식당의 쿠폰도 함께 삭제 (기본값: False, 쿠폰은 유지)",
+            help="해당 식당의 쿠폰도 함께 삭제 (--unlink 시 기본 True)",
         )
         parser.add_argument(
             "--delete-stamps",
             action="store_true",
-            help="해당 식당의 스탬프 지갑/이벤트도 함께 삭제 (기본값: False, 스탬프는 유지)",
+            help="해당 식당의 스탬프 지갑/이벤트도 함께 삭제 (--unlink 시 기본 True)",
         )
 
     def handle(self, *args, **options):
-        restaurant_id = options["restaurant_id"]
+        restaurant_ids = options.get("restaurant_ids") or []
+        if not restaurant_ids:
+            raise CommandError("--restaurant-id 를 하나 이상 지정하세요.")
         dry_run = options["dry_run"]
         no_input = options["no_input"]
-        delete_coupons = options["delete_coupons"]
-        delete_stamps = options["delete_stamps"]
+        unlink = options["unlink"]
+        delete_coupons = options["delete_coupons"] or unlink
+        delete_stamps = options["delete_stamps"] or unlink
 
+        for restaurant_id in restaurant_ids:
+            self._process_one(
+                restaurant_id=restaurant_id,
+                dry_run=dry_run,
+                no_input=no_input,
+                unlink=unlink,
+                delete_coupons=delete_coupons,
+                delete_stamps=delete_stamps,
+            )
+
+    def _process_one(
+        self,
+        *,
+        restaurant_id: int,
+        dry_run: bool,
+        no_input: bool,
+        unlink: bool,
+        delete_coupons: bool,
+        delete_stamps: bool,
+    ):
         # 제휴식당 조회
         alias = router.db_for_read(AffiliateRestaurant)
         restaurant = AffiliateRestaurant.objects.using(alias).filter(
@@ -98,6 +129,11 @@ class Command(BaseCommand):
             restaurant_id=restaurant_id
         ).exists()
 
+        # StampRewardRule 존재 여부
+        rule_exists = StampRewardRule.objects.using(STAMP_DB_ALIAS).filter(
+            restaurant_id=restaurant_id
+        ).exists()
+
         # Coupon 개수
         coupon_count = Coupon.objects.using(coupon_db).filter(
             restaurant_id=restaurant_id
@@ -117,6 +153,7 @@ class Command(BaseCommand):
             f"\n관련 데이터 현황:\n"
             f"  RestaurantCouponBenefit: {benefit_count}개\n"
             f"  MerchantPin: {'있음' if pin_exists else '없음'}\n"
+            f"  StampRewardRule: {'있음' if rule_exists else '없음'}\n"
             f"  Coupon: {coupon_count}개\n"
             f"  StampWallet: {wallet_count}개\n"
             f"  StampEvent: {event_count}개"
@@ -126,6 +163,7 @@ class Command(BaseCommand):
         deletions = []
         deletions.append(f"  - RestaurantCouponBenefit: {benefit_count}개 (자동 삭제)")
         deletions.append(f"  - MerchantPin: {'1개' if pin_exists else '0개'} (자동 삭제)")
+        deletions.append(f"  - StampRewardRule: {'1개' if rule_exists else '0개'} (자동 삭제)")
 
         if delete_coupons:
             deletions.append(f"  - Coupon: {coupon_count}개")
@@ -139,7 +177,10 @@ class Command(BaseCommand):
             deletions.append(f"  - StampWallet: {wallet_count}개 (유지)")
             deletions.append(f"  - StampEvent: {event_count}개 (유지)")
 
-        deletions.append(f"  - AffiliateRestaurant: 1개")
+        if unlink:
+            deletions.append(f"  - AffiliateRestaurant: is_affiliate=FALSE로 변경 (일반식당 탭에 표기)")
+        else:
+            deletions.append(f"  - AffiliateRestaurant: 1개 (테이블에서 삭제)")
 
         if dry_run:
             self.stdout.write(self.style.WARNING("\n[DRY-RUN] 다음 항목들이 삭제될 예정입니다:"))
@@ -173,6 +214,12 @@ class Command(BaseCommand):
             ).delete()[0]
             self.stdout.write(f"  ✓ MerchantPin 삭제: {deleted_pins}개")
 
+            # 2-1. StampRewardRule 삭제
+            deleted_rules = StampRewardRule.objects.using(STAMP_DB_ALIAS).filter(
+                restaurant_id=restaurant_id
+            ).delete()[0]
+            self.stdout.write(f"  ✓ StampRewardRule 삭제: {deleted_rules}개")
+
             # 3. Coupon 처리
             if delete_coupons:
                 deleted_coupons = Coupon.objects.using(coupon_db).filter(
@@ -203,25 +250,40 @@ class Command(BaseCommand):
             else:
                 self.stdout.write(f"  - StampEvent 유지: {event_count}개")
 
-        # 6. AffiliateRestaurant 삭제 (raw SQL 사용, managed=False이므로)
+        # 6. AffiliateRestaurant 처리
         write_alias = router.db_for_write(AffiliateRestaurant)
         with connections[write_alias].cursor() as cursor:
-            cursor.execute(
-                "DELETE FROM restaurants_affiliate WHERE restaurant_id = %s",
-                [restaurant_id],
-            )
-            if cursor.rowcount == 0:
-                self.stdout.write(
-                    self.style.WARNING(
-                        f"  ⚠️  restaurants_affiliate에서 restaurant_id={restaurant_id}를 찾을 수 없습니다."
-                    )
+            if unlink:
+                cursor.execute(
+                    "UPDATE restaurants_affiliate SET is_affiliate = FALSE WHERE restaurant_id = %s",
+                    [restaurant_id],
                 )
+                if cursor.rowcount == 0:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"  ⚠️  restaurants_affiliate에서 restaurant_id={restaurant_id}를 찾을 수 없습니다."
+                        )
+                    )
+                else:
+                    self.stdout.write(f"  ✓ AffiliateRestaurant: is_affiliate=FALSE로 변경 (일반식당 탭에 표기)")
             else:
-                self.stdout.write(f"  ✓ AffiliateRestaurant 삭제: 1개")
+                cursor.execute(
+                    "DELETE FROM restaurants_affiliate WHERE restaurant_id = %s",
+                    [restaurant_id],
+                )
+                if cursor.rowcount == 0:
+                    self.stdout.write(
+                        self.style.WARNING(
+                            f"  ⚠️  restaurants_affiliate에서 restaurant_id={restaurant_id}를 찾을 수 없습니다."
+                        )
+                    )
+                else:
+                    self.stdout.write(f"  ✓ AffiliateRestaurant 삭제: 1개")
 
+        action = "제휴 해제" if unlink else "삭제"
         self.stdout.write(
             self.style.SUCCESS(
-                f"\n✅ 제휴식당 삭제 완료: restaurant_id={restaurant_id}, name='{restaurant.name}'"
+                f"\n✅ 제휴식당 {action} 완료: restaurant_id={restaurant_id}, name='{restaurant.name}'"
             )
         )
 
