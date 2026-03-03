@@ -5,10 +5,10 @@ from .models import PopupCampaign, Trend
 
 @admin.register(Trend)
 class TrendAdmin(admin.ModelAdmin):
-    list_display = ("title", "blog_link", "created_at", "updated_at")
+    list_display = ("title", "display_order", "blog_link", "created_at", "updated_at")
     search_fields = ("title", "description")
     readonly_fields = ("created_at", "updated_at")
-    ordering = ("-created_at",)
+    ordering = ("display_order", "-created_at")
 
 
 @admin.register(PopupCampaign)

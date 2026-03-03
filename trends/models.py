@@ -5,8 +5,12 @@ class Trend(models.Model):
     description = models.TextField()  # 간단한 설명
     image = models.ImageField(upload_to='trend_images/')  # 사진
     blog_link = models.URLField()  # 블로그 링크
+    display_order = models.PositiveIntegerField(default=0, db_index=True)  # 표시 순서 (작을수록 먼저)
     created_at = models.DateTimeField(auto_now_add=True)  # 생성 날짜
     updated_at = models.DateTimeField(auto_now=True)  # 업데이트 날짜
+
+    class Meta:
+        ordering = ("display_order", "-created_at")
 
     def __str__(self):
         return self.title

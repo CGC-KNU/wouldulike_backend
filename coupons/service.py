@@ -104,6 +104,37 @@ def _get_excluded_restaurant_ids(
     return base | extra
 
 
+def _get_valid_restaurant_ids_for_coupon_type(
+    coupon_type: CouponType,
+    *,
+    db_alias: str | None = None,
+) -> set[int]:
+    """
+    쿠폰 발급 대상 식당 ID 집합을 반환.
+    - is_affiliate=True (제휴 식당)
+    - RestaurantCouponBenefit 존재 (active=True)
+    - 제외 목록 아님
+    위 조건을 모두 만족하는 식당만 반환.
+    """
+    alias = db_alias or router.db_for_read(AffiliateRestaurant)
+    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
+
+    affiliate_ids = set(
+        AffiliateRestaurant.objects.using(alias)
+        .filter(is_affiliate=True)
+        .values_list("restaurant_id", flat=True)
+    )
+    benefit_ids = set(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=coupon_type, active=True)
+        .values_list("restaurant_id", flat=True)
+        .distinct()
+    )
+    excluded_ids = _get_excluded_restaurant_ids(coupon_type.code, db_alias=alias)
+
+    return (affiliate_ids & benefit_ids) - excluded_ids
+
+
 def _build_benefit_snapshot(
     coupon_type: CouponType,
     restaurant_id: int,
@@ -170,21 +201,14 @@ def _build_benefit_snapshot(
 
 
 def _select_restaurant_for_coupon(ct: CouponType, *, db_alias: str | None = None) -> int:
+    """
+    쿠폰 발급 대상 식당 중 균등 분배로 한 식당을 선정.
+    _get_valid_restaurant_ids_for_coupon_type(제휴+benefit+비제외) 기준으로만 선정.
+    """
     alias = db_alias or router.db_for_write(Coupon)
-    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
-    # benefit이 있는 식당만 대상 (쿠폰 혜택 X인 식당 제외)
     restaurant_ids = list(
-        RestaurantCouponBenefit.objects.using(benefit_alias)
-        .filter(coupon_type=ct, active=True)
-        .values_list("restaurant_id", flat=True)
-        .distinct()
+        _get_valid_restaurant_ids_for_coupon_type(ct, db_alias=alias)
     )
-    if not restaurant_ids:
-        restaurant_ids = list(
-            AffiliateRestaurant.objects.using(alias)
-            .filter(is_affiliate=True)
-            .values_list("restaurant_id", flat=True)
-        )
     if not restaurant_ids:
         raise ValidationError("no restaurants available for coupon assignment")
 
@@ -1622,9 +1646,22 @@ def _issue_reward_coupon(
     issue_key_suffix: str,
     stamp_subtitle: str = "",
     db_alias: str | None = None,
-):
+) -> "Coupon | None":
+    """
+    스탬프 보상 쿠폰 발급.
+    restaurant_id가 쿠폰 발급 대상(제휴+benefit+비제외)이 아니면 None 반환(발급 스킵).
+    """
     alias = db_alias or router.db_for_write(Coupon)
     ct = CouponType.objects.using(alias).get(code=coupon_type_code)
+    valid_ids = _get_valid_restaurant_ids_for_coupon_type(ct, db_alias=alias)
+    if restaurant_id not in valid_ids:
+        logger.warning(
+            "Stamp reward coupon skipped: restaurant_id=%s not in valid targets (affiliate+benefit) for %s",
+            restaurant_id,
+            coupon_type_code,
+        )
+        return None
+
     camp = Campaign.objects.using(alias).get(code=REWARD_CAMPAIGN_CODE, active=True)
     issue_key = f"STAMP_REWARD:{user.id}:{issue_key_suffix}"
     expires_at = _expires_at(ct)
@@ -1725,18 +1762,19 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
                         stamp_subtitle=f"{th}개 스탬프 보상",
                         db_alias=STAMP_DB_ALIAS,
                     )
-                    logger.info(
-                        "Stamp reward issued user=%s restaurant=%s threshold=%s coupon_type=%s coupon_code=%s",
-                        user.id,
-                        restaurant_id,
-                        th,
-                        reward.coupon_type.code,
-                        reward.code,
-                    )
-                    reward_codes.append(reward.code)
-                    reward_details.append(
-                        {"threshold": th, "coupon_code": reward.code, "coupon_type": reward.coupon_type.code}
-                    )
+                    if reward:
+                        logger.info(
+                            "Stamp reward issued user=%s restaurant=%s threshold=%s coupon_type=%s coupon_code=%s",
+                            user.id,
+                            restaurant_id,
+                            th,
+                            reward.coupon_type.code,
+                            reward.code,
+                        )
+                        reward_codes.append(reward.code)
+                        reward_details.append(
+                            {"threshold": th, "coupon_code": reward.code, "coupon_type": reward.coupon_type.code}
+                        )
                     if th == max_threshold:
                         max_reached = True
 
@@ -1765,18 +1803,19 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
                         stamp_subtitle=visit_subtitle,
                         db_alias=STAMP_DB_ALIAS,
                     )
-                    logger.info(
-                        "Stamp visit reward issued user=%s restaurant=%s visit=%s coupon_type=%s coupon_code=%s",
-                        user.id,
-                        restaurant_id,
-                        visit_number,
-                        reward.coupon_type.code,
-                        reward.code,
-                    )
-                    reward_codes.append(reward.code)
-                    reward_details.append(
-                        {"visit": visit_number, "coupon_code": reward.code, "coupon_type": reward.coupon_type.code}
-                    )
+                    if reward:
+                        logger.info(
+                            "Stamp visit reward issued user=%s restaurant=%s visit=%s coupon_type=%s coupon_code=%s",
+                            user.id,
+                            restaurant_id,
+                            visit_number,
+                            reward.coupon_type.code,
+                            reward.code,
+                        )
+                        reward_codes.append(reward.code)
+                        reward_details.append(
+                            {"visit": visit_number, "coupon_code": reward.code, "coupon_type": reward.coupon_type.code}
+                        )
                     break
 
             if visit_number >= cycle_target:

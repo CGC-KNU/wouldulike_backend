@@ -8,7 +8,7 @@ from rest_framework.generics import RetrieveAPIView
 
 class TrendListView(APIView):
     def get(self, request):
-        trends = Trend.objects.all().order_by('-created_at')  # 최신순 정렬
+        trends = Trend.objects.all().order_by("display_order", "-created_at")
         serializer = TrendSerializer(trends, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
