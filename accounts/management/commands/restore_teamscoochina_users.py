@@ -11,6 +11,8 @@
 from django.core.management.base import BaseCommand
 from django.db import connection
 from django.contrib.auth import get_user_model
+from django.utils import timezone
+
 from coupons.models import Coupon
 from coupons.service import ensure_invite_code, issue_signup_coupon
 from django.db import router
@@ -77,13 +79,14 @@ class Command(BaseCommand):
                 else:
                     # 2) User 복구 (같은 id로 INSERT - JWT 호환)
                     # unusable password = "!" (Django AbstractBaseUser 형식)
+                    now = timezone.now()
                     with connection.cursor() as cursor:
                         cursor.execute(
                             """
-                            INSERT INTO accounts_user (id, username, kakao_id, password, is_active, is_staff, is_superuser)
-                            VALUES (%s, %s, %s, %s, true, false, false)
+                            INSERT INTO accounts_user (id, username, kakao_id, password, is_active, is_staff, is_superuser, created_at, updated_at)
+                            VALUES (%s, %s, %s, %s, true, false, false, %s, %s)
                             """,
-                            [user_id, str(kakao_id), kakao_id, "!"],
+                            [user_id, str(kakao_id), kakao_id, "!", now, now],
                         )
                     user = User.objects.get(id=user_id)
 
