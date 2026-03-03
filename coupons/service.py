@@ -141,6 +141,7 @@ def _build_benefit_snapshot(
     *,
     benefit: "RestaurantCouponBenefit | None" = None,
     db_alias: str | None = None,
+    issue_type_label: str | None = None,
 ) -> dict:
     snapshot = {
         "coupon_type_code": coupon_type.code,
@@ -183,8 +184,12 @@ def _build_benefit_snapshot(
             restaurant_name = None
         if restaurant_name:
             snapshot["restaurant_name"] = restaurant_name
+        if issue_type_label:
+            snapshot["issue_type_label"] = issue_type_label
         return snapshot
 
+    if issue_type_label:
+        snapshot["issue_type_label"] = issue_type_label
     restaurant_alias = db_alias or router.db_for_read(AffiliateRestaurant)
     try:
         restaurant_name = (
@@ -401,6 +406,7 @@ def _issue_coupons_for_single_restaurant(
     campaign: Campaign,
     issue_key_prefix: str,
     db_alias: str | None = None,
+    issue_type_label: str | None = None,
 ) -> list:
     """
     한 식당만 선정하여 해당 식당의 benefit 수만큼 쿠폰 발급.
@@ -438,7 +444,11 @@ def _issue_coupons_for_single_restaurant(
 
         try:
             benefit_snapshot = _build_benefit_snapshot(
-                coupon_type, restaurant_id, benefit=benefit, db_alias=alias
+                coupon_type,
+                restaurant_id,
+                benefit=benefit,
+                db_alias=alias,
+                issue_type_label=issue_type_label,
             )
             coupon = Coupon.objects.using(alias).create(
                 code=make_coupon_code(),
@@ -479,6 +489,7 @@ def issue_signup_coupon(user: User):
         campaign=camp,
         issue_key_prefix=f"SIGNUP:{user.id}",
         db_alias=alias,
+        issue_type_label="신규가입 쿠폰",
     )
 
 

@@ -29,10 +29,18 @@
   "campaign": 1,
   "restaurant_id": 101,
   "restaurant_name": "OO식당",
-  "benefit": { ... },
-  "issue_key": "APP_OPEN:123:20250227:101"
+  "benefit": {
+    "coupon_type_code": "WELCOME_3000",
+    "coupon_type_title": "Welcome 3000",
+    "title": "3,000원 할인",
+    "subtitle": "",
+    "issue_type_label": "신규가입 쿠폰"
+  },
+  "issue_key": "SIGNUP:123:101:0"
 }
 ```
+
+- `benefit.issue_type_label`: 신규가입 쿠폰인 경우 `"신규가입 쿠폰"`이 포함됩니다. 상세 화면에서 발급 경로를 명시할 때 사용하세요.
 
 ### 2.2 쿠폰 확인 - `POST /api/coupons/check/`
 
