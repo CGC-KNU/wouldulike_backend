@@ -35,7 +35,7 @@ settings.DATABASE_ROUTERS = ["coupons.tests.SingleDBRouter"]
 
 
 class RestaurantAllocationTests(TestCase):
-    """신규가입 쿠폰: 17개 식당 전체 발급 (앱접속/기획전과 동일)."""
+    """신규가입 쿠폰: 한 식당만 발급."""
 
     @classmethod
     def setUpTestData(cls):
@@ -49,27 +49,23 @@ class RestaurantAllocationTests(TestCase):
     def _create_user(self, idx: int):
         return self.user_model.objects.create_user(kakao_id=50000 + idx, password="pass")
 
-    def test_signup_coupon_issues_for_all_target_restaurants(self):
-        """신규가입 시 대상 식당 전체에 대해 쿠폰 발급 (리스트 반환)."""
+    def test_signup_coupon_issues_for_single_restaurant(self):
+        """신규가입 시 한 식당에 대해서만 쿠폰 발급 (리스트 반환)."""
         user = self._create_user(1)
-        mock_coupons = [
-            MagicMock(restaurant_id=101, code="MOCK01"),
-            MagicMock(restaurant_id=102, code="MOCK02"),
-        ]
+        mock_coupons = [MagicMock(restaurant_id=101, code="MOCK01")]
         with patch(
-            "coupons.service._issue_coupons_for_target_restaurants",
+            "coupons.service._issue_coupons_for_single_restaurant",
             return_value=mock_coupons,
         ):
             coupons = issue_signup_coupon(user)
-        self.assertEqual(len(coupons), 2)
-        self.assertIn(coupons[0].restaurant_id, [101, 102])
-        self.assertIn(coupons[1].restaurant_id, [101, 102])
+        self.assertEqual(len(coupons), 1)
+        self.assertEqual(coupons[0].restaurant_id, 101)
 
     def test_signup_coupon_returns_empty_list_when_no_targets(self):
         """대상 식당이 없으면 빈 리스트 반환."""
         user = self._create_user(2)
         with patch(
-            "coupons.service._issue_coupons_for_target_restaurants",
+            "coupons.service._issue_coupons_for_single_restaurant",
             return_value=[],
         ):
             coupons = issue_signup_coupon(user)
@@ -106,7 +102,7 @@ class ReferralLimitTests(TestCase):
         self.assertEqual(Referral.objects.filter(referrer=self.referrer).count(), 5)
 
 class ReferralRestaurantAllocationTests(TestCase):
-    """친구초대 쿠폰: 추천인·피추천인 모두 17개 식당 전체 발급 (앱접속/기획전과 동일)."""
+    """친구초대 쿠폰: 추천인·피추천인 각각 한 식당만 발급."""
 
     @classmethod
     def setUpTestData(cls):
@@ -121,21 +117,15 @@ class ReferralRestaurantAllocationTests(TestCase):
     def _create_user(self, idx: int):
         return self.user_model.objects.create_user(kakao_id=60000 + idx, password="pass")
 
-    def test_referral_issues_coupons_for_all_target_restaurants(self):
-        """친구초대 시 추천인·피추천인 모두 대상 식당 전체에 대해 쿠폰 발급."""
+    def test_referral_issues_coupons_for_single_restaurant_each(self):
+        """친구초대 시 추천인·피추천인 각각 한 식당에 대해서만 쿠폰 발급."""
         referrer = self._create_user(1)
         ensure_invite_code(referrer)
         referee = self._create_user(2)
         accept_referral(referee=referee, ref_code=referrer.invite_code.code)
 
-        ref_coupons = [
-            MagicMock(restaurant_id=401, code="REF01"),
-            MagicMock(restaurant_id=402, code="REF02"),
-        ]
-        referee_coupons = [
-            MagicMock(restaurant_id=401, code="REE01"),
-            MagicMock(restaurant_id=402, code="REE02"),
-        ]
+        ref_coupons = [MagicMock(restaurant_id=401, code="REF01")]
+        referee_coupons = [MagicMock(restaurant_id=402, code="REE01")]
 
         def mock_issue(*args, **kwargs):
             coupon_type = kwargs.get("coupon_type") or (args[1] if len(args) > 1 else None)
@@ -144,14 +134,14 @@ class ReferralRestaurantAllocationTests(TestCase):
             return referee_coupons
 
         with patch(
-            "coupons.service._issue_coupons_for_target_restaurants",
+            "coupons.service._issue_coupons_for_single_restaurant",
             side_effect=mock_issue,
         ):
             _, issued_coupons = qualify_referral_and_grant(referee)
 
-        # 추천인 2개 + 피추천인 2개 = 4개
-        self.assertEqual(len(issued_coupons), 4)
+        # 추천인 1개 + 피추천인 1개 = 2개
+        self.assertEqual(len(issued_coupons), 2)
         ref_issued = [c for c in issued_coupons if c.code.startswith("REF")]
         referee_issued = [c for c in issued_coupons if c.code.startswith("REE")]
-        self.assertEqual(len(ref_issued), 2)
-        self.assertEqual(len(referee_issued), 2)
+        self.assertEqual(len(ref_issued), 1)
+        self.assertEqual(len(referee_issued), 1)

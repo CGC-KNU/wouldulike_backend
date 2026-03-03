@@ -1,7 +1,9 @@
 import os
 import logging
+from datetime import timedelta
 
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.utils import timezone
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
@@ -46,8 +48,16 @@ class MyCouponsView(generics.ListAPIView):
         logger.info("[req:%s] MyCouponsView.get_queryset start user=%s", request_id, getattr(user, "id", None))
 
         # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
+        # 신규가입 직후(1시간 이내)에는 스킵 - 이미 신규가입 쿠폰 1개만 발급됨
         self._issued_app_open_coupons = []
-        if getattr(user, "is_authenticated", False) and AUTH_ISSUE_APP_OPEN_COUPON_ON_COUPON_LIST:
+        created_at = getattr(user, "created_at", None)
+        is_new_user = created_at and (timezone.now() - created_at) < timedelta(hours=1)
+        should_issue_app_open = (
+            getattr(user, "is_authenticated", False)
+            and AUTH_ISSUE_APP_OPEN_COUPON_ON_COUPON_LIST
+            and not is_new_user
+        )
+        if should_issue_app_open:
             try:
                 coupons = issue_app_open_coupon(user)
                 if coupons:

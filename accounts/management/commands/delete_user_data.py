@@ -157,8 +157,9 @@ class Command(BaseCommand):
                 queryset = model_class.objects.using(CLOUDSQL_DB).filter(**filter_kwargs)
                 count = queryset.count()
                 if count > 0:
-                    queryset.delete()
-                return count
+                    deleted, _ = queryset.delete()
+                    return deleted
+                return 0
             except DatabaseError as e:
                 self.stdout.write(
                     self.style.WARNING(f'  ⚠️  {model_name} 삭제 중 오류 (무시하고 계속): {str(e)[:100]}')
@@ -175,6 +176,14 @@ class Command(BaseCommand):
             deleted_counts['coupons'] = safe_delete_cloudsql(
                 Coupon, {'user_id': user.id}, '쿠폰'
             )
+            # 삭제 검증: 해당 사용자 쿠폰이 0개인지 확인
+            remaining = Coupon.objects.using(CLOUDSQL_DB).filter(user_id=user.id).count()
+            if remaining > 0:
+                self.stdout.write(
+                    self.style.WARNING(f'  ⚠️  쿠폰 삭제 검증 실패: {remaining}개 남음 (user_id={user.id})')
+                )
+            elif deleted_counts['coupons'] > 0:
+                self.stdout.write(self.style.SUCCESS(f'  ✓ 쿠폰 삭제 완료: {deleted_counts["coupons"]}개 (검증됨)'))
         except Exception as e:
             self.stdout.write(self.style.WARNING(f'  ⚠️  쿠폰 삭제 중 오류: {str(e)[:100]}'))
             deleted_counts['coupons'] = 0

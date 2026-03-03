@@ -370,11 +370,86 @@ def _issue_coupons_for_target_restaurants(
     return issued
 
 
+def _issue_coupons_for_single_restaurant(
+    *,
+    user: User,
+    coupon_type: CouponType,
+    campaign: Campaign,
+    issue_key_prefix: str,
+    db_alias: str | None = None,
+) -> list:
+    """
+    한 식당만 선정하여 해당 식당의 benefit 수만큼 쿠폰 발급.
+    신규가입, 친구초대(추천인/피추천인)용.
+    """
+    alias = db_alias or router.db_for_write(Coupon)
+    restaurant_id = _select_restaurant_for_coupon(coupon_type, db_alias=alias)
+
+    issued: list = []
+    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=coupon_type, restaurant_id=restaurant_id, active=True)
+        .order_by("sort_order")
+    )
+    if not benefits:
+        return issued
+
+    for sort_order, benefit in enumerate(benefits):
+        issue_key = f"{issue_key_prefix}:{restaurant_id}:{sort_order}"
+        existing = (
+            Coupon.objects.using(alias)
+            .filter(
+                user=user,
+                coupon_type=coupon_type,
+                campaign=campaign,
+                issue_key=issue_key,
+                restaurant_id=restaurant_id,
+            )
+            .first()
+        )
+        if existing:
+            issued.append(existing)
+            continue
+
+        try:
+            benefit_snapshot = _build_benefit_snapshot(
+                coupon_type, restaurant_id, benefit=benefit, db_alias=alias
+            )
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=coupon_type,
+                campaign=campaign,
+                restaurant_id=restaurant_id,
+                expires_at=_expires_at(coupon_type),
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued.append(coupon)
+        except IntegrityError:
+            dup = (
+                Coupon.objects.using(alias)
+                .filter(
+                    user=user,
+                    coupon_type=coupon_type,
+                    campaign=campaign,
+                    issue_key=issue_key,
+                    restaurant_id=restaurant_id,
+                )
+                .first()
+            )
+            if dup:
+                issued.append(dup)
+    return issued
+
+
 def issue_signup_coupon(user: User):
+    """신규가입 시 한 식당의 쿠폰만 발급."""
     alias = router.db_for_write(Coupon)
     ct = CouponType.objects.using(alias).get(code="WELCOME_3000")
     camp = Campaign.objects.using(alias).get(code="SIGNUP_WELCOME", active=True)
-    return _issue_coupons_for_target_restaurants(
+    return _issue_coupons_for_single_restaurant(
         user=user,
         coupon_type=ct,
         campaign=camp,
@@ -1265,13 +1340,13 @@ def qualify_referral_and_grant(referee: User) -> tuple[Referral | None, list]:
 
             ref.save(update_fields=["status", "qualified_at"], using=db_alias)
 
-            # reward issuance - 17개 식당 전체 발급 (앱접속/기획전과 동일)
+            # reward issuance - 한 식당씩만 발급 (추천인/피추천인 각 1개 식당)
             ref_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFERRER")
             ref_camp = Campaign.objects.using(db_alias).get(code="REFERRAL", active=True)
             new_ct = CouponType.objects.using(db_alias).get(code="REFERRAL_BONUS_REFEREE")
 
             if can_reward_referrer:
-                ref_coupons = _issue_coupons_for_target_restaurants(
+                ref_coupons = _issue_coupons_for_single_restaurant(
                     user=ref.referrer,
                     coupon_type=ref_ct,
                     campaign=ref_camp,
@@ -1280,7 +1355,7 @@ def qualify_referral_and_grant(referee: User) -> tuple[Referral | None, list]:
                 )
                 issued_coupons.extend(ref_coupons)
 
-            referee_coupons = _issue_coupons_for_target_restaurants(
+            referee_coupons = _issue_coupons_for_single_restaurant(
                 user=referee,
                 coupon_type=new_ct,
                 campaign=ref_camp,

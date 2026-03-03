@@ -400,8 +400,8 @@ class KakaoLoginView(APIView):
                         exc,
                     )
 
-            # 앱 접속(로그인) 쿠폰 발급 - 실패해도 로그인은 계속 진행
-            if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
+            # 앱 접속(로그인) 쿠폰 발급 - 신규가입(created) 시에는 스킵 (이미 신규가입 쿠폰 1개 발급됨)
+            if not created and AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
                 try:
                     issue_app_open_coupon(user)
                 except Exception as exc:
@@ -577,7 +577,8 @@ class AppleLoginView(APIView):
                     user.id, exc,
                 )
 
-        if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
+        # 앱 접속 쿠폰 - 신규가입(created) 시에는 스킵 (이미 신규가입 쿠폰 1개 발급됨)
+        if not created and AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
             try:
                 issue_app_open_coupon(user)
             except Exception as exc:
