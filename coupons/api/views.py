@@ -1,10 +1,12 @@
+import os
+import logging
+
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework.exceptions import ValidationError as DRFValidationError
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.authentication import JWTAuthentication
-import logging
 
 from ..models import Coupon
 from ..utils import format_issued_coupons
@@ -27,6 +29,11 @@ from .serializers import CouponSerializer, InviteCodeSerializer
 
 logger = logging.getLogger(__name__)
 
+# 쿠폰 목록 진입 시 앱 접속 쿠폰 발급 여부 (0: 비활성화)
+AUTH_ISSUE_APP_OPEN_COUPON_ON_COUPON_LIST = (
+    os.getenv("AUTH_ISSUE_APP_OPEN_COUPON_ON_COUPON_LIST", "1") in ("1", "true", "True")
+)
+
 
 class MyCouponsView(generics.ListAPIView):
     authentication_classes = [JWTAuthentication]
@@ -40,7 +47,7 @@ class MyCouponsView(generics.ListAPIView):
 
         # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
         self._issued_app_open_coupons = []
-        if getattr(user, "is_authenticated", False):
+        if getattr(user, "is_authenticated", False) and AUTH_ISSUE_APP_OPEN_COUPON_ON_COUPON_LIST:
             try:
                 coupons = issue_app_open_coupon(user)
                 if coupons:
