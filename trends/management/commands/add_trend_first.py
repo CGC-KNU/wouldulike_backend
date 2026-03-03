@@ -65,9 +65,9 @@ class Command(BaseCommand):
             display_order=target_display_order,
         )
 
-        # 이 프로젝트에서는 ImageField에 S3 URL 문자열을 직접 name으로 저장해서 사용하고 있음
+        # S3 전체 URL을 직접 저장 (ImageField의 name에 문자열 저장)
         if image_path:
-            trend.image.name = image_path
+            trend.image = image_path
 
         trend.save()
 

@@ -9,7 +9,7 @@ from rest_framework.generics import RetrieveAPIView
 class TrendListView(APIView):
     def get(self, request):
         trends = Trend.objects.all().order_by("display_order", "-created_at")
-        serializer = TrendSerializer(trends, many=True)
+        serializer = TrendSerializer(trends, many=True, context={"request": request})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 # id별로 트렌드 상세 정보를 반환하는 뷰
@@ -20,7 +20,7 @@ class TrendDetailView(RetrieveAPIView):
     def get(self, request, pk):
         try:
             trend = Trend.objects.get(pk=pk)  # 주어진 id로 Trend 객체 가져오기
-            serializer = TrendSerializer(trend)
+            serializer = TrendSerializer(trend, context={"request": request})
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Trend.DoesNotExist:
             return Response({"error": "Trend not found"}, status=status.HTTP_404_NOT_FOUND)
