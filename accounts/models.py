@@ -22,13 +22,18 @@ class UserManager(BaseUserManager):
         user.save(using=self._db)
         return user
 
-    def create_superuser(self, kakao_id, password=None, **extra_fields):
-        extra_fields.setdefault('is_staff', True)
-        extra_fields.setdefault('is_superuser', True)
-        if extra_fields.get('is_staff') is not True:
-            raise ValueError('Superuser must have is_staff=True.')
-        if extra_fields.get('is_superuser') is not True:
-            raise ValueError('Superuser must have is_superuser=True.')
+    def create_superuser(self, username, password=None, **extra_fields):
+        """Django createsuperuser는 USERNAME_FIELD(username)를 전달. 숫자면 kakao_id로 사용."""
+        try:
+            kakao_id = int(username)
+        except (TypeError, ValueError):
+            raise ValueError("Superuser username must be a numeric kakao_id (e.g. 4424486764).")
+        extra_fields.setdefault("is_staff", True)
+        extra_fields.setdefault("is_superuser", True)
+        if extra_fields.get("is_staff") is not True:
+            raise ValueError("Superuser must have is_staff=True.")
+        if extra_fields.get("is_superuser") is not True:
+            raise ValueError("Superuser must have is_superuser=True.")
         return self.create_user(kakao_id=kakao_id, password=password, **extra_fields)
 
 

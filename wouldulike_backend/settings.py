@@ -269,6 +269,12 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 AUTH_USER_MODEL = 'accounts.User'
 
+# 관리자 로그인: username 또는 kakao_id로 조회
+AUTHENTICATION_BACKENDS = [
+    'accounts.backends.KakaoIdModelBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',

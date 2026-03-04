@@ -1,9 +1,22 @@
 from django import forms
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django.contrib.auth.forms import ReadOnlyPasswordHashField
+from django.contrib.auth.forms import AuthenticationForm, ReadOnlyPasswordHashField
 
 from .models import User, SocialAccount
+
+
+class AdminAuthenticationForm(AuthenticationForm):
+    """관리자 로그인: Username = createsuperuser 시 입력한 카카오 ID (예: 4424486764)"""
+
+    def __init__(self, request=None, *args, **kwargs):
+        super().__init__(request, *args, **kwargs)
+        self.fields["username"].label = "Username (카카오 ID)"
+        self.fields["username"].help_text = "createsuperuser 시 입력한 숫자 그대로 입력"
+
+
+# 관리자 로그인 폼 적용
+admin.site.login_form = AdminAuthenticationForm
 
 
 class UserCreationForm(forms.ModelForm):
