@@ -415,8 +415,8 @@ def _issue_coupons_for_single_restaurant(
     issue_type_label: str | None = None,
 ) -> list:
     """
-    한 식당만 선정하여 해당 식당의 benefit 수만큼 쿠폰 발급.
-    신규가입, 친구초대(추천인/피추천인)용.
+    한 식당만 선정하여 해당 식당의 쿠폰 1장만 발급.
+    신규가입, 친구초대(추천인/피추천인)용. (식당당 benefit이 여러 개여도 첫 번째만 발급)
     """
     alias = db_alias or router.db_for_write(Coupon)
     restaurant_id = _select_restaurant_for_coupon(coupon_type, db_alias=alias)
@@ -426,7 +426,7 @@ def _issue_coupons_for_single_restaurant(
     benefits = list(
         RestaurantCouponBenefit.objects.using(benefit_alias)
         .filter(coupon_type=coupon_type, restaurant_id=restaurant_id, active=True)
-        .order_by("sort_order")
+        .order_by("sort_order")[:1]
     )
     if not benefits:
         return issued
