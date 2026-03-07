@@ -83,6 +83,7 @@ COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
     "REFERRAL_BONUS_REFEREE": {30, 65, 147},
     "FINAL_EXAM_SPECIAL": {30, 65},  # 고니식탁, 팀스 쿠치나 제외
     "NEW_SEMESTER_SPECIAL": {30, 65, 147},
+    "KNULIKE": {30, 65, 147},
 }
 
 
@@ -1029,6 +1030,94 @@ def issue_new_semester_coupons(user: User):
     }
 
 
+KNULIKE_COUPON_COUNT = 3
+
+
+@transaction.atomic
+def issue_knulike_coupons(user: User):
+    """
+    KNULIKE 추천코드 입력 시 사용자에게 제휴식당 쿠폰 3개를 발급합니다.
+    개강 기념 쿠폰(NEW_SEMESTER_SPECIAL)과 동일한 조건입니다.
+    전체 쿠폰 풀(제휴식당 16개 × 식당별 benefit) 중 3개를 랜덤 선정하여 발급합니다.
+    사용자당 한 번만 발급됩니다.
+    """
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="KNULIKE")
+    camp = Campaign.objects.using(alias).get(code="KNULIKE_EVENT", active=True)
+
+    existing_coupons = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+    )
+    if existing_coupons.exists():
+        return {
+            "coupons": list(existing_coupons),
+            "total_issued": existing_coupons.count(),
+            "already_issued": True,
+        }
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .select_related("restaurant")
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("no benefits available for knulike coupon assignment")
+
+    sample_size = min(KNULIKE_COUPON_COUNT, len(benefits))
+    selected_benefits = random.sample(benefits, sample_size)
+
+    issued_coupons = []
+    base_issue_key = f"KNULIKE:{user.id}"
+    for idx, benefit in enumerate(selected_benefits):
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{base_issue_key}:{restaurant_id}:{sort_order}"
+
+        existing = Coupon.objects.using(alias).filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key=issue_key,
+        ).first()
+        if existing:
+            issued_coupons.append(existing)
+            continue
+
+        benefit_snapshot = _build_benefit_snapshot(
+            ct, restaurant_id, benefit=benefit, db_alias=alias
+        )
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": "[KNULIKE 쿠폰]",
+                "subtitle": "[KNULIKE 쿠폰]",
+            }
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=_expires_at(ct),
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        issued_coupons.append(coupon)
+
+    return {
+        "coupons": issued_coupons,
+        "total_issued": len(issued_coupons),
+        "already_issued": False,
+    }
+
+
 @transaction.atomic
 def claim_final_exam_coupon(user: User, coupon_code: str):
     """
@@ -1235,6 +1324,69 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
             raise ValidationError(
                 "이미 신학기 추천코드 쿠폰을 발급받았습니다.",
                 code="new_semester_already_issued",
+            )
+
+    # KNULIKE 추천코드 이벤트 처리 (개강 기념 쿠폰과 동일하게 3개 발급)
+    if ref_code == "KNULIKE":
+        alias = router.db_for_write(Coupon)
+        ct = CouponType.objects.using(alias).get(code="KNULIKE")
+        camp = Campaign.objects.using(alias).get(code="KNULIKE_EVENT", active=True)
+
+        existing_coupons = Coupon.objects.using(alias).filter(
+            user=referee,
+            coupon_type=ct,
+            campaign=camp,
+        )
+        if existing_coupons.exists():
+            raise ValidationError(
+                "이미 KNULIKE 추천코드 쿠폰을 발급받았습니다.",
+                code="knulike_already_issued",
+            )
+
+        result = issue_knulike_coupons(referee)
+        if result["already_issued"]:
+            raise ValidationError(
+                "이미 KNULIKE 추천코드 쿠폰을 발급받았습니다.",
+                code="knulike_already_issued",
+            )
+
+        try:
+            with transaction.atomic(using=db_alias):
+                base_qs = Referral.objects.using(db_alias)
+                locked_qs = base_qs.select_for_update()
+
+                existing_refs = locked_qs.filter(
+                    referee=referee,
+                    campaign_code="KNULIKE_EVENT",
+                )
+                if existing_refs.exists():
+                    existing_ref = existing_refs.first()
+                    existing_coupons = Coupon.objects.using(alias).filter(
+                        user=referee,
+                        coupon_type=ct,
+                        campaign=camp,
+                    )
+                    if not existing_coupons.exists():
+                        existing_ref.delete()
+                    else:
+                        raise ValidationError(
+                            "이미 KNULIKE 추천코드 쿠폰을 발급받았습니다.",
+                            code="knulike_already_issued",
+                        )
+
+                referral = base_qs.create(
+                    referrer=referee,
+                    referee=referee,
+                    code_used=ref_code,
+                    campaign_code="KNULIKE_EVENT",
+                    status="QUALIFIED",
+                    qualified_at=timezone.now(),
+                )
+                return referral, result["coupons"]
+        except IntegrityError:
+            raise ValidationError(
+                "이미 KNULIKE 추천코드 쿠폰을 발급받았습니다.",
+                code="knulike_already_issued",
             )
 
     # 기말고사 이벤트 쿠폰 코드 처리
@@ -1495,6 +1647,26 @@ def qualify_referral_and_grant(referee: User) -> tuple[Referral | None, list]:
                 )
                 if not existing_coupons.exists():
                     result = issue_new_semester_coupons(referee)
+                    issued_coupons.extend(result["coupons"])
+                if ref.status != "QUALIFIED":
+                    ref.status = "QUALIFIED"
+                    ref.qualified_at = timezone.now()
+                    ref.save(update_fields=["status", "qualified_at"], using=db_alias)
+                results.append(ref)
+                continue
+
+            # KNULIKE 이벤트 쿠폰 처리 (accept_referral에서 이미 발급됨)
+            if ref.campaign_code == "KNULIKE_EVENT":
+                coupon_alias = router.db_for_write(Coupon)
+                ct = CouponType.objects.using(coupon_alias).get(code="KNULIKE")
+                camp = Campaign.objects.using(coupon_alias).get(code="KNULIKE_EVENT", active=True)
+                existing_coupons = Coupon.objects.using(coupon_alias).filter(
+                    user=referee,
+                    coupon_type=ct,
+                    campaign=camp,
+                )
+                if not existing_coupons.exists():
+                    result = issue_knulike_coupons(referee)
                     issued_coupons.extend(result["coupons"])
                 if ref.status != "QUALIFIED":
                     ref.status = "QUALIFIED"
