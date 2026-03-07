@@ -47,7 +47,7 @@ def add_knulike_event(apps, schema_editor):
             restaurant_id=benefit.restaurant_id,
             sort_order=getattr(benefit, "sort_order", 0),
             defaults={
-                "title": "[학생회 제휴 쿠폰 🤝]",
+                "title": benefit.title,  # 식당별 실제 쿠폰 내용 유지
                 "subtitle": "[학생회 제휴 쿠폰 🤝]",
                 "benefit_json": benefit.benefit_json,
                 "active": benefit.active,
