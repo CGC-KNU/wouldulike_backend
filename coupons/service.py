@@ -1096,8 +1096,8 @@ def issue_knulike_coupons(user: User):
         if benefit_snapshot:
             benefit_snapshot = {
                 **benefit_snapshot,
-                "coupon_type_title": "[KNULIKE 쿠폰]",
-                "subtitle": "[KNULIKE 쿠폰]",
+                "coupon_type_title": "[학생회 제휴 쿠폰 🤝]",
+                "subtitle": "[학생회 제휴 쿠폰 🤝]",
             }
         coupon = Coupon.objects.using(alias).create(
             code=make_coupon_code(),

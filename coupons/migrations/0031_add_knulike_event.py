@@ -11,7 +11,7 @@ def add_knulike_event(apps, schema_editor):
     CouponType.objects.update_or_create(
         code="KNULIKE",
         defaults={
-            "title": "[KNULIKE 쿠폰]",
+            "title": "[학생회 제휴 쿠폰 🤝]",
             "valid_days": 0,
             "per_user_limit": 1,
             "benefit_json": {"type": "fixed", "value": 3000},
@@ -47,8 +47,8 @@ def add_knulike_event(apps, schema_editor):
             restaurant_id=benefit.restaurant_id,
             sort_order=getattr(benefit, "sort_order", 0),
             defaults={
-                "title": "[KNULIKE 쿠폰]",
-                "subtitle": "[KNULIKE 쿠폰]",
+                "title": "[학생회 제휴 쿠폰 🤝]",
+                "subtitle": "[학생회 제휴 쿠폰 🤝]",
                 "benefit_json": benefit.benefit_json,
                 "active": benefit.active,
             },
