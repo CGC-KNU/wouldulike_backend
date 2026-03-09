@@ -7,4 +7,4 @@
 import os
 
 # 프론트엔드로 전달할 URL (환경 변수 FRONTEND_URL로 오버라이드 가능)
-FRONTEND_URL = os.getenv("FRONTEND_URL", "https://open.kakao.com/o/s09ikE1h")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "https://open.kakao.com/o/sZqrHOji")
