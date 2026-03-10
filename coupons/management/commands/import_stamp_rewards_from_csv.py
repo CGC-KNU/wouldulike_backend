@@ -226,6 +226,18 @@ STAMP_DATA = {
             "notes": "",
         },
     },
+    271: {  # 사랑과평화 경북대점: 3, 6, 9 (계약 완료 후 보상 확정)
+        "rule_type": "THRESHOLD",
+        "config": {
+            "thresholds": [
+                (3, "파르페", ""),
+                (6, "사이드 메뉴", ""),
+                (9, "메인 메뉴", ""),
+            ],
+            "cycle_target": 9,
+            "notes": "",
+        },
+    },
 }
 
 # VISIT 패턴 쿠폰 타입

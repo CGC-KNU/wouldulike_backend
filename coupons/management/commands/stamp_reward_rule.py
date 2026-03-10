@@ -19,7 +19,7 @@
     --benefits '{"1_4":{"title":"1~4회 보상","subtitle":"3,000원","value":3000},"5_9":{"title":"5~9회 보상","subtitle":"5,000원","value":5000},"10":{"title":"10회 보상","subtitle":"10,000원","value":10000}}'
 
   # 스탬프 비고만 업데이트 (기존 규칙 유지)
-  python manage.py stamp_reward_rule set-notes 271 --notes "현재는 사용 불가"
+  python manage.py stamp_reward_rule set-notes 271 --notes ""
 
   # 규칙 삭제 (쿠폰 혜택은 유지)
   python manage.py stamp_reward_rule delete 101
