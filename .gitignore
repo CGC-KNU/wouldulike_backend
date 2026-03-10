@@ -14,3 +14,7 @@ local.sqlite3
 # Django
 media/
 staticfiles/
+
+# CSV data (계약/식당 정보)
+premium.csv
+general.csv
