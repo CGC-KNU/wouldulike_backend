@@ -14,6 +14,7 @@ from coupons.service import (
     qualify_referral_and_grant,
     MAX_COUPONS_PER_RESTAURANT,
     ensure_invite_code,
+    FULL_AFFILIATE_COUPON_CODE,
 )
 
 
@@ -145,3 +146,47 @@ class ReferralRestaurantAllocationTests(TestCase):
         referee_issued = [c for c in issued_coupons if c.code.startswith("REE")]
         self.assertEqual(len(ref_issued), 1)
         self.assertEqual(len(referee_issued), 1)
+
+
+class FullAffiliateAndKnulikeCouponTests(TestCase):
+    """DONGARILIKE(제휴식당 전체) 및 KNULIKE 추천코드 발급 테스트."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def test_full_affiliate_code_issues_coupons(self):
+        """DONGARILIKE 코드 입력 시 제휴식당 전체 쿠폰 발급."""
+        referee = self.user_model.objects.create_user(kakao_id=70001, password="pass")
+        referral, issued = accept_referral(referee=referee, ref_code=FULL_AFFILIATE_COUPON_CODE)
+        self.assertIsNotNone(referral)
+        self.assertEqual(referral.campaign_code, "FULL_AFFILIATE_EVENT")
+        self.assertGreater(len(issued), 0, "제휴식당 쿠폰이 1개 이상 발급되어야 함")
+
+    def test_full_affiliate_code_duplicate_rejected(self):
+        """DONGARILIKE 코드 중복 입력 시 거부."""
+        referee = self.user_model.objects.create_user(kakao_id=70002, password="pass")
+        accept_referral(referee=referee, ref_code=FULL_AFFILIATE_COUPON_CODE)
+        with self.assertRaises(ValidationError) as ctx:
+            accept_referral(referee=referee, ref_code=FULL_AFFILIATE_COUPON_CODE)
+        self.assertEqual(ctx.exception.code, "full_affiliate_already_issued")
+
+    def test_knulike_code_issues_three_coupons(self):
+        """KNULIKE 코드 입력 시 쿠폰 3개 발급."""
+        referee = self.user_model.objects.create_user(kakao_id=70003, password="pass")
+        referral, issued = accept_referral(referee=referee, ref_code="KNULIKE")
+        self.assertIsNotNone(referral)
+        self.assertEqual(referral.campaign_code, "KNULIKE_EVENT")
+        self.assertEqual(len(issued), 3, "KNULIKE는 쿠폰 3개 발급")
+
+    def test_knulike_code_duplicate_rejected(self):
+        """KNULIKE 코드 중복 입력 시 거부."""
+        referee = self.user_model.objects.create_user(kakao_id=70004, password="pass")
+        accept_referral(referee=referee, ref_code="KNULIKE")
+        with self.assertRaises(ValidationError) as ctx:
+            accept_referral(referee=referee, ref_code="KNULIKE")
+        self.assertEqual(ctx.exception.code, "knulike_already_issued")

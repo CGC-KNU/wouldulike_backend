@@ -338,6 +338,10 @@ LOGGING = {
 # GCP Cloud Scheduler 등에서 X-CRON-TOKEN 헤더로 함께 전송해야 함.
 CRON_SECRET_TOKEN = os.getenv("CRON_SECRET_TOKEN")
 
+# 매주 월/수 11:50 정기 알림 메시지 (Cloud Scheduler weekly-mon, weekly-wed 엔드포인트용)
+WEEKLY_MON_MESSAGE = os.getenv("WEEKLY_MON_MESSAGE", "")
+WEEKLY_WED_MESSAGE = os.getenv("WEEKLY_WED_MESSAGE", "")
+
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
