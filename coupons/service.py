@@ -81,6 +81,8 @@ MAX_COUPONS_PER_RESTAURANT = 200
 # 148(Better), 284(와비사비)는 제휴 아님 → AffiliateRestaurant에 없음
 # RESTAURANTS_EXCLUDED_FROM_ALL: 모든 쿠폰 발급에서 제외 (팀스 쿠치나 등)
 RESTAURANTS_EXCLUDED_FROM_ALL: set[int] = {65}
+# RESTAURANTS_EXCLUDED_FROM_NON_STAMP: 스탬프 적립 보상 쿠폰 제외, 그 외 모든 쿠폰 발급에서 제외 (고니식탁 등)
+RESTAURANTS_EXCLUDED_FROM_NON_STAMP: set[int] = {30}
 COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
     "WELCOME_3000": {30, 65, 147},
     "REFERRAL_BONUS_REFERRER": {30, 65, 147},
@@ -141,12 +143,16 @@ def _get_excluded_restaurant_ids(
     """
     쿠폰 타입별로 제외할 restaurant_id 집합을 반환.
     - RESTAURANTS_EXCLUDED_FROM_ALL (모든 쿠폰에서 제외)
+    - RESTAURANTS_EXCLUDED_FROM_NON_STAMP (스탬프 보상 제외, 그 외 모든 쿠폰에서 제외)
     - 하드코딩된 COUPON_TYPE_EXCLUDED_RESTAURANTS
     - DB 기반 CouponRestaurantExclusion
     둘을 합집합으로 사용한다.
     """
     base = set(COUPON_TYPE_EXCLUDED_RESTAURANTS.get(coupon_type_code, set()))
     base |= RESTAURANTS_EXCLUDED_FROM_ALL
+    # 스탬프 적립 보상 쿠폰이 아닌 경우, RESTAURANTS_EXCLUDED_FROM_NON_STAMP(고니식탁 등) 적용
+    if not coupon_type_code.startswith("STAMP_REWARD"):
+        base |= RESTAURANTS_EXCLUDED_FROM_NON_STAMP
     alias = db_alias or router.db_for_read(CouponRestaurantExclusion)
     extra = set(
         CouponRestaurantExclusion.objects.using(alias)
