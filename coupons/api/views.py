@@ -96,7 +96,11 @@ class MyCouponsView(generics.ListAPIView):
         response = super().list(request, *args, **kwargs)
         issued = getattr(self, "_issued_app_open_coupons", [])
         if issued:
-            response.data["issued_coupons"] = format_issued_coupons(issued)
+            # ListAPIView: response.data는 페이징 없으면 list, 있으면 dict
+            if isinstance(response.data, list):
+                response.data = {"results": response.data, "issued_coupons": format_issued_coupons(issued)}
+            else:
+                response.data["issued_coupons"] = format_issued_coupons(issued)
         return response
 
 
