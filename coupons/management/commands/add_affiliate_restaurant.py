@@ -218,6 +218,7 @@ class Command(BaseCommand):
         restaurant = AffiliateRestaurant(
             restaurant_id=restaurant_id,
             name=name,
+            is_affiliate=True,
             description=description or "",
         )
         restaurant.save()
@@ -287,22 +288,6 @@ class Command(BaseCommand):
                 raise CommandError("PIN 은 숫자로만 구성돼야 합니다.")
             if len(pin) < 4:
                 raise CommandError("PIN 길이는 최소 4자리 이상이어야 합니다.")
-
-            # 다른 식당과 중복 여부 검사
-            conflict_mp = (
-                MerchantPin.objects.using(alias)
-                .filter(secret=pin)
-                .exclude(restaurant_id=restaurant_id)
-                .exists()
-            )
-            conflict_aff = (
-                AffiliateRestaurant.objects.using(alias)
-                .filter(pin_secret=pin)
-                .exclude(restaurant_id=restaurant_id)
-                .exists()
-            )
-            if conflict_mp or conflict_aff:
-                raise CommandError("이미 다른 제휴 식당에서 사용 중인 PIN 입니다.")
 
             final_pin = pin
         else:
@@ -537,6 +522,8 @@ class Command(BaseCommand):
 
         # 3) 제휴 식당 상세 정보(restaurants_affiliate) 설정/업데이트
         fields_to_update: dict[str, object] = {}
+        # 이 명령어는 "제휴 식당 추가/수정" 용도이므로 항상 제휴 상태로 맞춘다.
+        fields_to_update["is_affiliate"] = True
         if address:
             fields_to_update["address"] = address
         if category:
