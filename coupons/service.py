@@ -2187,6 +2187,7 @@ STAMP_LEGACY_REWARD_CODES = {
     10: "STAMP_REWARD_10",
 }
 REWARD_CAMPAIGN_CODE = "STAMP_REWARD"
+STAMP_DAILY_EARN_LIMIT = int(os.getenv("STAMP_DAILY_EARN_LIMIT", "3"))
 
 STAMP_DB_ALIAS = "cloudsql"
 
@@ -2451,9 +2452,29 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
     if not _verify_pin(restaurant_id, pin):
         raise ValidationError("invalid merchant code")
 
-    # 동시 요청 방지 (user-restaurant 잠금)
-    lock_key = f"lock:stamp:{user.id}:{restaurant_id}"
+    # 동시 요청 방지 (사용자 단위 잠금: 일일 적립 제한 우회 방지)
+    lock_key = f"lock:stamp:{user.id}"
     with redis_lock(lock_key, ttl=5):
+        if STAMP_DAILY_EARN_LIMIT > 0:
+            today = timezone.localdate()
+            today_start = timezone.make_aware(datetime.combine(today, time.min))
+            tomorrow_start = today_start + timedelta(days=1)
+            earned_today = (
+                StampEvent.objects.using(STAMP_DB_ALIAS)
+                .filter(
+                    user=user,
+                    delta__gt=0,
+                    created_at__gte=today_start,
+                    created_at__lt=tomorrow_start,
+                )
+                .count()
+            )
+            if earned_today >= STAMP_DAILY_EARN_LIMIT:
+                raise ValidationError(
+                    f"daily stamp limit reached ({STAMP_DAILY_EARN_LIMIT}/day)",
+                    code="stamp_daily_limit_reached",
+                )
+
         wallet, _ = StampWallet.objects.using(STAMP_DB_ALIAS).get_or_create(
             user=user, restaurant_id=restaurant_id
         )
