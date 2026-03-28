@@ -166,6 +166,8 @@ COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
     "FINAL_EXAM_SPECIAL": {30, 65},  # 고니식탁, 팀스 쿠치나 제외
     "NEW_SEMESTER_SPECIAL": {30, 65, 147},
     "KNULIKE": {30, 65, 147},
+    # 학생회 한정 쿠폰: CSV 기준 쿠폰 미제공 식당(고니식탁, 포차1번지, 온새미로) 제외
+    "DATELIKE": {30, 65, 147, 250},
     "FULL_AFFILIATE_SPECIAL": set(),  # RESTAURANTS_EXCLUDED_FROM_ALL(65)만 적용, 21종 전체 발급
     "APP_OPEN_MON": set(),  # 월요일 앱접속: 술집 아닌 식당, RESTAURANTS_EXCLUDED_FROM_ALL(65)만 적용
     "APP_OPEN_WED": set(),  # 수요일 앱접속: 술집, RESTAURANTS_EXCLUDED_FROM_ALL(65)만 적용
@@ -1528,6 +1530,93 @@ def issue_knulike_coupons(user: User):
     }
 
 
+DATELIKE_COUPON_COUNT = 3
+
+
+@transaction.atomic
+def issue_datelike_coupons(user: User):
+    """
+    DATELIKE 추천코드 입력 시 사용자에게 제휴식당 쿠폰 3개를 발급합니다.
+    전체 제휴식당 중 DATELIKE benefit이 있는 식당 풀에서 3개를 랜덤 선정합니다.
+    사용자당 한 번만 발급됩니다.
+    """
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="DATELIKE")
+    camp = Campaign.objects.using(alias).get(code="DATELIKE_EVENT", active=True)
+
+    existing_coupons = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+    )
+    if existing_coupons.exists():
+        return {
+            "coupons": list(existing_coupons),
+            "total_issued": existing_coupons.count(),
+            "already_issued": True,
+        }
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .select_related("restaurant")
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("no benefits available for datelike coupon assignment")
+
+    sample_size = min(DATELIKE_COUPON_COUNT, len(benefits))
+    selected_benefits = random.sample(benefits, sample_size)
+
+    issued_coupons = []
+    base_issue_key = f"DATELIKE:{user.id}"
+    for benefit in selected_benefits:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{base_issue_key}:{restaurant_id}:{sort_order}"
+
+        existing = Coupon.objects.using(alias).filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key=issue_key,
+        ).first()
+        if existing:
+            issued_coupons.append(existing)
+            continue
+
+        benefit_snapshot = _build_benefit_snapshot(
+            ct, restaurant_id, benefit=benefit, db_alias=alias
+        )
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": "[학생회 한정 쿠폰 💕]",
+                "subtitle": "[학생회 한정 쿠폰 💕]",
+            }
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=_resolve_coupon_expiry_for_issue(ct),
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        issued_coupons.append(coupon)
+
+    return {
+        "coupons": issued_coupons,
+        "total_issued": len(issued_coupons),
+        "already_issued": False,
+    }
+
+
 @transaction.atomic
 def claim_final_exam_coupon(user: User, coupon_code: str):
     """
@@ -1797,6 +1886,69 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
             raise ValidationError(
                 "이미 KNULIKE 추천코드 쿠폰을 발급받았습니다.",
                 code="knulike_already_issued",
+            )
+
+    # DATELIKE 추천코드 이벤트 처리 (학생회 한정 쿠폰 3개 발급)
+    if ref_code == "DATELIKE":
+        alias = router.db_for_write(Coupon)
+        ct = CouponType.objects.using(alias).get(code="DATELIKE")
+        camp = Campaign.objects.using(alias).get(code="DATELIKE_EVENT", active=True)
+
+        existing_coupons = Coupon.objects.using(alias).filter(
+            user=referee,
+            coupon_type=ct,
+            campaign=camp,
+        )
+        if existing_coupons.exists():
+            raise ValidationError(
+                "이미 DATELIKE 추천코드 쿠폰을 발급받았습니다.",
+                code="datelike_already_issued",
+            )
+
+        result = issue_datelike_coupons(referee)
+        if result["already_issued"]:
+            raise ValidationError(
+                "이미 DATELIKE 추천코드 쿠폰을 발급받았습니다.",
+                code="datelike_already_issued",
+            )
+
+        try:
+            with transaction.atomic(using=db_alias):
+                base_qs = Referral.objects.using(db_alias)
+                locked_qs = base_qs.select_for_update()
+
+                existing_refs = locked_qs.filter(
+                    referee=referee,
+                    campaign_code="DATELIKE_EVENT",
+                )
+                if existing_refs.exists():
+                    existing_ref = existing_refs.first()
+                    existing_coupons = Coupon.objects.using(alias).filter(
+                        user=referee,
+                        coupon_type=ct,
+                        campaign=camp,
+                    )
+                    if not existing_coupons.exists():
+                        existing_ref.delete()
+                    else:
+                        raise ValidationError(
+                            "이미 DATELIKE 추천코드 쿠폰을 발급받았습니다.",
+                            code="datelike_already_issued",
+                        )
+
+                referral = base_qs.create(
+                    referrer=referee,
+                    referee=referee,
+                    code_used=ref_code,
+                    campaign_code="DATELIKE_EVENT",
+                    status="QUALIFIED",
+                    qualified_at=timezone.now(),
+                )
+                return referral, result["coupons"]
+        except IntegrityError:
+            raise ValidationError(
+                "이미 DATELIKE 추천코드 쿠폰을 발급받았습니다.",
+                code="datelike_already_issued",
             )
 
     # 제휴식당 21종 전체 발급 쿠폰 코드 처리
@@ -2140,6 +2292,26 @@ def qualify_referral_and_grant(referee: User) -> tuple[Referral | None, list]:
                 )
                 if not existing_coupons.exists():
                     result = issue_knulike_coupons(referee)
+                    issued_coupons.extend(result["coupons"])
+                if ref.status != "QUALIFIED":
+                    ref.status = "QUALIFIED"
+                    ref.qualified_at = timezone.now()
+                    ref.save(update_fields=["status", "qualified_at"], using=db_alias)
+                results.append(ref)
+                continue
+
+            # DATELIKE 이벤트 쿠폰 처리 (accept_referral에서 이미 발급됨)
+            if ref.campaign_code == "DATELIKE_EVENT":
+                coupon_alias = router.db_for_write(Coupon)
+                ct = CouponType.objects.using(coupon_alias).get(code="DATELIKE")
+                camp = Campaign.objects.using(coupon_alias).get(code="DATELIKE_EVENT", active=True)
+                existing_coupons = Coupon.objects.using(coupon_alias).filter(
+                    user=referee,
+                    coupon_type=ct,
+                    campaign=camp,
+                )
+                if not existing_coupons.exists():
+                    result = issue_datelike_coupons(referee)
                     issued_coupons.extend(result["coupons"])
                 if ref.status != "QUALIFIED":
                     ref.status = "QUALIFIED"

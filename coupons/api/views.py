@@ -226,7 +226,7 @@ class AcceptReferralView(APIView):
                 payload = {"detail": message}
             status_code = (
                 status.HTTP_409_CONFLICT
-                if getattr(exc, "code", "") in ("referral_already_accepted", "final_exam_already_issued", "event_referral_already_accepted", "new_semester_already_issued", "knulike_already_issued", "full_affiliate_already_issued")
+                if getattr(exc, "code", "") in ("referral_already_accepted", "final_exam_already_issued", "event_referral_already_accepted", "new_semester_already_issued", "knulike_already_issued", "datelike_already_issued", "full_affiliate_already_issued")
                 else status.HTTP_400_BAD_REQUEST
             )
             return Response(payload, status=status_code)
