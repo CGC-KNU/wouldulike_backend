@@ -273,17 +273,36 @@ class AddStampView(APIView):
             data = add_stamp(request.user, restaurant_id_int, pin, idem_key)
             return Response(data, status=201 if data.get("reward_coupon_code") else 200)
         except DjangoValidationError as e:
-            msg = str(e)
+            if hasattr(e, "messages") and e.messages:
+                msg = e.messages[0]
+            else:
+                msg = str(e)
+            code = getattr(e, "code", "")
             # PIN 불일치
             if "invalid merchant code" in msg:
-                return Response({"detail": msg, "code": "invalid_pin"}, status=403)
-            # 일일 적립 제한 초과
-            if "daily stamp limit reached" in msg:
                 return Response(
-                    {"detail": msg, "code": "stamp_daily_limit_reached"},
+                    {
+                        "detail": "PIN 번호가 올바르지 않아요. 다시 확인해 주세요.",
+                        "code": "invalid_pin",
+                    },
+                    status=403,
+                )
+            # 일일 적립 제한 초과
+            if code == "stamp_daily_limit_reached" or "daily stamp limit reached" in msg:
+                return Response(
+                    {
+                        "detail": "이 식당은 하루 최대 3회까지 스탬프를 적립할 수 있어요.",
+                        "code": "stamp_daily_limit_reached",
+                    },
                     status=429,
                 )
-            return Response({"detail": msg}, status=400)
+            return Response(
+                {
+                    "detail": "스탬프 적립에 실패했어요. 잠시 후 다시 시도해 주세요.",
+                    "code": "stamp_add_failed",
+                },
+                status=400,
+            )
         except Exception:
             logger.exception(
                 "unexpected error in AddStampView (user=%s, restaurant_id=%s)",
