@@ -22,8 +22,8 @@ class Command(BaseCommand):
         parser.add_argument(
             '--title',
             type=str,
-            default='우주라이크',
-            help='알림 제목 (기본값: "우주라이크")',
+            default=None,
+            help='알림 제목 (미지정 시 본문 첫 줄을 제목으로 사용)',
         )
         parser.add_argument(
             '--dry-run',
@@ -34,8 +34,9 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         token = options['token']
         message = options['message']
-        title = options['title']
+        title = options.get('title') or None
         dry_run = options.get('dry_run', False)
+        title_preview = title if title else "(자동) 본문 첫 줄"
 
         if not token or not token.strip():
             self.stdout.write(
@@ -68,7 +69,7 @@ class Command(BaseCommand):
             )
 
         self.stdout.write(f"\n📱 대상 토큰: {token[:30]}...{token[-10:]}")
-        self.stdout.write(f"📝 제목: {title}")
+        self.stdout.write(f"📝 제목: {title_preview}")
         self.stdout.write(f"💬 메시지: {message}\n")
 
         # 알림 전송

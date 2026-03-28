@@ -264,8 +264,33 @@ class AddStampView(APIView):
         idem_key = request.headers.get("Idempotency-Key") or request.data.get("idem_key")
         if not restaurant_id or not pin:
             return Response({"detail": "restaurant_id and pin required"}, status=400)
-        data = add_stamp(request.user, int(restaurant_id), pin, idem_key)
-        return Response(data, status=201 if data.get("reward_coupon_code") else 200)
+        try:
+            restaurant_id_int = int(restaurant_id)
+        except (TypeError, ValueError):
+            return Response({"detail": "restaurant_id must be numeric"}, status=400)
+
+        try:
+            data = add_stamp(request.user, restaurant_id_int, pin, idem_key)
+            return Response(data, status=201 if data.get("reward_coupon_code") else 200)
+        except DjangoValidationError as e:
+            msg = str(e)
+            # PIN 불일치
+            if "invalid merchant code" in msg:
+                return Response({"detail": msg, "code": "invalid_pin"}, status=403)
+            # 일일 적립 제한 초과
+            if "daily stamp limit reached" in msg:
+                return Response(
+                    {"detail": msg, "code": "stamp_daily_limit_reached"},
+                    status=429,
+                )
+            return Response({"detail": msg}, status=400)
+        except Exception:
+            logger.exception(
+                "unexpected error in AddStampView (user=%s, restaurant_id=%s)",
+                getattr(request.user, "id", None),
+                restaurant_id,
+            )
+            return Response({"detail": "internal error"}, status=500)
 
 
 class MyStampStatusView(APIView):

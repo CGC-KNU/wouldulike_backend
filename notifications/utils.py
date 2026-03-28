@@ -83,6 +83,40 @@ def _build_authorized_session() -> Optional[Tuple[AuthorizedSession, str]]:
     return AuthorizedSession(credentials), project_id
 
 
+def _compose_notification_title_and_body(
+    message: str,
+    title: Optional[str] = None,
+) -> Tuple[str, str]:
+    """
+    Decide what should be shown as title/body in the push UI.
+
+    Rules:
+      - If `title` is explicitly provided, use it as-is.
+      - Otherwise, use the first non-empty line of `message` as title.
+      - Body becomes remaining non-empty lines; for one-line messages, keep
+        the same text as body to avoid empty notification content.
+    """
+    normalized_message = (message or "").strip()
+    explicit_title = (title or "").strip()
+
+    if explicit_title:
+        return explicit_title, normalized_message
+
+    if not normalized_message:
+        return "알림", ""
+
+    non_empty_lines = [line.strip() for line in normalized_message.splitlines() if line.strip()]
+    if not non_empty_lines:
+        return "알림", normalized_message
+
+    derived_title = non_empty_lines[0]
+    if len(non_empty_lines) == 1:
+        return derived_title, non_empty_lines[0]
+
+    derived_body = "\n".join(non_empty_lines[1:]).strip()
+    return derived_title, (derived_body or non_empty_lines[0])
+
+
 def validate_notification(tokens: Iterable[str], message: str) -> dict:
     """
     Validate notification configuration and tokens without sending.
@@ -195,14 +229,19 @@ def validate_notification(tokens: Iterable[str], message: str) -> dict:
     return validation_result
 
 
-def send_notification(tokens: Iterable[str], message: str, dry_run: bool = False, title: str = "우주라이크"):
+def send_notification(
+    tokens: Iterable[str],
+    message: str,
+    dry_run: bool = False,
+    title: Optional[str] = None,
+):
     """
     Send push notification via FCM HTTP v1 to the given tokens.
 
     Args:
         tokens: Iterable of FCM tokens
         message: Notification message text
-        title: Notification title (default: "우주라이크")
+        title: Notification title (if omitted, first line of message is used)
         dry_run: If True, only validate without sending (default: False)
 
     Returns a dict containing success/failure counts and details, or None when
@@ -220,18 +259,19 @@ def send_notification(tokens: Iterable[str], message: str, dry_run: bool = False
 
     session, project_id = session_with_project
     endpoint = _FCM_ENDPOINT.format(project_id=project_id)
+    resolved_title, resolved_body = _compose_notification_title_and_body(message, title)
 
     # 드라이런 모드: 실제 FCM API 호출하여 토큰 유효성 검증
     # 주의: FCM API에는 validate_only 옵션이 없으므로 실제 API 호출 시 알림이 전송됩니다.
     # 하지만 테스트 목적으로 실제 API 응답을 통해 토큰 유효성을 검증합니다.
     if dry_run:
         # 드라이런 모드에서는 실제 API 호출을 하되, 테스트 메시지로 전송
-        test_message = f"[테스트] {message}"
-        test_title = f"[테스트] {title}"
+        test_message = f"[테스트] {resolved_body}" if resolved_body else "[테스트]"
+        test_title = f"[테스트] {resolved_title}"
         logger.info("Dry-run mode: 실제 FCM API 호출하여 토큰 유효성 검증 (알림이 전송될 수 있음)")
     else:
-        test_message = message
-        test_title = title
+        test_message = resolved_body
+        test_title = resolved_title
 
     logger.info(
         f"FCM 발송 시작 - 대상 토큰 수: {len(tokens)}, "

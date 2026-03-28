@@ -2463,6 +2463,7 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
                 StampEvent.objects.using(STAMP_DB_ALIAS)
                 .filter(
                     user=user,
+                    restaurant_id=restaurant_id,
                     delta__gt=0,
                     created_at__gte=today_start,
                     created_at__lt=tomorrow_start,
@@ -2471,7 +2472,7 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
             )
             if earned_today >= STAMP_DAILY_EARN_LIMIT:
                 raise ValidationError(
-                    f"daily stamp limit reached ({STAMP_DAILY_EARN_LIMIT}/day)",
+                    f"daily stamp limit reached for this restaurant ({STAMP_DAILY_EARN_LIMIT}/day)",
                     code="stamp_daily_limit_reached",
                 )
 

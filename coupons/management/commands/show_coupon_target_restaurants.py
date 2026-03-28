@@ -2,7 +2,7 @@
 쿠폰 발급 대상 식당 목록을 출력합니다.
 
 1) CSV 기준: premium.csv + general.csv (NAME_TO_ID, EXCLUDE_NAMES)
-   - 제휴식당 총 20개, 쿠폰 발급 16개 (4개 제외)
+   - 제휴식당 총 21개, 쿠폰 발급 17개 (4개 제외)
 2) DB 기준: AffiliateRestaurant + RestaurantCouponBenefit + 제외 설정
 """
 import csv
@@ -42,6 +42,9 @@ NAME_TO_ID = {
     "부리또익스프레스": 41,
     "다이와스시": 56,
     "고씨네": 249,
+    "혜화문식당": 245,
+    "혜화문 식당": 245,
+    "혜화문": 245,
 }
 EXCLUDE_NAMES = {"Better", "와비사비", "포차1번지먹새통", "고니식탁"}
 
@@ -62,14 +65,14 @@ COUPON_TYPES_TO_SHOW = [
 
 
 def _get_csv_based_lists():
-    """CSV 기준 제휴 18개 (Better·와비사비 제외), 쿠폰 발급 16개 (고니·포차 제외) 반환."""
+    """CSV 기준 제휴 19개 (Better·와비사비 제외), 쿠폰 발급 17개 (고니·포차 제외) 반환."""
     all_ids = sorted(set(NAME_TO_ID.values()))
     # Better(148), 와비사비(284) = 제휴 아님
     non_affiliate = {148, 284}
-    affiliate_ids = [rid for rid in all_ids if rid not in non_affiliate]  # 18개
+    affiliate_ids = [rid for rid in all_ids if rid not in non_affiliate]  # 19개
     # 고니식탁(30), 포차1번지먹새통(147) = 쿠폰 발급 제외
     coupon_excluded = {30, 147}
-    coupon_ids = [rid for rid in affiliate_ids if rid not in coupon_excluded]  # 16개
+    coupon_ids = [rid for rid in affiliate_ids if rid not in coupon_excluded]  # 17개
     return affiliate_ids, non_affiliate | coupon_excluded, coupon_ids
 
 
@@ -89,7 +92,7 @@ class Command(BaseCommand):
         # ---- CSV 기준 ----
         affiliate_csv, excluded_csv, coupon_csv = _get_csv_based_lists()
         self.stdout.write("\n" + "=" * 60)
-        self.stdout.write("【CSV 기준】 premium.csv + general.csv (제휴 18개, 쿠폰 16개)")
+        self.stdout.write("【CSV 기준】 premium.csv + general.csv (제휴 19개, 쿠폰 17개)")
         self.stdout.write("=" * 60)
         self.stdout.write(f"\n제휴식당 총 {len(affiliate_csv)}개 (Better·와비사비 제외):")
         for rid in affiliate_csv:

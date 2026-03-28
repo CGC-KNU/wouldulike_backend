@@ -20,8 +20,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--title",
             type=str,
-            default="우주라이크",
-            help='알림 제목 (기본값: "우주라이크")',
+            default=None,
+            help="알림 제목 (미지정 시 본문 첫 줄을 제목으로 사용)",
         )
         parser.add_argument(
             "--dry-run",
@@ -31,8 +31,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         message = options["message"]
-        title = options.get("title") or "우주라이크"
+        title = options.get("title") or None
         dry_run = options.get("dry_run", False)
+        title_preview = title if title else "(자동) 본문 첫 줄"
 
         # FCM 토큰이 있는 User만 대상
         users = (
@@ -66,7 +67,7 @@ class Command(BaseCommand):
             )
 
         self.stdout.write(
-            f"알림 제목: {title}\n"
+            f"알림 제목: {title_preview}\n"
             f"알림 메시지(앞 80자): {message[:80]}{'...' if len(message) > 80 else ''}\n"
         )
 
