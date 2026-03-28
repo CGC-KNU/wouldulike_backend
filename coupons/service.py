@@ -53,6 +53,44 @@ APP_OPEN_PERIOD = os.getenv("APP_OPEN_PERIOD", "DAILY").upper()
 APP_OPEN_LEGACY_ENABLED = os.getenv("APP_OPEN_LEGACY_ENABLED", "1") in ("1", "true", "True")
 # 월(술집X) 수(술집) 1장씩, 3일 만료. LEGACY와 병행 가능
 APP_OPEN_MON_WED_ENABLED = os.getenv("APP_OPEN_MON_WED_ENABLED", "0") in ("1", "true", "True")
+# 지정된 쿠폰 타입 코드들에 한해, 앱접속 발급 시 식당당 benefit 1개만 발급
+APP_OPEN_SINGLE_BENEFIT_PER_RESTAURANT_CODES = {
+    code.strip()
+    for code in os.getenv(
+        "APP_OPEN_SINGLE_BENEFIT_PER_RESTAURANT_CODES",
+        "",
+    ).split(",")
+    if code.strip()
+}
+# 지정된 앱접속 쿠폰 타입 코드들에 한해 고정 만료시각 적용
+APP_OPEN_FIXED_EXPIRY_COUPON_CODES = {
+    code.strip()
+    for code in os.getenv(
+        "APP_OPEN_FIXED_EXPIRY_COUPON_CODES",
+        "",
+    ).split(",")
+    if code.strip()
+}
+
+
+def _parse_app_open_fixed_expires_at():
+    raw = (os.getenv("APP_OPEN_FIXED_EXPIRES_AT", "") or "").strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw)
+        if timezone.is_naive(dt):
+            dt = timezone.make_aware(dt)
+        return dt
+    except Exception:
+        logger.warning(
+            "Invalid APP_OPEN_FIXED_EXPIRES_AT value: %s (expected ISO datetime)",
+            raw,
+        )
+        return None
+
+
+APP_OPEN_FIXED_EXPIRES_AT = _parse_app_open_fixed_expires_at()
 
 
 def _is_event_admin_user(user: User) -> bool:
@@ -72,6 +110,44 @@ def _build_app_open_issue_key(user: User) -> str:
         return f"APP_OPEN:{user.id}:{year:04d}-W{week:02d}"
     # 기본은 일 단위
     return f"APP_OPEN:{user.id}:{now:%Y%m%d}"
+
+
+def _resolve_coupon_expiry_for_issue(
+    coupon_type: CouponType,
+    *,
+    issued_at: datetime | None = None,
+) -> datetime:
+    """
+    쿠폰 타입/이벤트 정책에 따라 발급 만료일을 결정.
+    - APP_OPEN 고정 만료 쿠폰 타입이면 APP_OPEN_FIXED_EXPIRES_AT 우선 사용
+    - 그 외는 기존 _expires_at 규칙 사용
+    """
+    if (
+        coupon_type.code in APP_OPEN_FIXED_EXPIRY_COUPON_CODES
+        and APP_OPEN_FIXED_EXPIRES_AT is not None
+    ):
+        return APP_OPEN_FIXED_EXPIRES_AT
+    return _expires_at(coupon_type, issued_at=issued_at)
+
+
+def delete_expired_coupons_for_user(
+    user: User,
+    *,
+    db_alias: str | None = None,
+) -> int:
+    """
+    사용자 기준으로 만료된 쿠폰(ISSUED/EXPIRED)을 자동 삭제.
+    반환값은 삭제된 Coupon row 수.
+    """
+    alias = db_alias or router.db_for_write(Coupon)
+    now = timezone.now()
+    expired_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        status__in=["ISSUED", "EXPIRED"],
+        expires_at__lt=now,
+    )
+    deleted, _ = expired_qs.delete()
+    return deleted
 
 
 MAX_COUPONS_PER_RESTAURANT = 200
@@ -810,7 +886,7 @@ def _issue_app_open_legacy(user: User, *, db_alias: str | None = None) -> list:
     benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
 
     for restaurant_id in target_restaurant_ids:
-        benefits = list(
+        benefit_qs = (
             RestaurantCouponBenefit.objects.using(benefit_alias)
             .filter(
                 coupon_type=ct,
@@ -819,6 +895,10 @@ def _issue_app_open_legacy(user: User, *, db_alias: str | None = None) -> list:
             )
             .order_by("sort_order")
         )
+        # 이번 이벤트처럼 식당당 여러 benefit이 있어도 1장만 발급해야 하는 경우 지원
+        if ct.code in APP_OPEN_SINGLE_BENEFIT_PER_RESTAURANT_CODES:
+            benefit_qs = benefit_qs[:1]
+        benefits = list(benefit_qs)
         if not benefits:
             continue
 
@@ -853,7 +933,7 @@ def _issue_app_open_legacy(user: User, *, db_alias: str | None = None) -> list:
                     coupon_type=ct,
                     campaign=camp,
                     restaurant_id=restaurant_id,
-                    expires_at=_expires_at(ct),
+                    expires_at=_resolve_coupon_expiry_for_issue(ct),
                     issue_key=issue_key,
                     benefit_snapshot=benefit_snapshot,
                 )
