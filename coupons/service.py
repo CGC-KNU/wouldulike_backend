@@ -53,6 +53,16 @@ APP_OPEN_PERIOD = os.getenv("APP_OPEN_PERIOD", "DAILY").upper()
 APP_OPEN_LEGACY_ENABLED = os.getenv("APP_OPEN_LEGACY_ENABLED", "1") in ("1", "true", "True")
 # 월(술집X) 수(술집) 1장씩, 3일 만료. LEGACY와 병행 가능
 APP_OPEN_MON_WED_ENABLED = os.getenv("APP_OPEN_MON_WED_ENABLED", "0") in ("1", "true", "True")
+# 데이트 기획전 앱접속 발급 (DATE_EVENT_SPECIAL + DATE_EVENT_APP_OPEN)
+DATE_EVENT_APP_OPEN_ENABLED = os.getenv("DATE_EVENT_APP_OPEN_ENABLED", "1") in ("1", "true", "True")
+DATE_EVENT_APP_OPEN_COUPON_TYPE_CODE = os.getenv(
+    "DATE_EVENT_APP_OPEN_COUPON_TYPE_CODE",
+    "DATE_EVENT_SPECIAL",
+)
+DATE_EVENT_APP_OPEN_CAMPAIGN_CODE = os.getenv(
+    "DATE_EVENT_APP_OPEN_CAMPAIGN_CODE",
+    "DATE_EVENT_APP_OPEN",
+)
 # 지정된 쿠폰 타입 코드들에 한해, 앱접속 발급 시 식당당 benefit 1개만 발급
 APP_OPEN_SINGLE_BENEFIT_PER_RESTAURANT_CODES = {
     code.strip()
@@ -958,14 +968,127 @@ def _issue_app_open_legacy(user: User, *, db_alias: str | None = None) -> list:
     return issued
 
 
+def _issue_date_event_app_open(user: User, *, db_alias: str | None = None) -> list:
+    """
+    데이트 기획전 앱접속 쿠폰 발급.
+    - DATE_EVENT_SPECIAL 타입의 식당별 benefit을 사용자에게 전체 발급
+    - campaign(start_at/end_at, active) 범위 내에서만 발급
+    - 이벤트 기간 동안 사용자당 식당별 1회 발급
+    """
+    alias = db_alias or router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=DATE_EVENT_APP_OPEN_COUPON_TYPE_CODE)
+        camp = Campaign.objects.using(alias).get(
+            code=DATE_EVENT_APP_OPEN_CAMPAIGN_CODE,
+            active=True,
+        )
+    except CouponType.DoesNotExist:
+        logger.info(
+            "date-event app-open not issued: coupon type missing (code=%s)",
+            DATE_EVENT_APP_OPEN_COUPON_TYPE_CODE,
+        )
+        return []
+    except Campaign.DoesNotExist:
+        logger.info(
+            "date-event app-open not issued: campaign missing/inactive (code=%s)",
+            DATE_EVENT_APP_OPEN_CAMPAIGN_CODE,
+        )
+        return []
+
+    now = timezone.now()
+    if camp.start_at and now < camp.start_at:
+        return []
+    if camp.end_at and now > camp.end_at:
+        return []
+
+    all_restaurant_ids = list(
+        AffiliateRestaurant.objects.using(alias)
+        .filter(is_affiliate=True)
+        .values_list("restaurant_id", flat=True)
+    )
+    if not all_restaurant_ids:
+        return []
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    target_restaurant_ids = [rid for rid in all_restaurant_ids if rid not in excluded_ids]
+    if not target_restaurant_ids:
+        return []
+
+    issued: list[Coupon] = []
+    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
+    for restaurant_id in target_restaurant_ids:
+        benefits = list(
+            RestaurantCouponBenefit.objects.using(benefit_alias)
+            .filter(coupon_type=ct, restaurant_id=restaurant_id, active=True)
+            .order_by("sort_order")
+        )
+        if not benefits:
+            continue
+
+        for sort_order, benefit in enumerate(benefits):
+            issue_key = f"DATE_EVENT_APP_OPEN:{user.id}:{restaurant_id}:{sort_order}"
+            existing = (
+                Coupon.objects.using(alias)
+                .filter(
+                    user=user,
+                    coupon_type=ct,
+                    campaign=camp,
+                    issue_key=issue_key,
+                    restaurant_id=restaurant_id,
+                )
+                .first()
+            )
+            if existing:
+                # 기간 중 재접속 시 중복 발급하지 않음
+                continue
+
+            benefit_snapshot = _build_benefit_snapshot(
+                ct,
+                restaurant_id,
+                benefit=benefit,
+                db_alias=alias,
+            )
+            try:
+                coupon = Coupon.objects.using(alias).create(
+                    code=make_coupon_code(),
+                    user=user,
+                    coupon_type=ct,
+                    campaign=camp,
+                    restaurant_id=restaurant_id,
+                    expires_at=_resolve_coupon_expiry_for_issue(ct),
+                    issue_key=issue_key,
+                    benefit_snapshot=benefit_snapshot,
+                )
+                issued.append(coupon)
+            except IntegrityError:
+                dup = (
+                    Coupon.objects.using(alias)
+                    .filter(
+                        user=user,
+                        coupon_type=ct,
+                        campaign=camp,
+                        issue_key=issue_key,
+                        restaurant_id=restaurant_id,
+                    )
+                    .first()
+                )
+                if dup:
+                    issued.append(dup)
+
+    return issued
+
+
 def issue_app_open_coupon(user: User):
     """
     앱 접속(로그인/토큰 갱신 등) 시점에 발급되는 쿠폰.
-    APP_OPEN_LEGACY_ENABLED / APP_OPEN_MON_WED_ENABLED 로 각각 온오프 가능.
-    둘 다 활성화 시 병행 발급 (전체 + 월/수 1장).
+    APP_OPEN_LEGACY_ENABLED / APP_OPEN_MON_WED_ENABLED / DATE_EVENT_APP_OPEN_ENABLED
+    로 각각 온오프 가능.
     """
     issued: list[Coupon] = []
     alias = router.db_for_write(Coupon)
+
+    if DATE_EVENT_APP_OPEN_ENABLED:
+        issued.extend(_issue_date_event_app_open(user, db_alias=alias))
 
     if APP_OPEN_LEGACY_ENABLED:
         issued.extend(_issue_app_open_legacy(user, db_alias=alias))
