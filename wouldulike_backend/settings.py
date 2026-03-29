@@ -338,7 +338,13 @@ LOGGING = {
 # GCP Cloud Scheduler 등에서 X-CRON-TOKEN 헤더로 함께 전송해야 함.
 CRON_SECRET_TOKEN = os.getenv("CRON_SECRET_TOKEN")
 
-# 매주 월/수 11:50 정기 알림 메시지 (Cloud Scheduler weekly-mon, weekly-wed 엔드포인트용)
+# 매주 월/수 11:50 정기 알림 문구
+# 권장: TITLE/BODY 분리 변수 사용
+WEEKLY_MON_TITLE = os.getenv("WEEKLY_MON_TITLE", "")
+WEEKLY_MON_BODY = os.getenv("WEEKLY_MON_BODY", "")
+WEEKLY_WED_TITLE = os.getenv("WEEKLY_WED_TITLE", "")
+WEEKLY_WED_BODY = os.getenv("WEEKLY_WED_BODY", "")
+# 하위 호환: 기존 단일 MESSAGE 변수도 계속 지원
 WEEKLY_MON_MESSAGE = os.getenv("WEEKLY_MON_MESSAGE", "")
 WEEKLY_WED_MESSAGE = os.getenv("WEEKLY_WED_MESSAGE", "")
 

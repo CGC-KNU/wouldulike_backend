@@ -47,6 +47,29 @@ def _is_weekly_allowed_window(day_key: str) -> bool:
     return now_kst.hour == 11 and 50 <= now_kst.minute <= 59
 
 
+def _build_weekly_message(day_key: str) -> str:
+    """
+    title/body 분리 환경변수를 우선 사용하고, 기존 MESSAGE 변수와 호환 유지.
+    """
+    upper_key = day_key.upper()
+    title = (getattr(settings, f"WEEKLY_{upper_key}_TITLE", "") or "").strip()
+    body = (getattr(settings, f"WEEKLY_{upper_key}_BODY", "") or "").strip()
+
+    if title and body:
+        return f"{title}\n{body}"
+    if title:
+        return title
+    if body:
+        return body
+
+    legacy_message = (
+        getattr(settings, f"WEEKLY_{upper_key}_MESSAGE", "") or ""
+    ).strip()
+    if legacy_message:
+        return legacy_message
+    return f"정기 알림 ({day_key})"
+
+
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
 def trigger_send_scheduled_notifications(request):
@@ -70,15 +93,9 @@ def _trigger_weekly_notification(day_key: str):
     """
     매주 요일별 정기 알림 발송.
     - day_key: 'mon' | 'wed'
-    - settings.WEEKLY_MON_MESSAGE, WEEKLY_WED_MESSAGE 에서 메시지 로드
+    - settings.WEEKLY_{DAY}_TITLE/BODY 또는 기존 MESSAGE에서 메시지 로드
     """
-    message = getattr(
-        settings,
-        f"WEEKLY_{day_key.upper()}_MESSAGE",
-        f"정기 알림 ({day_key})",
-    )
-    if not message:
-        message = f"정기 알림 ({day_key})"
+    message = _build_weekly_message(day_key)
 
     now = timezone.now()
     duplicate_window_start = now - timedelta(minutes=15)
