@@ -236,7 +236,7 @@ OPERATIONS_ADMIN_RESET_PASSWORDS=0
 - `POST /api/coupons/flash/claim/` - 플래시 쿠폰 발급
 
 ### 스탬프 (`/api/`)
-- `POST /api/coupons/stamps/add/` - 스탬프 적립
+- `POST /api/coupons/stamps/add/` - 스탬프 적립 (`count`: 1~4, 기본값 1)
 - `GET /api/coupons/stamps/my/` - 내 스탬프 현황 조회
 - `GET /api/coupons/stamps/my/all/` - 모든 레스토랑 스탬프 현황 조회
 

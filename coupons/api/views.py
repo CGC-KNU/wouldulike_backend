@@ -22,6 +22,7 @@ from ..service import (
     add_stamp,
     get_all_stamp_statuses,
     get_stamp_status,
+    STAMP_DAILY_EARN_LIMIT,
     check_and_expire_coupon,
     claim_final_exam_coupon,
     issue_app_open_coupon,
@@ -280,6 +281,7 @@ class AddStampView(APIView):
     def post(self, request):
         restaurant_id = request.data.get("restaurant_id")
         pin = request.data.get("pin")
+        count = request.data.get("count", 1)
         idem_key = request.headers.get("Idempotency-Key") or request.data.get("idem_key")
         if not restaurant_id or not pin:
             return Response({"detail": "restaurant_id and pin required"}, status=400)
@@ -287,9 +289,19 @@ class AddStampView(APIView):
             restaurant_id_int = int(restaurant_id)
         except (TypeError, ValueError):
             return Response({"detail": "restaurant_id must be numeric"}, status=400)
+        try:
+            stamp_count = int(count)
+        except (TypeError, ValueError):
+            return Response({"detail": "count must be numeric (1~4)"}, status=400)
 
         try:
-            data = add_stamp(request.user, restaurant_id_int, pin, idem_key)
+            data = add_stamp(
+                request.user,
+                restaurant_id_int,
+                pin,
+                idem_key=idem_key,
+                count=stamp_count,
+            )
             return Response(data, status=201 if data.get("reward_coupon_code") else 200)
         except DjangoValidationError as e:
             if hasattr(e, "messages") and e.messages:
@@ -310,10 +322,18 @@ class AddStampView(APIView):
             if code == "stamp_daily_limit_reached" or "daily stamp limit reached" in msg:
                 return Response(
                     {
-                        "detail": "이 식당은 하루 최대 3회까지 스탬프를 적립할 수 있어요.",
+                        "detail": f"이 식당은 하루 최대 {STAMP_DAILY_EARN_LIMIT}회까지 스탬프를 적립할 수 있어요.",
                         "code": "stamp_daily_limit_reached",
                     },
                     status=429,
+                )
+            if code == "invalid_stamp_count" or "stamp count must be between 1 and 4" in msg:
+                return Response(
+                    {
+                        "detail": "스탬프 적립 개수는 1개 이상 4개 이하만 가능해요.",
+                        "code": "invalid_stamp_count",
+                    },
+                    status=400,
                 )
             return Response(
                 {

@@ -4,7 +4,7 @@ import logging
 import os
 from datetime import date, datetime, timedelta, time
 from django.db import transaction, IntegrityError, router, DatabaseError
-from django.db.models import Count
+from django.db.models import Count, Sum
 from utils.db_locks import locked_get
 from django.utils import timezone
 from django.core.exceptions import ValidationError
@@ -2562,7 +2562,7 @@ STAMP_LEGACY_REWARD_CODES = {
     10: "STAMP_REWARD_10",
 }
 REWARD_CAMPAIGN_CODE = "STAMP_REWARD"
-STAMP_DAILY_EARN_LIMIT = int(os.getenv("STAMP_DAILY_EARN_LIMIT", "3"))
+STAMP_DAILY_EARN_LIMIT = int(os.getenv("STAMP_DAILY_EARN_LIMIT", "5"))
 
 STAMP_DB_ALIAS = "cloudsql"
 
@@ -2815,10 +2815,22 @@ def _issue_reward_coupon(
 
 
 @transaction.atomic(using=STAMP_DB_ALIAS)
-def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = None):
+def add_stamp(
+    user: User,
+    restaurant_id: int,
+    pin: str,
+    idem_key: str | None = None,
+    count: int = 1,
+):
+    if count < 1 or count > 4:
+        raise ValidationError(
+            "stamp count must be between 1 and 4",
+            code="invalid_stamp_count",
+        )
+
     # 멱등(같은 요청 재발급 방지)
     if idem_key:
-        cache_key = f"idem:stamp:{restaurant_id}:{idem_key}"
+        cache_key = f"idem:stamp:{restaurant_id}:{count}:{idem_key}"
         prev = idem_get(cache_key)
         if prev:
             return prev
@@ -2843,9 +2855,11 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
                     created_at__gte=today_start,
                     created_at__lt=tomorrow_start,
                 )
-                .count()
+                .aggregate(total=Sum("delta"))
+                .get("total")
             )
-            if earned_today >= STAMP_DAILY_EARN_LIMIT:
+            earned_today = int(earned_today or 0)
+            if earned_today + count > STAMP_DAILY_EARN_LIMIT:
                 raise ValidationError(
                     f"daily stamp limit reached for this restaurant ({STAMP_DAILY_EARN_LIMIT}/day)",
                     code="stamp_daily_limit_reached",
@@ -2855,10 +2869,8 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
             user=user, restaurant_id=restaurant_id
         )
 
-        prev_stamps = wallet.stamps
-        wallet.stamps += 1
         StampEvent.objects.using(STAMP_DB_ALIAS).create(
-            user=user, restaurant_id=restaurant_id, delta=+1, source="PIN"
+            user=user, restaurant_id=restaurant_id, delta=+count, source="PIN"
         )
 
         # 규칙 조회 (없으면 레거시 5, 10 사용)
@@ -2875,89 +2887,106 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
         reward_codes = []
         reward_details = []
         now_suffix = timezone.now().strftime("%Y%m%d%H%M%S%f")
-        max_reached = False
 
         if rule_type == "THRESHOLD":
             thresholds = config.get("thresholds", [])
             threshold_stamps = sorted(t["stamps"] for t in thresholds)
             max_threshold = max(threshold_stamps) if threshold_stamps else 0
 
-            for t in thresholds:
-                th = t["stamps"]
-                coupon_type_code = t.get("coupon_type_code")
-                if not coupon_type_code:
-                    raise ValidationError(f"stamp reward coupon type missing for threshold={th}")
-                if prev_stamps < th <= wallet.stamps:
-                    suffix = f"{restaurant_id}:{now_suffix}:T{th}"
-                    reward = _issue_reward_coupon(
-                        user,
-                        restaurant_id,
-                        coupon_type_code=coupon_type_code,
-                        issue_key_suffix=suffix,
-                        stamp_subtitle=f"{th}개 스탬프 보상",
-                        db_alias=STAMP_DB_ALIAS,
-                    )
-                    if reward:
-                        logger.info(
-                            "Stamp reward issued user=%s restaurant=%s threshold=%s coupon_type=%s coupon_code=%s",
-                            user.id,
+            for step_idx in range(1, count + 1):
+                before_stamps = wallet.stamps
+                wallet.stamps += 1
+                crossed_max_threshold = False
+
+                for t in thresholds:
+                    th = t["stamps"]
+                    coupon_type_code = t.get("coupon_type_code")
+                    if not coupon_type_code:
+                        raise ValidationError(
+                            f"stamp reward coupon type missing for threshold={th}"
+                        )
+                    if before_stamps < th <= wallet.stamps:
+                        suffix = f"{restaurant_id}:{now_suffix}:N{step_idx}:T{th}"
+                        reward = _issue_reward_coupon(
+                            user,
                             restaurant_id,
-                            th,
-                            reward.coupon_type.code,
-                            reward.code,
+                            coupon_type_code=coupon_type_code,
+                            issue_key_suffix=suffix,
+                            stamp_subtitle=f"{th}개 스탬프 보상",
+                            db_alias=STAMP_DB_ALIAS,
                         )
-                        reward_codes.append(reward.code)
-                        reward_details.append(
-                            {"threshold": th, "coupon_code": reward.code, "coupon_type": reward.coupon_type.code}
-                        )
-                    if th == max_threshold:
-                        max_reached = True
+                        if reward:
+                            logger.info(
+                                "Stamp reward issued user=%s restaurant=%s threshold=%s coupon_type=%s coupon_code=%s",
+                                user.id,
+                                restaurant_id,
+                                th,
+                                reward.coupon_type.code,
+                                reward.code,
+                            )
+                            reward_codes.append(reward.code)
+                            reward_details.append(
+                                {
+                                    "threshold": th,
+                                    "coupon_code": reward.code,
+                                    "coupon_type": reward.coupon_type.code,
+                                }
+                            )
+                        if th == max_threshold:
+                            crossed_max_threshold = True
+
+                # 배치 적립 시에도 "1개씩 적립한 것과 동일"하게 라운드 리셋 처리
+                if crossed_max_threshold:
+                    wallet.stamps -= cycle_target
 
         else:  # VISIT
             ranges = config.get("ranges", [])
-            visit_number = wallet.stamps
+            for step_idx in range(1, count + 1):
+                wallet.stamps += 1
+                visit_number = wallet.stamps
 
-            for r in ranges:
-                min_v = r.get("min_visit")
-                max_v = r.get("max_visit")
-                coupon_type_code = r.get("coupon_type_code")
-                if min_v is None or max_v is None or not coupon_type_code:
-                    continue
-                if min_v <= visit_number <= max_v:
-                    suffix = f"{restaurant_id}:{now_suffix}:V{visit_number}"
-                    visit_subtitle = (
-                        f"{visit_number}회 방문 보상"
-                        if min_v == max_v
-                        else f"{min_v}~{max_v}회 방문 보상"
-                    )
-                    reward = _issue_reward_coupon(
-                        user,
-                        restaurant_id,
-                        coupon_type_code=coupon_type_code,
-                        issue_key_suffix=suffix,
-                        stamp_subtitle=visit_subtitle,
-                        db_alias=STAMP_DB_ALIAS,
-                    )
-                    if reward:
-                        logger.info(
-                            "Stamp visit reward issued user=%s restaurant=%s visit=%s coupon_type=%s coupon_code=%s",
-                            user.id,
+                for r in ranges:
+                    min_v = r.get("min_visit")
+                    max_v = r.get("max_visit")
+                    coupon_type_code = r.get("coupon_type_code")
+                    if min_v is None or max_v is None or not coupon_type_code:
+                        continue
+                    if min_v <= visit_number <= max_v:
+                        suffix = f"{restaurant_id}:{now_suffix}:N{step_idx}:V{visit_number}"
+                        visit_subtitle = (
+                            f"{visit_number}회 방문 보상"
+                            if min_v == max_v
+                            else f"{min_v}~{max_v}회 방문 보상"
+                        )
+                        reward = _issue_reward_coupon(
+                            user,
                             restaurant_id,
-                            visit_number,
-                            reward.coupon_type.code,
-                            reward.code,
+                            coupon_type_code=coupon_type_code,
+                            issue_key_suffix=suffix,
+                            stamp_subtitle=visit_subtitle,
+                            db_alias=STAMP_DB_ALIAS,
                         )
-                        reward_codes.append(reward.code)
-                        reward_details.append(
-                            {"visit": visit_number, "coupon_code": reward.code, "coupon_type": reward.coupon_type.code}
-                        )
-                    break
+                        if reward:
+                            logger.info(
+                                "Stamp visit reward issued user=%s restaurant=%s visit=%s coupon_type=%s coupon_code=%s",
+                                user.id,
+                                restaurant_id,
+                                visit_number,
+                                reward.coupon_type.code,
+                                reward.code,
+                            )
+                            reward_codes.append(reward.code)
+                            reward_details.append(
+                                {
+                                    "visit": visit_number,
+                                    "coupon_code": reward.code,
+                                    "coupon_type": reward.coupon_type.code,
+                                }
+                            )
+                        break
 
-            if visit_number >= cycle_target:
-                max_reached = True
-
-        if max_reached:
-            wallet.stamps -= cycle_target
+                if visit_number >= cycle_target:
+                    wallet.stamps -= cycle_target
 
         wallet.save()
 
@@ -2965,6 +2994,7 @@ def add_stamp(user: User, restaurant_id: int, pin: str, idem_key: str | None = N
         "ok": True,
         "current": wallet.stamps,
         "target": cycle_target,
+        "added": count,
         "reward_coupon_code": reward_codes[-1] if reward_codes else None,
     }
     if reward_codes:
