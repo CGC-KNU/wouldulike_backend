@@ -190,3 +190,30 @@ class FullAffiliateAndKnulikeCouponTests(TestCase):
         with self.assertRaises(ValidationError) as ctx:
             accept_referral(referee=referee, ref_code="KNULIKE")
         self.assertEqual(ctx.exception.code, "knulike_already_issued")
+
+
+class BoothVisitCouponTests(TestCase):
+    """80THANNIVERSARY 추천코드: 전체 제휴식당 중 1개 쿠폰 발급."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def test_booth_visit_code_issues_one_coupon_and_sets_subtitle(self):
+        referee = self.user_model.objects.create_user(kakao_id=80001, password="pass")
+        referral, issued = accept_referral(referee=referee, ref_code="80THANNIVERSARY")
+        self.assertIsNotNone(referral)
+        self.assertEqual(referral.campaign_code, "BOOTH_VISIT_EVENT")
+        self.assertEqual(len(issued), 1)
+        self.assertEqual((issued[0].benefit_snapshot or {}).get("subtitle"), "[🎁 부스 방문 쿠폰 🎁]")
+
+    def test_booth_visit_code_duplicate_rejected(self):
+        referee = self.user_model.objects.create_user(kakao_id=80002, password="pass")
+        accept_referral(referee=referee, ref_code="80THANNIVERSARY")
+        with self.assertRaises(ValidationError) as ctx:
+            accept_referral(referee=referee, ref_code="80THANNIVERSARY")
+        self.assertEqual(ctx.exception.code, "booth_visit_already_issued")

@@ -186,6 +186,10 @@ COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
 # 제휴식당 21종 전체 발급 쿠폰 코드 (코드 내에서 수정 가능)
 FULL_AFFILIATE_COUPON_CODE = "DONGARILIKE"
 
+# 부스 방문 추천코드 (전체 제휴식당 중 1개 쿠폰 발급)
+BOOTH_VISIT_REF_CODE = "80THANNIVERSARY"
+BOOTH_VISIT_SUBTITLE = "[🎁 부스 방문 쿠폰 🎁]"
+
 
 def _is_pub_restaurant(restaurant_id: int, *, db_alias: str | None = None) -> bool:
     """
@@ -1481,6 +1485,50 @@ def issue_full_affiliate_coupons(user: User):
     }
 
 
+@transaction.atomic
+def issue_booth_visit_coupon(user: User, *, ref_code_used: str = BOOTH_VISIT_REF_CODE):
+    """
+    부스 방문 추천코드(80THANNIVERSARY) 입력 시 전체 제휴식당 중 1개 쿠폰을 발급합니다.
+    - FULL_AFFILIATE_SPECIAL의 식당별 benefit 풀을 재사용합니다.
+    - 사용자당 한 번만 발급됩니다.
+    - subtitle은 항상 [🎁 부스 방문 쿠폰 🎁] 로 고정합니다.
+    """
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="FULL_AFFILIATE_SPECIAL")
+    camp = Campaign.objects.using(alias).get(code="BOOTH_VISIT_EVENT", active=True)
+
+    existing = Coupon.objects.using(alias).filter(user=user, coupon_type=ct, campaign=camp)
+    if existing.exists():
+        return {"coupons": list(existing), "total_issued": existing.count(), "already_issued": True}
+
+    restaurant_id = _select_restaurant_for_coupon(ct, db_alias=alias)
+    issue_key = f"EVENT_REWARD:{user.id}:{ref_code_used}:{restaurant_id}:0"
+    guard = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key=issue_key,
+    ).first()
+    if guard:
+        return {"coupons": [guard], "total_issued": 1, "already_issued": True}
+
+    benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, db_alias=alias)
+    if benefit_snapshot:
+        benefit_snapshot = {**benefit_snapshot, "subtitle": BOOTH_VISIT_SUBTITLE}
+
+    coupon = Coupon.objects.using(alias).create(
+        code=make_coupon_code(),
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        restaurant_id=restaurant_id,
+        expires_at=_expires_at(ct),
+        issue_key=issue_key,
+        benefit_snapshot=benefit_snapshot,
+    )
+    return {"coupons": [coupon], "total_issued": 1, "already_issued": False}
+
+
 NEW_SEMESTER_COUPON_COUNT = 3
 
 
@@ -2139,6 +2187,69 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
             raise ValidationError(
                 "이미 제휴식당 전체 쿠폰을 발급받았습니다.",
                 code="full_affiliate_already_issued",
+            )
+
+    # 부스 방문 추천코드 이벤트 처리 (80THANNIVERSARY: 제휴식당 쿠폰 1개 발급)
+    if ref_code == BOOTH_VISIT_REF_CODE.upper():
+        alias = router.db_for_write(Coupon)
+        ct = CouponType.objects.using(alias).get(code="FULL_AFFILIATE_SPECIAL")
+        camp = Campaign.objects.using(alias).get(code="BOOTH_VISIT_EVENT", active=True)
+
+        existing_coupons = Coupon.objects.using(alias).filter(
+            user=referee,
+            coupon_type=ct,
+            campaign=camp,
+        )
+        if existing_coupons.exists():
+            raise ValidationError(
+                "이미 부스 방문 쿠폰을 발급받았습니다.",
+                code="booth_visit_already_issued",
+            )
+
+        result = issue_booth_visit_coupon(referee, ref_code_used=ref_code)
+        if result["already_issued"]:
+            raise ValidationError(
+                "이미 부스 방문 쿠폰을 발급받았습니다.",
+                code="booth_visit_already_issued",
+            )
+
+        try:
+            with transaction.atomic(using=db_alias):
+                base_qs = Referral.objects.using(db_alias)
+                locked_qs = base_qs.select_for_update()
+
+                existing_refs = locked_qs.filter(
+                    referee=referee,
+                    campaign_code="BOOTH_VISIT_EVENT",
+                )
+                if existing_refs.exists():
+                    existing_ref = existing_refs.first()
+                    existing_coupons = Coupon.objects.using(alias).filter(
+                        user=referee,
+                        coupon_type=ct,
+                        campaign=camp,
+                    )
+                    if not existing_coupons.exists():
+                        existing_ref.delete()
+                    else:
+                        raise ValidationError(
+                            "이미 부스 방문 쿠폰을 발급받았습니다.",
+                            code="booth_visit_already_issued",
+                        )
+
+                referral = base_qs.create(
+                    referrer=referee,
+                    referee=referee,
+                    code_used=ref_code,
+                    campaign_code="BOOTH_VISIT_EVENT",
+                    status="QUALIFIED",
+                    qualified_at=timezone.now(),
+                )
+                return referral, result["coupons"]
+        except IntegrityError:
+            raise ValidationError(
+                "이미 부스 방문 쿠폰을 발급받았습니다.",
+                code="booth_visit_already_issued",
             )
 
     # 기말고사 이벤트 쿠폰 코드 처리

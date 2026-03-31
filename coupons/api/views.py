@@ -227,7 +227,16 @@ class AcceptReferralView(APIView):
                 payload = {"detail": message}
             status_code = (
                 status.HTTP_409_CONFLICT
-                if getattr(exc, "code", "") in ("referral_already_accepted", "final_exam_already_issued", "event_referral_already_accepted", "new_semester_already_issued", "knulike_already_issued", "datelike_already_issued", "full_affiliate_already_issued")
+                if getattr(exc, "code", "") in (
+                    "referral_already_accepted",
+                    "final_exam_already_issued",
+                    "event_referral_already_accepted",
+                    "new_semester_already_issued",
+                    "knulike_already_issued",
+                    "datelike_already_issued",
+                    "full_affiliate_already_issued",
+                    "booth_visit_already_issued",
+                )
                 else status.HTTP_400_BAD_REQUEST
             )
             return Response(payload, status=status_code)
@@ -236,7 +245,13 @@ class AcceptReferralView(APIView):
         # qualify_referral_and_grant를 호출하지 않음 (호출해도 처리할 것이 없음)
         # 일반 추천인 코드의 경우에만 qualify_referral_and_grant 호출
         qual_issued = []
-        if referral.campaign_code not in ("FINAL_EXAM_EVENT", "NEW_SEMESTER_EVENT", "KNULIKE_EVENT", "FULL_AFFILIATE_EVENT"):
+        if referral.campaign_code not in (
+            "FINAL_EXAM_EVENT",
+            "NEW_SEMESTER_EVENT",
+            "KNULIKE_EVENT",
+            "FULL_AFFILIATE_EVENT",
+            "BOOTH_VISIT_EVENT",
+        ):
             _, qual_issued = qualify_referral_and_grant(request.user)
 
         issued_coupons = format_issued_coupons(ref_issued + qual_issued)
