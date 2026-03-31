@@ -225,6 +225,8 @@ class AcceptReferralView(APIView):
             else:
                 message = exc.messages[0] if getattr(exc, "messages", None) else str(exc)
                 payload = {"detail": message}
+            if getattr(exc, "code", "") == "medium_rare_daily_limit_reached":
+                return Response(payload, status=status.HTTP_429_TOO_MANY_REQUESTS)
             status_code = (
                 status.HTTP_409_CONFLICT
                 if getattr(exc, "code", "") in (
@@ -237,6 +239,7 @@ class AcceptReferralView(APIView):
                     "full_affiliate_already_issued",
                     "booth_visit_already_issued",
                     "roulette_already_issued",
+                    "medium_rare_code_already_used",
                 )
                 else status.HTTP_400_BAD_REQUEST
             )
@@ -257,6 +260,12 @@ class AcceptReferralView(APIView):
             "ROULETTE_JAEMIN_EVENT",
             "ROULETTE_CHAERIN_EVENT",
         ):
+            if (referral.campaign_code or "").startswith("MEDIUM_RARE:"):
+                issued_coupons = format_issued_coupons(ref_issued)
+                payload = {"ok": True, "referral_id": referral.id}
+                if issued_coupons:
+                    payload["issued_coupons"] = issued_coupons
+                return Response(payload, status=status.HTTP_200_OK)
             _, qual_issued = qualify_referral_and_grant(request.user)
 
         issued_coupons = format_issued_coupons(ref_issued + qual_issued)

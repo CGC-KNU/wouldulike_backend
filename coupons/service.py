@@ -199,6 +199,104 @@ ROULETTE_CODES: dict[str, int] = {
     "CHAERIN": 30,
 }
 
+# 미디움레어 쿠폰(임시 시트) - 추천코드 입력 방식(A)
+MEDIUM_RARE_SUBTITLE = "[미디움레어 쿠폰 🥩]"
+# 코드(대문자) → 발급 개수
+# - 3/26 테스트 코드는 제외 (사용자 요청)
+MEDIUM_RARE_CODE_REWARDS: dict[str, int] = {
+    # 4/1~4/12 한정쿠폰 1종 (최초 성공시 제공) - 1개
+    "BRAVENIX": 1,
+    "LOPATERN": 1,
+    "ZEMQUARK": 1,
+    "TOLVAREN": 1,
+    "MEXILORD": 1,
+    "QANERBIT": 1,
+    "ROVELTAN": 1,
+    "SIPLORAN": 1,
+    "DAKEMITH": 1,
+    "VORLANEX": 1,
+    "JUPRAVEN": 1,
+    "KELTOMIR": 1,
+    # 4/1~4/12 기본 1종 쿠폰 1번 - 1개
+    "WEXILARD": 1,
+    "NOPHARET": 1,
+    "BIRLONAQ": 1,
+    "CAVORENT": 1,
+    "HUXILORA": 1,
+    "YANTERVO": 1,
+    "FOLKARIN": 1,
+    "GREMALTO": 1,
+    "PEXORIAN": 1,
+    "LINQARET": 1,
+    "DOVEMARK": 1,
+    "TARLONIX": 1,
+    # 4/1~4/12 기본 1종 쿠폰 2번 - 1개
+    "XERABOLT": 1,
+    "MONTERAQ": 1,
+    "RIXELAND": 1,
+    "VANTORIC": 1,
+    "SELQORIN": 1,
+    "BAXTERON": 1,
+    "KORVEMIT": 1,
+    "LUNAFORD": 1,
+    "TEMPRAVI": 1,
+    "ZORLACEN": 1,
+    "WINTAROX": 1,
+    "FEXILANT": 1,
+    # 4/1~4/12 기본 1종 쿠폰 3번 - 1개
+    "NARQOLIN": 1,
+    "JOVEMARK": 1,
+    "QUILTARO": 1,
+    "PANDERIX": 1,
+    "HAVORNEX": 1,
+    "MIRALTON": 1,
+    "CORTAVEN": 1,
+    "YEXPLORA": 1,
+    "GANTEROL": 1,
+    "RAVELQIN": 1,
+    "TROMELIX": 1,
+    "SOVANDEL": 1,
+    # 4/1~4/12 기본 1종 쿠폰 4번 - 1개
+    "LEXARION": 1,
+    "DURNAVOX": 1,
+    "VEXILORN": 1,
+    "KAMERINT": 1,
+    "BOLTAREN": 1,
+    "XANIVORE": 1,
+    "JEROLAND": 1,
+    "NEXIPORT": 1,
+    "TALVORIN": 1,
+    "MERQALIX": 1,
+    "PELTORAN": 1,
+    "ZAVENLOR": 1,
+    # 4/1~4/12 3종 쿠폰(5%) - 3개
+    "RIMTOVAX": 3,
+    "QORLAVEN": 3,
+    "FANTERIX": 3,
+    "WEXMORAL": 3,
+    "LORQANIT": 3,
+    "SANTEVOR": 3,
+    "KOVARLIX": 3,
+    "DEMPRATO": 3,
+    "YOLTERIN": 3,
+    "BRENQALO": 3,
+    "TAVERNIX": 3,
+    "MORTELAQ": 3,
+    # 4/1~4/12 5종 쿠폰(1%) - 5개
+    "GEXILORA": 5,
+    "CANTROVE": 5,
+    "PAVERNIQ": 5,
+    "LUXAROTE": 5,
+    "JANTORIM": 5,
+    "ROVEXLAN": 5,
+    "VELQATON": 5,
+    "NOMERLIX": 5,
+    "XANTEROL": 5,
+    "DORVEMAX": 5,
+    "FALQORIN": 5,
+    "ZEMTARON": 5,
+}
+
 
 def _is_pub_restaurant(restaurant_id: int, *, db_alias: str | None = None) -> bool:
     """
@@ -1616,6 +1714,78 @@ def issue_roulette_coupons(
     return {"coupons": issued_coupons, "total_issued": len(issued_coupons), "already_issued": False}
 
 
+@transaction.atomic
+def issue_medium_rare_coupons(
+    user: User,
+    *,
+    ref_code_used: str,
+    count: int,
+    subtitle: str = MEDIUM_RARE_SUBTITLE,
+):
+    """
+    미디움레어 이벤트 쿠폰 발급.
+    - FULL_AFFILIATE_SPECIAL benefit 풀에서 랜덤 N개 발급
+    - subtitle/coupon_type_title 고정
+    """
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="FULL_AFFILIATE_SPECIAL")
+    camp = Campaign.objects.using(alias).get(code="MEDIUM_RARE_EVENT", active=True)
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .select_related("restaurant")
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("no benefits available for medium-rare coupon assignment")
+
+    sample_size = min(int(count), len(benefits))
+    selected_benefits = random.sample(benefits, sample_size)
+
+    issued_coupons: list[Coupon] = []
+    base_issue_key = f"MEDIUM_RARE:{user.id}:{ref_code_used}"
+    for benefit in selected_benefits:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{base_issue_key}:{restaurant_id}:{sort_order}"
+
+        guard = Coupon.objects.using(alias).filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key=issue_key,
+        ).first()
+        if guard:
+            issued_coupons.append(guard)
+            continue
+
+        benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, benefit=benefit, db_alias=alias)
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": subtitle,
+                "subtitle": subtitle,
+            }
+
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=_expires_at(ct),
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        issued_coupons.append(coupon)
+
+    return {"coupons": issued_coupons, "total_issued": len(issued_coupons)}
+
+
 NEW_SEMESTER_COUPON_COUNT = 3
 
 
@@ -2409,6 +2579,76 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
             raise ValidationError(
                 "이미 룰렛 쿠폰을 발급받았습니다.",
                 code="roulette_already_issued",
+            )
+
+    # 미디움레어 이벤트 쿠폰 코드 처리
+    if ref_code in MEDIUM_RARE_CODE_REWARDS:
+        issue_count = MEDIUM_RARE_CODE_REWARDS[ref_code]
+        campaign_code = f"MEDIUM_RARE:{ref_code}"
+
+        today = timezone.localdate()
+        used_today = (
+            Referral.objects.using(db_alias)
+            .filter(
+                referee=referee,
+                campaign_code__startswith="MEDIUM_RARE:",
+                qualified_at__date=today,
+            )
+            .count()
+        )
+        if used_today >= 4:
+            raise ValidationError(
+                "오늘은 미디움레어 쿠폰을 최대 4번까지 받을 수 있어요.",
+                code="medium_rare_daily_limit_reached",
+            )
+
+        alias = router.db_for_write(Coupon)
+        ct = CouponType.objects.using(alias).get(code="FULL_AFFILIATE_SPECIAL")
+        camp = Campaign.objects.using(alias).get(code="MEDIUM_RARE_EVENT", active=True)
+
+        # 코드 1회성 사용(멱등성): Referral 기준으로 한 번만
+        try:
+            with transaction.atomic(using=db_alias):
+                base_qs = Referral.objects.using(db_alias)
+                locked_qs = base_qs.select_for_update()
+
+                existing_refs = locked_qs.filter(referee=referee, campaign_code=campaign_code)
+                if existing_refs.exists():
+                    existing_ref = existing_refs.first()
+                    existing_coupons = Coupon.objects.using(alias).filter(
+                        user=referee,
+                        coupon_type=ct,
+                        campaign=camp,
+                        issue_key__startswith=f"MEDIUM_RARE:{referee.id}:{ref_code}:",
+                    )
+                    if not existing_coupons.exists():
+                        existing_ref.delete()
+                    else:
+                        raise ValidationError(
+                            "이미 해당 미디움레어 쿠폰 코드를 사용했습니다.",
+                            code="medium_rare_code_already_used",
+                        )
+
+                issued_result = issue_medium_rare_coupons(
+                    referee,
+                    ref_code_used=ref_code,
+                    count=issue_count,
+                    subtitle=MEDIUM_RARE_SUBTITLE,
+                )
+
+                referral = base_qs.create(
+                    referrer=referee,
+                    referee=referee,
+                    code_used=ref_code,
+                    campaign_code=campaign_code,
+                    status="QUALIFIED",
+                    qualified_at=timezone.now(),
+                )
+                return referral, issued_result["coupons"]
+        except IntegrityError:
+            raise ValidationError(
+                "이미 해당 미디움레어 쿠폰 코드를 사용했습니다.",
+                code="medium_rare_code_already_used",
             )
 
     # 기말고사 이벤트 쿠폰 코드 처리

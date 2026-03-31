@@ -261,3 +261,41 @@ class RouletteCouponTests(TestCase):
         with self.assertRaises(ValidationError) as ctx:
             accept_referral(referee=referee, ref_code="MINYEOL")
         self.assertEqual(ctx.exception.code, "roulette_already_issued")
+
+
+class MediumRareCouponTests(TestCase):
+    """미디움레어 추천코드: 하루 최대 4회, 코드 1회성."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def test_medium_rare_issues_expected_count_and_subtitle(self):
+        referee = self.user_model.objects.create_user(kakao_id=82001, password="pass")
+        referral, issued = accept_referral(referee=referee, ref_code="BRAVENIX")
+        self.assertTrue((referral.campaign_code or "").startswith("MEDIUM_RARE:"))
+        self.assertEqual(len(issued), 1)
+        self.assertEqual((issued[0].benefit_snapshot or {}).get("subtitle"), "[미디움레어 쿠폰 🥩]")
+
+    def test_medium_rare_code_duplicate_rejected(self):
+        referee = self.user_model.objects.create_user(kakao_id=82002, password="pass")
+        accept_referral(referee=referee, ref_code="BRAVENIX")
+        with self.assertRaises(ValidationError) as ctx:
+            accept_referral(referee=referee, ref_code="BRAVENIX")
+        self.assertEqual(ctx.exception.code, "medium_rare_code_already_used")
+
+    def test_medium_rare_daily_limit_four(self):
+        referee = self.user_model.objects.create_user(kakao_id=82003, password="pass")
+        # 4회 성공
+        accept_referral(referee=referee, ref_code="BRAVENIX")
+        accept_referral(referee=referee, ref_code="LOPATERN")
+        accept_referral(referee=referee, ref_code="ZEMQUARK")
+        accept_referral(referee=referee, ref_code="TOLVAREN")
+        # 5번째는 제한
+        with self.assertRaises(ValidationError) as ctx:
+            accept_referral(referee=referee, ref_code="MEXILORD")
+        self.assertEqual(ctx.exception.code, "medium_rare_daily_limit_reached")
