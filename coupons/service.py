@@ -505,6 +505,10 @@ def _expires_at(ct: CouponType, *, issued_at: datetime | None = None) -> datetim
     - API: "2026-03-19T14:59:59.000000Z" (UTC)
     - 프론트엔드: "~3/19(목) 23:59까지" 또는 "3일 후 만료"
     """
+    # 스탬프 보상 쿠폰은 운영 정책상 항상 글로벌 만료일로 고정
+    if (ct.code or "").startswith("STAMP_REWARD"):
+        return GLOBAL_COUPON_EXPIRY
+
     if ct.valid_days and ct.valid_days > 0:
         base = issued_at or timezone.now()
         if timezone.is_naive(base):
@@ -2792,7 +2796,7 @@ def _issue_reward_coupon(
 
     camp = Campaign.objects.using(alias).get(code=REWARD_CAMPAIGN_CODE, active=True)
     issue_key = f"STAMP_REWARD:{user.id}:{issue_key_suffix}"
-    expires_at = _expires_at(ct)
+    expires_at = _resolve_coupon_expiry_for_issue(ct)
     benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, db_alias=alias)
     if benefit_snapshot:
         # 스탬프 비고(notes)는 발급 쿠폰에 포함하지 않음

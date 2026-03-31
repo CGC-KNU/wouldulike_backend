@@ -25,6 +25,7 @@ from guests.models import GuestUser
 from .jwt_utils import generate_tokens_for_user
 from .serializers import AppleLoginSerializer
 from .services.apple_auth import verify_identity_token
+from .services.account_deletion import delete_user_account
 from coupons.service import issue_signup_coupon, issue_app_open_coupon
 from .utils import merge_guest_data
 
@@ -60,7 +61,7 @@ def _is_kakao_token_expired_response(response):
         str(raw_code or "").lower(),
         str(raw_error or "").lower(),
         str(raw_msg or "").lower(),
-        (response.text or "")[:300].lower(),
+        str(getattr(response, "text", "") or "")[:300].lower(),
     ]
     joined = " ".join(text_parts)
     return any(keyword in joined for keyword in ("expired", "invalid token", "token", "만료", "-401"))
@@ -1118,3 +1119,31 @@ class UserMeView(APIView):
 
     def put(self, request):
         return self.patch(request)
+
+    def delete(self, request):
+        user = request.user
+        user_id = user.id
+
+        try:
+            deleted_counts = delete_user_account(user)
+        except Exception as exc:
+            logger.error(
+                "account deletion failed for user_id=%s: %s",
+                user_id,
+                exc,
+                exc_info=True,
+            )
+            return Response(
+                {"detail": "failed to delete account", "code": "account_deletion_failed"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        logger.info("account deleted successfully for user_id=%s", user_id)
+        return Response(
+            {
+                "ok": True,
+                "deleted_user_id": user_id,
+                "deleted_counts": deleted_counts,
+            },
+            status=status.HTTP_200_OK,
+        )

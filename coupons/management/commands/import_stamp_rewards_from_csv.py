@@ -238,17 +238,17 @@ STAMP_DATA = {
             "notes": "",
         },
     },
-    245: {  # 혜화문식당: 5
+    245: {  # 혜화문식당: 4
         "rule_type": "THRESHOLD",
         "config": {
             "thresholds": [
                 (
-                    5,
+                    4,
                     "돼지김치찌개(단품) 서비스",
                     "-쿠폰 중복 사용 불가\n-인원수 맞게 메인메뉴 주문시 사용가능",
                 ),
             ],
-            "cycle_target": 5,
+            "cycle_target": 4,
             "notes": "-쿠폰 중복 사용 불가\n-인원수 맞게 메인메뉴 주문시 사용가능",
         },
     },
@@ -263,7 +263,7 @@ VISIT_COUPON_TYPES = {
 
 # THRESHOLD 스탬프 개수 → 쿠폰 타입
 THRESHOLD_COUPON_TYPES = {
-    n: f"STAMP_REWARD_{n}" for n in [1, 2, 3, 5, 6, 7, 9, 10]
+    n: f"STAMP_REWARD_{n}" for n in [1, 2, 3, 4, 5, 6, 7, 9, 10]
 }
 
 # cloudsql에 없을 수 있는 CouponType (마이그레이션 0027)

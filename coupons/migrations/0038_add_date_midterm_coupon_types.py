@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from django.db import migrations
+from django.db.utils import OperationalError, ProgrammingError
 
 
 DATE_COUPON_TYPE_CODE = "DATE_EVENT_SPECIAL"
@@ -171,9 +172,14 @@ def add_date_midterm_coupon_types(apps, schema_editor):
         },
     )
 
-    restaurants = list(
-        AffiliateRestaurant.objects.all().values("restaurant_id", "name")
-    )
+    try:
+        restaurants = list(
+            AffiliateRestaurant.objects.all().values("restaurant_id", "name")
+        )
+    except (OperationalError, ProgrammingError):
+        # AffiliateRestaurant는 managed=False로, 로컬/테스트 DB에는 실제 테이블이 없을 수 있다.
+        # 이 경우 혜택 시딩은 안전하게 스킵한다.
+        return
 
     _upsert_benefits(
         coupon_type=date_type,

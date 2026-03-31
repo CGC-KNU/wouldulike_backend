@@ -1,4 +1,5 @@
 from django.db import migrations
+from django.db.utils import OperationalError, ProgrammingError
 
 
 def seed_stamp_reward_rules(apps, schema_editor):
@@ -7,10 +8,15 @@ def seed_stamp_reward_rules(apps, schema_editor):
     StampRewardRule = apps.get_model("coupons", "StampRewardRule")
 
     with schema_editor.connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT restaurant_id FROM restaurants_affiliate WHERE is_affiliate = TRUE"
-        )
-        restaurant_ids = [row[0] for row in cursor.fetchall()]
+        try:
+            cursor.execute(
+                "SELECT restaurant_id FROM restaurants_affiliate WHERE is_affiliate = TRUE"
+            )
+            restaurant_ids = [row[0] for row in cursor.fetchall()]
+        except (OperationalError, ProgrammingError):
+            # 로컬/테스트(DB 종류에 따라)에는 레거시 테이블이 없을 수 있다.
+            # 이 경우 시드 작업은 안전하게 스킵한다.
+            return
 
     default_config = {
         "thresholds": [

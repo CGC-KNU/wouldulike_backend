@@ -169,6 +169,52 @@ class UserMeTests(DisableCouponSignalMixin, APITestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.type_code, 'MILD')
 
+    def test_delete_removes_user_and_unlinks_related_data(self):
+        self.authenticate()
+        SocialAccount.objects.create(
+            provider='apple',
+            provider_user_id='apple-test-sub',
+            user=self.user,
+            email='delete-test@example.com',
+        )
+        guest = GuestUser.objects.create(type_code='WARM', linked_user=self.user)
+
+        response = self.client.delete('/api/users/me/')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.data['ok'])
+        self.assertEqual(response.data['deleted_user_id'], self.user.id)
+        self.assertFalse(User.objects.filter(id=self.user.id).exists())
+        self.assertFalse(SocialAccount.objects.filter(provider_user_id='apple-test-sub').exists())
+
+        guest.refresh_from_db()
+        self.assertIsNone(guest.linked_user)
+
+    @patch('accounts.views.requests.get')
+    def test_delete_then_relogin_with_same_kakao_id_creates_fresh_account(self, mock_get):
+        """
+        계정 삭제 후 같은 kakao_id로 재로그인해도
+        - 새 계정이 정상 생성되고
+        - 기존 계정과 충돌하지 않음을 보장
+        """
+        # 기존 유저를 kakao_id=12345로 맞춰둔다 (KAKAO_RESPONSE와 동일)
+        self.user.kakao_id = 12345
+        self.user.username = "12345"
+        self.user.save(update_fields=["kakao_id", "username", "updated_at"])
+
+        self.authenticate()
+        delete_resp = self.client.delete('/api/users/me/')
+        self.assertEqual(delete_resp.status_code, 200)
+        self.assertFalse(User.objects.filter(kakao_id=12345).exists())
+
+        # 같은 kakao_id로 다시 로그인
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.json.return_value = KAKAO_RESPONSE
+        login_resp = self.client.post('/api/auth/kakao', {'access_token': 'valid'})
+        self.assertEqual(login_resp.status_code, 200)
+        self.assertTrue(login_resp.data['is_new'])
+        self.assertTrue(User.objects.filter(kakao_id=12345).exists())
+
     def test_patch_rejects_nickname_with_spaces(self):
         self.authenticate()
         response = self.client.patch('/api/users/me/', {'nickname': 'jae min'}, format='json')
@@ -345,3 +391,51 @@ class AppleLoginTests(DisableCouponSignalMixin, APITestCase):
         user = User.objects.get(apple_id='001234.xyz')
         self.assertEqual(user.nickname, 'John Doe')
         self.assertEqual(user.email, 'john@example.com')
+
+
+class AccountDeletionAppleFlowTests(DisableCouponSignalMixin, APITestCase):
+    """Apple 계정 삭제 후 재로그인 꼬임 방지 테스트"""
+
+    VALID_CLAIMS = {
+        'sub': '001234.abc123def456.7890',
+        'email': 'user@privaterelay.appleid.com',
+        'email_verified': 'true',
+    }
+
+    @patch('accounts.views.verify_identity_token')
+    def test_delete_then_relogin_with_same_apple_sub_creates_fresh_account(self, mock_verify):
+        mock_verify.return_value = self.VALID_CLAIMS
+
+        # 1) Apple 로그인으로 계정 생성
+        login1 = self.client.post(
+            '/api/auth/apple/login/',
+            {'identity_token': 'valid.jwt.here'},
+            format='json',
+        )
+        self.assertEqual(login1.status_code, 200)
+        self.assertTrue(login1.data['is_new'])
+        created_user_id = login1.data['user']['id']
+        self.assertTrue(User.objects.filter(id=created_user_id, apple_id=self.VALID_CLAIMS['sub']).exists())
+        self.assertTrue(SocialAccount.objects.filter(provider='apple', provider_user_id=self.VALID_CLAIMS['sub']).exists())
+
+        # 2) 해당 유저로 인증 후 삭제
+        user = User.objects.get(id=created_user_id)
+        self.client.force_authenticate(user=user)
+        delete_resp = self.client.delete('/api/users/me/')
+        self.assertEqual(delete_resp.status_code, 200)
+        self.assertFalse(User.objects.filter(apple_id=self.VALID_CLAIMS['sub']).exists())
+        self.assertFalse(SocialAccount.objects.filter(provider='apple', provider_user_id=self.VALID_CLAIMS['sub']).exists())
+
+        # 3) 같은 sub로 재로그인하면 새 계정이 다시 생성되어야 함
+        self.client.force_authenticate(user=None)
+        login2 = self.client.post(
+            '/api/auth/apple/login/',
+            {'identity_token': 'valid.jwt.here'},
+            format='json',
+        )
+        self.assertEqual(login2.status_code, 200)
+        self.assertTrue(login2.data['is_new'])
+        new_user_id = login2.data['user']['id']
+        self.assertNotEqual(new_user_id, created_user_id)
+        self.assertTrue(User.objects.filter(id=new_user_id, apple_id=self.VALID_CLAIMS['sub']).exists())
+        self.assertTrue(SocialAccount.objects.filter(provider='apple', provider_user_id=self.VALID_CLAIMS['sub']).exists())
