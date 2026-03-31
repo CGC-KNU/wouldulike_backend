@@ -217,3 +217,47 @@ class BoothVisitCouponTests(TestCase):
         with self.assertRaises(ValidationError) as ctx:
             accept_referral(referee=referee, ref_code="80THANNIVERSARY")
         self.assertEqual(ctx.exception.code, "booth_visit_already_issued")
+
+
+class RouletteCouponTests(TestCase):
+    """룰렛 추천코드: 제휴 매장 쿠폰 랜덤 N개 발급."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def test_roulette_minyeol_issues_one_coupon_and_sets_subtitle(self):
+        referee = self.user_model.objects.create_user(kakao_id=81001, password="pass")
+        referral, issued = accept_referral(referee=referee, ref_code="MINYEOL")
+        self.assertEqual(referral.campaign_code, "ROULETTE_MINYEOL_EVENT")
+        self.assertEqual(len(issued), 1)
+        self.assertEqual((issued[0].benefit_snapshot or {}).get("subtitle"), "[🎰 룰렛 이벤트 쿠폰 🎰]")
+
+    def test_roulette_eunjin_issues_five_coupons(self):
+        referee = self.user_model.objects.create_user(kakao_id=81002, password="pass")
+        referral, issued = accept_referral(referee=referee, ref_code="EUNJIN")
+        self.assertEqual(referral.campaign_code, "ROULETTE_EUNJIN_EVENT")
+        self.assertEqual(len(issued), 5)
+
+    def test_roulette_jaemin_issues_ten_coupons(self):
+        referee = self.user_model.objects.create_user(kakao_id=81003, password="pass")
+        referral, issued = accept_referral(referee=referee, ref_code="JAEMIN")
+        self.assertEqual(referral.campaign_code, "ROULETTE_JAEMIN_EVENT")
+        self.assertEqual(len(issued), 10)
+
+    def test_roulette_chaerin_issues_thirty_coupons(self):
+        referee = self.user_model.objects.create_user(kakao_id=81004, password="pass")
+        referral, issued = accept_referral(referee=referee, ref_code="CHAERIN")
+        self.assertEqual(referral.campaign_code, "ROULETTE_CHAERIN_EVENT")
+        self.assertEqual(len(issued), 30)
+
+    def test_roulette_duplicate_rejected(self):
+        referee = self.user_model.objects.create_user(kakao_id=81005, password="pass")
+        accept_referral(referee=referee, ref_code="MINYEOL")
+        with self.assertRaises(ValidationError) as ctx:
+            accept_referral(referee=referee, ref_code="MINYEOL")
+        self.assertEqual(ctx.exception.code, "roulette_already_issued")

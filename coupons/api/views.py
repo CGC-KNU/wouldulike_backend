@@ -236,6 +236,7 @@ class AcceptReferralView(APIView):
                     "datelike_already_issued",
                     "full_affiliate_already_issued",
                     "booth_visit_already_issued",
+                    "roulette_already_issued",
                 )
                 else status.HTTP_400_BAD_REQUEST
             )
@@ -251,6 +252,10 @@ class AcceptReferralView(APIView):
             "KNULIKE_EVENT",
             "FULL_AFFILIATE_EVENT",
             "BOOTH_VISIT_EVENT",
+            "ROULETTE_MINYEOL_EVENT",
+            "ROULETTE_EUNJIN_EVENT",
+            "ROULETTE_JAEMIN_EVENT",
+            "ROULETTE_CHAERIN_EVENT",
         ):
             _, qual_issued = qualify_referral_and_grant(request.user)
 

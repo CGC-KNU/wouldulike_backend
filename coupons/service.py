@@ -190,6 +190,15 @@ FULL_AFFILIATE_COUPON_CODE = "DONGARILIKE"
 BOOTH_VISIT_REF_CODE = "80THANNIVERSARY"
 BOOTH_VISIT_SUBTITLE = "[🎁 부스 방문 쿠폰 🎁]"
 
+# 룰렛 이벤트 추천코드 (제휴 매장 쿠폰 랜덤 N개 발급)
+ROULETTE_SUBTITLE = "[🎰 룰렛 이벤트 쿠폰 🎰]"
+ROULETTE_CODES: dict[str, int] = {
+    "MINYEOL": 1,
+    "EUNJIN": 5,
+    "JAEMIN": 10,
+    "CHAERIN": 30,
+}
+
 
 def _is_pub_restaurant(restaurant_id: int, *, db_alias: str | None = None) -> bool:
     """
@@ -1529,6 +1538,84 @@ def issue_booth_visit_coupon(user: User, *, ref_code_used: str = BOOTH_VISIT_REF
     return {"coupons": [coupon], "total_issued": 1, "already_issued": False}
 
 
+@transaction.atomic
+def issue_roulette_coupons(
+    user: User,
+    *,
+    campaign_code: str,
+    ref_code_used: str,
+    count: int,
+    subtitle: str = ROULETTE_SUBTITLE,
+):
+    """
+    룰렛 이벤트 추천코드 입력 시 제휴 매장 쿠폰을 랜덤으로 N개 발급합니다.
+    - FULL_AFFILIATE_SPECIAL의 식당별 benefit 풀을 재사용합니다.
+    - 사용자당 해당 campaign_code 기준 1회만 발급됩니다.
+    - subtitle은 항상 고정값으로 덮어씁니다.
+    """
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="FULL_AFFILIATE_SPECIAL")
+    camp = Campaign.objects.using(alias).get(code=campaign_code, active=True)
+
+    existing = Coupon.objects.using(alias).filter(user=user, coupon_type=ct, campaign=camp)
+    if existing.exists():
+        return {"coupons": list(existing), "total_issued": existing.count(), "already_issued": True}
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .select_related("restaurant")
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("no benefits available for roulette coupon assignment")
+
+    sample_size = min(int(count), len(benefits))
+    selected_benefits = random.sample(benefits, sample_size)
+
+    issued_coupons: list[Coupon] = []
+    base_issue_key = f"EVENT_REWARD:{user.id}:{ref_code_used}"
+    for benefit in selected_benefits:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{base_issue_key}:{restaurant_id}:{sort_order}"
+
+        guard = Coupon.objects.using(alias).filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key=issue_key,
+        ).first()
+        if guard:
+            issued_coupons.append(guard)
+            continue
+
+        benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, benefit=benefit, db_alias=alias)
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": subtitle,
+                "subtitle": subtitle,
+            }
+
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=_expires_at(ct),
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        issued_coupons.append(coupon)
+
+    return {"coupons": issued_coupons, "total_issued": len(issued_coupons), "already_issued": False}
+
+
 NEW_SEMESTER_COUPON_COUNT = 3
 
 
@@ -2250,6 +2337,78 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
             raise ValidationError(
                 "이미 부스 방문 쿠폰을 발급받았습니다.",
                 code="booth_visit_already_issued",
+            )
+
+    # 룰렛 이벤트 추천코드 처리 (MINYEOL/EUNJIN/JAEMIN/CHAERIN)
+    if ref_code in ROULETTE_CODES:
+        issue_count = ROULETTE_CODES[ref_code]
+        campaign_code = f"ROULETTE_{ref_code}_EVENT"
+
+        alias = router.db_for_write(Coupon)
+        ct = CouponType.objects.using(alias).get(code="FULL_AFFILIATE_SPECIAL")
+        camp = Campaign.objects.using(alias).get(code=campaign_code, active=True)
+
+        existing_coupons = Coupon.objects.using(alias).filter(
+            user=referee,
+            coupon_type=ct,
+            campaign=camp,
+        )
+        if existing_coupons.exists():
+            raise ValidationError(
+                "이미 룰렛 쿠폰을 발급받았습니다.",
+                code="roulette_already_issued",
+            )
+
+        result = issue_roulette_coupons(
+            referee,
+            campaign_code=campaign_code,
+            ref_code_used=ref_code,
+            count=issue_count,
+            subtitle=ROULETTE_SUBTITLE,
+        )
+        if result["already_issued"]:
+            raise ValidationError(
+                "이미 룰렛 쿠폰을 발급받았습니다.",
+                code="roulette_already_issued",
+            )
+
+        try:
+            with transaction.atomic(using=db_alias):
+                base_qs = Referral.objects.using(db_alias)
+                locked_qs = base_qs.select_for_update()
+
+                existing_refs = locked_qs.filter(
+                    referee=referee,
+                    campaign_code=campaign_code,
+                )
+                if existing_refs.exists():
+                    existing_ref = existing_refs.first()
+                    existing_coupons = Coupon.objects.using(alias).filter(
+                        user=referee,
+                        coupon_type=ct,
+                        campaign=camp,
+                    )
+                    if not existing_coupons.exists():
+                        existing_ref.delete()
+                    else:
+                        raise ValidationError(
+                            "이미 룰렛 쿠폰을 발급받았습니다.",
+                            code="roulette_already_issued",
+                        )
+
+                referral = base_qs.create(
+                    referrer=referee,
+                    referee=referee,
+                    code_used=ref_code,
+                    campaign_code=campaign_code,
+                    status="QUALIFIED",
+                    qualified_at=timezone.now(),
+                )
+                return referral, result["coupons"]
+        except IntegrityError:
+            raise ValidationError(
+                "이미 룰렛 쿠폰을 발급받았습니다.",
+                code="roulette_already_issued",
             )
 
     # 기말고사 이벤트 쿠폰 코드 처리
