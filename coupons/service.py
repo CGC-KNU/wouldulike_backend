@@ -749,24 +749,34 @@ def _issue_coupons_for_single_restaurant(
     issue_type_label: str | None = None,
 ) -> list:
     """
-    한 식당만 선정하여 해당 식당의 쿠폰 1장만 발급.
-    신규가입, 친구초대(추천인/피추천인)용. (식당당 benefit이 여러 개여도 첫 번째만 발급)
+    한 식당만 선정하여 해당 식당에 대해 쿠폰을 발급한다.
+    - 신규가입(WELCOME_3000), 친구초대 추천인(REFERRAL_BONUS_REFERRER): 식당당 benefit 첫 행 1장.
+    - 친구초대 피추천인(REFERRAL_BONUS_REFEREE): 해당 식당에 활성 benefit이 여러 줄이면
+      그중 무작위 1줄만 골라 1장 발급(한 번의 보상에 4종이 동시에 나가지 않음).
     """
     alias = db_alias or router.db_for_write(Coupon)
     restaurant_id = _select_restaurant_for_coupon(coupon_type, db_alias=alias)
 
     issued: list = []
     benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
-    benefits = list(
+    benefit_qs = (
         RestaurantCouponBenefit.objects.using(benefit_alias)
         .filter(coupon_type=coupon_type, restaurant_id=restaurant_id, active=True)
-        .order_by("sort_order")[:1]
+        .order_by("sort_order", "id")
     )
+    if coupon_type.code == "REFERRAL_BONUS_REFEREE":
+        pool = list(benefit_qs)
+        if not pool:
+            return issued
+        benefits = [random.choice(pool)]
+    else:
+        benefits = list(benefit_qs[:1])
     if not benefits:
         return issued
 
-    for sort_order, benefit in enumerate(benefits):
-        issue_key = f"{issue_key_prefix}:{restaurant_id}:{sort_order}"
+    for benefit in benefits:
+        sort_key = getattr(benefit, "sort_order", 0)
+        issue_key = f"{issue_key_prefix}:{restaurant_id}:{sort_key}"
         existing = (
             Coupon.objects.using(alias)
             .filter(

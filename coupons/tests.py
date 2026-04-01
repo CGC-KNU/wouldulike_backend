@@ -13,6 +13,7 @@ from coupons.service import (
     accept_referral,
     issue_signup_coupon,
     _build_benefit_snapshot,
+    _issue_coupons_for_single_restaurant,
     qualify_referral_and_grant,
     MAX_COUPONS_PER_RESTAURANT,
     ensure_invite_code,
@@ -141,10 +142,11 @@ class ReferralLimitTests(TestCase):
         self.invite_code = self.referrer.invite_codes.filter(campaign_code__isnull=True).first()
 
     def test_referral_acceptance_capped_at_five(self):
-        for idx in range(5):
-            referee = self.user_model.objects.create_user(kakao_id=2000 + idx, password="pass")
-            referral, _ = accept_referral(referee=referee, ref_code=self.invite_code.code)
-            self.assertEqual(referral.referrer, self.referrer)
+        with patch("coupons.service._qualify_pending_referrals_locked", return_value=(None, [])):
+            for idx in range(5):
+                referee = self.user_model.objects.create_user(kakao_id=2000 + idx, password="pass")
+                referral, _ = accept_referral(referee=referee, ref_code=self.invite_code.code)
+                self.assertEqual(referral.referrer, self.referrer)
 
         self.assertEqual(Referral.objects.filter(referrer=self.referrer).count(), 5)
 
@@ -177,7 +179,9 @@ class ReferralRestaurantAllocationTests(TestCase):
         ensure_invite_code(referrer)
         referee = self._create_user(2)
         code = referrer.invite_codes.filter(campaign_code__isnull=True).values_list("code", flat=True).first()
-        accept_referral(referee=referee, ref_code=code)
+        # accept_referral 안의 qualify 만 건너뛰어 PENDING 유지 (SQLite 등 Affiliate 테이블 없을 때)
+        with patch("coupons.service._qualify_pending_referrals_locked", return_value=(None, [])):
+            accept_referral(referee=referee, ref_code=code)
 
         ref_coupons = [MagicMock(restaurant_id=401, code="REF01")]
         referee_coupons = [MagicMock(restaurant_id=402, code="REE01")]
@@ -200,6 +204,121 @@ class ReferralRestaurantAllocationTests(TestCase):
         referee_issued = [c for c in issued_coupons if c.code.startswith("REE")]
         self.assertEqual(len(ref_issued), 1)
         self.assertEqual(len(referee_issued), 1)
+
+
+class RefereeBenefitRandomOneTests(TestCase):
+    """피추천인(REFERRAL_BONUS_REFEREE): 한 식당에 benefit이 여러 줄이어도 1장만, 그중 무작위 1종."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+        cls.campaign = Campaign.objects.get(code="REFERRAL")
+        cls.referee_type = CouponType.objects.get(code="REFERRAL_BONUS_REFEREE")
+
+    def setUp(self):
+        self.user = self.user_model.objects.create_user(kakao_id=88001, password="pass")
+        self.rid = 8801100
+
+    def test_referee_issues_single_coupon_picks_one_of_four(self):
+        titles = ["혜택A", "혜택B", "혜택C", "혜택D"]
+        for i, title in enumerate(titles):
+            RestaurantCouponBenefit.objects.create(
+                coupon_type=self.referee_type,
+                restaurant_id=self.rid,
+                sort_order=i,
+                title=title,
+                subtitle="",
+                benefit_json={},
+                active=True,
+            )
+        with patch("coupons.service._select_restaurant_for_coupon", return_value=self.rid):
+            with patch("coupons.service.random.choice", side_effect=lambda seq: seq[2]):
+                issued = _issue_coupons_for_single_restaurant(
+                    user=self.user,
+                    coupon_type=self.referee_type,
+                    campaign=self.campaign,
+                    issue_key_prefix=f"REFERRAL_REFEREE:{self.user.id}",
+                )
+        self.assertEqual(len(issued), 1)
+        self.assertEqual((issued[0].benefit_snapshot or {}).get("title"), "혜택C")
+
+    def test_referee_one_benefit_row_still_uses_that_one(self):
+        RestaurantCouponBenefit.objects.create(
+            coupon_type=self.referee_type,
+            restaurant_id=self.rid,
+            sort_order=0,
+            title="단일혜택",
+            subtitle="",
+            benefit_json={},
+            active=True,
+        )
+        with patch("coupons.service._select_restaurant_for_coupon", return_value=self.rid):
+            issued = _issue_coupons_for_single_restaurant(
+                user=self.user,
+                coupon_type=self.referee_type,
+                campaign=self.campaign,
+                issue_key_prefix=f"REFERRAL_REFEREE:{self.user.id}",
+            )
+        self.assertEqual(len(issued), 1)
+        self.assertEqual((issued[0].benefit_snapshot or {}).get("title"), "단일혜택")
+
+    def test_hyehwamun_four_rows_one_coupon_nonempty_not_first_only(self):
+        """
+        혜화문(245)과 같이 피추천 benefit이 4행일 때:
+        - 발급은 항상 1장(4장 중복 발급 없음)
+        - benefit_snapshot.title 이 비어 있지 않음
+        - random.choice 풀은 4행 전체(첫 행만 잘리지 않음)
+        - sort_order 0~3 어떤 행이든 선택될 수 있음(고정 첫 행만 아님)
+        """
+        titles = ["든든한혼밥1", "든든한혼밥2", "얼리어답터", "스탬프교환"]
+        for i, title in enumerate(titles):
+            RestaurantCouponBenefit.objects.create(
+                coupon_type=self.referee_type,
+                restaurant_id=self.rid,
+                sort_order=i,
+                title=title,
+                subtitle="[피추천]",
+                benefit_json={"note": "x"},
+                active=True,
+            )
+        with patch("coupons.service._select_restaurant_for_coupon", return_value=self.rid):
+            for pick_idx in (0, 1, 2, 3):
+                u = self.user_model.objects.create_user(kakao_id=88100 + pick_idx, password="pass")
+                with patch(
+                    "coupons.service.random.choice",
+                    side_effect=lambda seq, idx=pick_idx: seq[idx],
+                ):
+                    issued = _issue_coupons_for_single_restaurant(
+                        user=u,
+                        coupon_type=self.referee_type,
+                        campaign=self.campaign,
+                        issue_key_prefix=f"REFERRAL_REFEREE:{u.id}",
+                    )
+                self.assertEqual(len(issued), 1, f"pick_idx={pick_idx} 일 때도 1장만")
+                snap = issued[0].benefit_snapshot or {}
+                self.assertTrue(
+                    (snap.get("title") or "").strip(),
+                    "빈 쿠폰(benefit_snapshot.title 없음)이면 안 됨",
+                )
+                self.assertEqual(snap.get("title"), titles[pick_idx])
+                self.assertEqual(snap.get("subtitle"), "[피추천]")
+
+        mock_choice = MagicMock(side_effect=lambda seq: seq[0])
+        u2 = self.user_model.objects.create_user(kakao_id=88199, password="pass")
+        with patch("coupons.service._select_restaurant_for_coupon", return_value=self.rid):
+            with patch("coupons.service.random.choice", mock_choice):
+                _issue_coupons_for_single_restaurant(
+                    user=u2,
+                    coupon_type=self.referee_type,
+                    campaign=self.campaign,
+                    issue_key_prefix=f"REFERRAL_REFEREE:{u2.id}",
+                )
+        mock_choice.assert_called_once()
+        pool = mock_choice.call_args[0][0]
+        self.assertEqual(len(pool), 4, "choice는 4개 benefit 전체 풀에 대해 호출되어야 함")
 
 
 class FullAffiliateAndKnulikeCouponTests(TestCase):
