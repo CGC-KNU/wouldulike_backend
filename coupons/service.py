@@ -2860,7 +2860,11 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                 code_used=ref_code,
                 campaign_code=campaign_code,
             )
-            return referral, []
+            # 같은 트랜잭션·락 안에서 PENDING → QUALIFIED 및 쿠폰 발급 (accept API에서 qualify 2차 호출 제거)
+            _, issued_inline = _qualify_pending_referrals_locked(
+                referee, locked_qs, db_alias
+            )
+            return referral, issued_inline
 
     except IntegrityError:
 
@@ -2873,22 +2877,23 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
         )
 
 
-def qualify_referral_and_grant(referee: User) -> tuple[Referral | None, list]:
-    db_alias = router.db_for_write(Referral)
+def _qualify_pending_referrals_locked(
+    referee: User,
+    locked_qs,
+    db_alias: str,
+) -> tuple[Referral | None, list]:
+    """
+    이미 select_for_update 된 Referral 쿼리셋 컨텍스트에서 PENDING 건을 QUALIFIED로 전환하고 쿠폰을 발급한다.
+    accept_referral 내부와 qualify_referral_and_grant 양쪽에서 공통 사용.
+    """
     issued_coupons: list = []
+    pending_refs = locked_qs.filter(referee=referee, status="PENDING")
 
-    with transaction.atomic(using=db_alias):
-        locked_qs = Referral.objects.using(db_alias).select_for_update()
+    if not pending_refs.exists():
+        return None, []
 
-        # PENDING 상태인 모든 Referral 처리 (이벤트와 일반 모두)
-        pending_refs = locked_qs.filter(referee=referee, status="PENDING")
-
-        if not pending_refs.exists():
-            existing_refs = Referral.objects.using(db_alias).filter(referee=referee)
-            return (existing_refs.first() if existing_refs.exists() else None, [])
-
-        results = []
-        for ref in pending_refs:
+    results = []
+    for ref in pending_refs:
             # 기말고사 이벤트 쿠폰 처리
             if ref.campaign_code == "FINAL_EXAM_EVENT":
                 # 이미 쿠폰이 발급되었는지 확인 (accept_referral에서 발급했을 수 있음)
@@ -3046,8 +3051,22 @@ def qualify_referral_and_grant(referee: User) -> tuple[Referral | None, list]:
             issued_coupons.extend(referee_coupons)
             results.append(ref)
 
-        return (results[0] if results else None, issued_coupons)
+    return (results[0] if results else None, issued_coupons)
 
+
+def qualify_referral_and_grant(referee: User) -> tuple[Referral | None, list]:
+    db_alias = router.db_for_write(Referral)
+
+    with transaction.atomic(using=db_alias):
+        locked_qs = Referral.objects.using(db_alias).select_for_update()
+
+        first, issued = _qualify_pending_referrals_locked(referee, locked_qs, db_alias)
+
+        if first is None and not issued:
+            existing_refs = Referral.objects.using(db_alias).filter(referee=referee)
+            return (existing_refs.first() if existing_refs.exists() else None, [])
+
+        return (first, issued)
 
 
 def claim_flash_drop(user: User, campaign_code: str, idem_key: str) -> Coupon:

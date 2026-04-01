@@ -251,7 +251,9 @@ class AcceptReferralView(APIView):
                 if issued_coupons:
                     payload["issued_coupons"] = issued_coupons
                 return Response(payload, status=status.HTTP_200_OK)
-            _, qual_issued = qualify_referral_and_grant(request.user)
+            # accept_referral이 같은 DB 트랜잭션에서 이미 발급한 경우 2차 qualify 생략
+            if not ref_issued:
+                _, qual_issued = qualify_referral_and_grant(request.user)
 
         issued_coupons = format_issued_coupons(ref_issued + qual_issued)
         payload = {"ok": True, "referral_id": referral.id}
