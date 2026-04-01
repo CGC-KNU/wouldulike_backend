@@ -319,7 +319,7 @@ python manage.py seed_dev_coupons
 
 ```procfile
 release: python manage.py migrate && python manage.py setup_admin_portal
-web: gunicorn wouldulike_backend.wsgi:application --bind 0.0.0.0:$PORT --workers=2
+web: gunicorn wouldulike_backend.wsgi:application --bind 0.0.0.0:$PORT --workers=10
 ```
 
 ### Google Cloud Build

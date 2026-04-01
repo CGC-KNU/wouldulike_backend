@@ -2,6 +2,7 @@ import uuid
 import random
 import logging
 import os
+from collections import defaultdict
 from datetime import date, datetime, timedelta, time
 from django.db import transaction, IntegrityError, router, DatabaseError
 from django.db.models import Count, Sum
@@ -414,7 +415,6 @@ def _build_benefit_snapshot(
         benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
         benefit = (
             RestaurantCouponBenefit.objects.using(benefit_alias)
-            .select_related("restaurant")
             .filter(
                 coupon_type=coupon_type,
                 restaurant_id=restaurant_id,
@@ -1012,37 +1012,41 @@ def _issue_app_open_legacy(user: User, *, db_alias: str | None = None) -> list:
     issued: list[Coupon] = []
     benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
 
-    for restaurant_id in target_restaurant_ids:
-        benefit_qs = (
-            RestaurantCouponBenefit.objects.using(benefit_alias)
-            .filter(
-                coupon_type=ct,
-                restaurant_id=restaurant_id,
-                active=True,
-            )
-            .order_by("sort_order")
+    # 배치: 식당별 benefit + 당일 발급분 쿠폰을 한 번에 조회 (쿠폰함 진입 시 N*2 쿼리 폭증 방지)
+    benefits_qs = (
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(
+            coupon_type=ct,
+            restaurant_id__in=target_restaurant_ids,
+            active=True,
         )
-        # 이번 이벤트처럼 식당당 여러 benefit이 있어도 1장만 발급해야 하는 경우 지원
+        .order_by("restaurant_id", "sort_order")
+    )
+    benefits_by_rid: dict[int, list] = defaultdict(list)
+    for b in benefits_qs:
+        benefits_by_rid[b.restaurant_id].append(b)
+
+    existing_by_key = {
+        c.issue_key: c
+        for c in Coupon.objects.using(alias).filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key__startswith=base_issue_key + ":",
+        )
+    }
+
+    for restaurant_id in target_restaurant_ids:
+        benefits = benefits_by_rid.get(restaurant_id, [])
         if ct.code in APP_OPEN_SINGLE_BENEFIT_PER_RESTAURANT_CODES:
-            benefit_qs = benefit_qs[:1]
-        benefits = list(benefit_qs)
+            benefits = benefits[:1]
         if not benefits:
             continue
 
         for sort_order, benefit in enumerate(benefits):
             issue_key = f"{base_issue_key}:{restaurant_id}:{sort_order}"
 
-            existing = (
-                Coupon.objects.using(alias)
-                .filter(
-                    user=user,
-                    coupon_type=ct,
-                    campaign=camp,
-                    issue_key=issue_key,
-                    restaurant_id=restaurant_id,
-                )
-                .first()
-            )
+            existing = existing_by_key.get(issue_key)
             if existing:
                 issued.append(existing)
                 continue
@@ -1065,6 +1069,7 @@ def _issue_app_open_legacy(user: User, *, db_alias: str | None = None) -> list:
                     benefit_snapshot=benefit_snapshot,
                 )
                 issued.append(coupon)
+                existing_by_key[issue_key] = coupon
             except IntegrityError:
                 dup = (
                     Coupon.objects.using(alias)
@@ -1079,6 +1084,7 @@ def _issue_app_open_legacy(user: User, *, db_alias: str | None = None) -> list:
                 )
                 if dup:
                     issued.append(dup)
+                    existing_by_key[issue_key] = dup
 
     return issued
 
@@ -1131,30 +1137,40 @@ def _issue_date_event_app_open(user: User, *, db_alias: str | None = None) -> li
 
     issued: list[Coupon] = []
     benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
-    for restaurant_id in target_restaurant_ids:
-        benefits = list(
-            RestaurantCouponBenefit.objects.using(benefit_alias)
-            .filter(coupon_type=ct, restaurant_id=restaurant_id, active=True)
-            .order_by("sort_order")
+
+    key_prefix = f"DATE_EVENT_APP_OPEN:{user.id}:"
+    benefits_qs = (
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(
+            coupon_type=ct,
+            restaurant_id__in=target_restaurant_ids,
+            active=True,
         )
+        .order_by("restaurant_id", "sort_order")
+    )
+    benefits_by_rid: dict[int, list] = defaultdict(list)
+    for b in benefits_qs:
+        benefits_by_rid[b.restaurant_id].append(b)
+
+    existing_keys = set(
+        Coupon.objects.using(alias)
+        .filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key__startswith=key_prefix,
+        )
+        .values_list("issue_key", flat=True)
+    )
+
+    for restaurant_id in target_restaurant_ids:
+        benefits = benefits_by_rid.get(restaurant_id, [])
         if not benefits:
             continue
 
         for sort_order, benefit in enumerate(benefits):
             issue_key = f"DATE_EVENT_APP_OPEN:{user.id}:{restaurant_id}:{sort_order}"
-            existing = (
-                Coupon.objects.using(alias)
-                .filter(
-                    user=user,
-                    coupon_type=ct,
-                    campaign=camp,
-                    issue_key=issue_key,
-                    restaurant_id=restaurant_id,
-                )
-                .first()
-            )
-            if existing:
-                # 기간 중 재접속 시 중복 발급하지 않음
+            if issue_key in existing_keys:
                 continue
 
             benefit_snapshot = _build_benefit_snapshot(
@@ -1175,6 +1191,7 @@ def _issue_date_event_app_open(user: User, *, db_alias: str | None = None) -> li
                     benefit_snapshot=benefit_snapshot,
                 )
                 issued.append(coupon)
+                existing_keys.add(issue_key)
             except IntegrityError:
                 dup = (
                     Coupon.objects.using(alias)
@@ -1189,6 +1206,7 @@ def _issue_date_event_app_open(user: User, *, db_alias: str | None = None) -> li
                 )
                 if dup:
                     issued.append(dup)
+                    existing_keys.add(issue_key)
 
     return issued
 
@@ -1665,7 +1683,6 @@ def issue_roulette_coupons(
         RestaurantCouponBenefit.objects.using(benefit_alias)
         .filter(coupon_type=ct, active=True)
         .exclude(restaurant_id__in=excluded_ids)
-        .select_related("restaurant")
         .order_by("restaurant_id", "sort_order")
     )
     if not benefits:
@@ -1737,7 +1754,6 @@ def issue_medium_rare_coupons(
         RestaurantCouponBenefit.objects.using(benefit_alias)
         .filter(coupon_type=ct, active=True)
         .exclude(restaurant_id__in=excluded_ids)
-        .select_related("restaurant")
         .order_by("restaurant_id", "sort_order")
     )
     if not benefits:
@@ -1819,7 +1835,6 @@ def issue_new_semester_coupons(user: User):
         RestaurantCouponBenefit.objects.using(benefit_alias)
         .filter(coupon_type=ct, active=True)
         .exclude(restaurant_id__in=excluded_ids)
-        .select_related("restaurant")
         .order_by("restaurant_id", "sort_order")
     )
     if not benefits:
@@ -1908,7 +1923,6 @@ def issue_knulike_coupons(user: User):
         RestaurantCouponBenefit.objects.using(benefit_alias)
         .filter(coupon_type=ct, active=True)
         .exclude(restaurant_id__in=excluded_ids)
-        .select_related("restaurant")
         .order_by("restaurant_id", "sort_order")
     )
     if not benefits:
@@ -1995,7 +2009,6 @@ def issue_datelike_coupons(user: User):
         RestaurantCouponBenefit.objects.using(benefit_alias)
         .filter(coupon_type=ct, active=True)
         .exclude(restaurant_id__in=excluded_ids)
-        .select_related("restaurant")
         .order_by("restaurant_id", "sort_order")
     )
     if not benefits:
