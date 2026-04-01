@@ -239,6 +239,7 @@ OPERATIONS_ADMIN_RESET_PASSWORDS=0
 - `POST /api/coupons/stamps/add/` - 스탬프 적립 (`count`: 1~4, 기본값 1)
 - `GET /api/coupons/stamps/my/` - 내 스탬프 현황 조회
 - `GET /api/coupons/stamps/my/all/` - 모든 레스토랑 스탬프 현황 조회
+  - 쿼리(선택): `in_progress_only=1` — 스탬프가 1개 이상 쌓인 식당만 집계(전체 제휴 목록 스캔 생략, 응답·지연 감소)
 
 ### 게스트 (`/guests/`)
 - `POST /guests/update/fcm_token/` - 게스트 FCM 토큰 업데이트

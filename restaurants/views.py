@@ -3,6 +3,7 @@ from django.contrib.auth import get_user_model
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.db import connections
+from django.core.cache import cache
 from rest_framework_simplejwt.tokens import AccessToken
 from rest_framework_simplejwt.exceptions import TokenError
 import json
@@ -13,6 +14,10 @@ from coupons.service import get_active_affiliate_restaurant_ids_for_user
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# 진행 식당 수가 적을 때 전체 제휴 목록을 돌려주는 분기에서 동일 쿼리 반복을 줄이기 위한 캐시
+_AFFILIATE_ALL_ROWS_CACHE_KEY = "restaurants:active_affiliate_all_rows_v1"
+_AFFILIATE_ALL_ROWS_CACHE_TTL = 120
 
 
 def _normalize_restaurant_name(name):
@@ -488,28 +493,37 @@ def get_active_affiliate_restaurants(request):
 
     try:
         restaurant_ids = get_active_affiliate_restaurant_ids_for_user(user)
-        with connections['cloudsql'].cursor() as cursor:
-            if len(restaurant_ids) <= 2:
-                source = "all"
-                cursor.execute(
-                    """
-                    SELECT
-                        restaurant_id,
-                        name,
-                        description,
-                        address,
-                        category,
-                        zone,
-                        phone_number,
-                        url,
-                        s3_image_urls
-                    FROM restaurants_affiliate
-                    WHERE is_affiliate = TRUE
-                    """
+        if len(restaurant_ids) <= 2:
+            source = "all"
+            rows = cache.get(_AFFILIATE_ALL_ROWS_CACHE_KEY)
+            if rows is None:
+                with connections["cloudsql"].cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT
+                            restaurant_id,
+                            name,
+                            description,
+                            address,
+                            category,
+                            zone,
+                            phone_number,
+                            url,
+                            s3_image_urls
+                        FROM restaurants_affiliate
+                        WHERE is_affiliate = TRUE
+                        """
+                    )
+                    rows = cursor.fetchall()
+                cache.set(
+                    _AFFILIATE_ALL_ROWS_CACHE_KEY,
+                    rows,
+                    _AFFILIATE_ALL_ROWS_CACHE_TTL,
                 )
-                rows = cursor.fetchall()
-            else:
-                source = "active"
+            rows = list(rows)
+        else:
+            source = "active"
+            with connections["cloudsql"].cursor() as cursor:
                 placeholders = ", ".join(["%s"] * len(restaurant_ids))
                 query = f"""
                     SELECT

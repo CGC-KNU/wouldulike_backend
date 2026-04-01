@@ -2741,7 +2741,11 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
 
     try:
 
-        invite_code = InviteCode.objects.using(db_alias).get(code=ref_code)
+        invite_code = (
+            InviteCode.objects.using(db_alias)
+            .select_related("user")
+            .get(code=ref_code)
+        )
 
         referrer = invite_code.user
 
@@ -2763,8 +2767,7 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
             # 운영진 계정의 추천코드인지 확인
             is_event_admin = _is_event_admin_user(referrer)
             
-            # 사용된 추천코드의 campaign_code 확인
-            invite_code = InviteCode.objects.using(db_alias).get(code=ref_code)
+            # 사용된 추천코드의 campaign_code 확인 (위에서 조회한 invite_code 재사용)
             campaign_code = invite_code.campaign_code if is_event_admin and invite_code.campaign_code else None
             
             if is_event_admin and campaign_code:
@@ -3533,18 +3536,36 @@ def add_stamp(
 
 
 
-def get_all_stamp_statuses(user: User):
+def get_all_stamp_statuses(
+    user: User,
+    *,
+    limit_to_restaurant_ids: set[int] | None = None,
+):
+    """
+    전체 제휴식당 스탬프 현황 조회.
+
+    limit_to_restaurant_ids:
+        지정 시 해당 식당 ID만 집계·응답 (전체 제휴 목록 조회 생략).
+        적립 진행 중(stamps>0) 식당만 필요할 때 `in_progress_only` API와 함께 사용하면 부하·페이로드가 크게 줄어듦.
+    """
     restaurant_alias = router.db_for_read(AffiliateRestaurant)
-    try:
-        accessible_ids = list(
-            AffiliateRestaurant.objects.using(restaurant_alias)
-            .order_by("restaurant_id")
-            .values_list("restaurant_id", flat=True)
-        )
-    except DatabaseError:
-        accessible_ids = []
+    if limit_to_restaurant_ids is not None:
+        if not limit_to_restaurant_ids:
+            return []
+        accessible_ids = sorted(limit_to_restaurant_ids)
+    else:
+        try:
+            accessible_ids = list(
+                AffiliateRestaurant.objects.using(restaurant_alias)
+                .order_by("restaurant_id")
+                .values_list("restaurant_id", flat=True)
+            )
+        except DatabaseError:
+            accessible_ids = []
 
     wallet_qs = StampWallet.objects.using(STAMP_DB_ALIAS).filter(user=user)
+    if limit_to_restaurant_ids is not None:
+        wallet_qs = wallet_qs.filter(restaurant_id__in=limit_to_restaurant_ids)
     wallet_map = {wallet.restaurant_id: wallet for wallet in wallet_qs}
 
     all_rids = set(accessible_ids) | set(wallet_map.keys())
