@@ -34,6 +34,8 @@ logger = logging.getLogger(__name__)
 
 
 GLOBAL_COUPON_EXPIRY = datetime(2026, 7, 31, 23, 59, 59, tzinfo=timezone.utc)
+# 데이트 기획전 쿠폰 만료일 (2026-04-12 23:59:59 KST = 2026-04-12 14:59:59 UTC)
+DATE_EVENT_COUPON_EXPIRES_AT = datetime(2026, 4, 12, 14, 59, 59, tzinfo=timezone.utc)
 REFERRAL_MAX_REWARDS_PER_REFERRER = 5
 
 # 운영진 계정 카카오 ID 목록 (환경 변수에서 읽어옴, 쉼표로 구분)
@@ -133,6 +135,10 @@ def _resolve_coupon_expiry_for_issue(
     - APP_OPEN 고정 만료 쿠폰 타입이면 APP_OPEN_FIXED_EXPIRES_AT 우선 사용
     - 그 외는 기존 _expires_at 규칙 사용
     """
+    # 데이트 기획전 쿠폰은 운영 정책상 이벤트 종료일(4/12)로 고정 만료
+    if coupon_type.code == DATE_EVENT_APP_OPEN_COUPON_TYPE_CODE:
+        return DATE_EVENT_COUPON_EXPIRES_AT
+
     if (
         coupon_type.code in APP_OPEN_FIXED_EXPIRY_COUPON_CODES
         and APP_OPEN_FIXED_EXPIRES_AT is not None
@@ -3443,13 +3449,29 @@ def add_stamp(
             config = _get_legacy_config()
             cycle_target = STAMP_LEGACY_CYCLE_TARGET
 
+        # 방어: 잘못 저장된 config_json로 인해 "만땅인데 보상 미발급 + 만땅 유지"가 발생하지 않도록 보정
+        # - THRESHOLD인데 thresholds가 비어있으면 cycle_target을 단일 threshold로 간주
+        # - cycle_target이 비정상(<=0)이면 레거시로 폴백
+        if not isinstance(cycle_target, int) or cycle_target <= 0:
+            rule_type = "THRESHOLD"
+            config = _get_legacy_config()
+            cycle_target = STAMP_LEGACY_CYCLE_TARGET
+
         reward_codes = []
         reward_details = []
         now_suffix = timezone.now().strftime("%Y%m%d%H%M%S%f")
 
         if rule_type == "THRESHOLD":
-            thresholds = config.get("thresholds", [])
-            threshold_stamps = sorted(t["stamps"] for t in thresholds)
+            thresholds = config.get("thresholds", []) if isinstance(config, dict) else []
+            if not thresholds:
+                thresholds = [
+                    {
+                        "stamps": cycle_target,
+                        "coupon_type_code": f"STAMP_REWARD_{cycle_target}",
+                    }
+                ]
+
+            threshold_stamps = sorted(int(t["stamps"]) for t in thresholds if t.get("stamps") is not None)
             max_threshold = max(threshold_stamps) if threshold_stamps else 0
 
             for step_idx in range(1, count + 1):
@@ -3458,7 +3480,7 @@ def add_stamp(
                 crossed_max_threshold = False
 
                 for t in thresholds:
-                    th = t["stamps"]
+                    th = int(t["stamps"])
                     coupon_type_code = t.get("coupon_type_code")
                     if not coupon_type_code:
                         raise ValidationError(
