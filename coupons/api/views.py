@@ -27,6 +27,7 @@ from ..service import (
     check_and_expire_coupon,
     claim_final_exam_coupon,
     issue_app_open_coupon,
+    delete_expired_coupons_for_user,
 )
 from .serializers import CouponSerializer, InviteCodeSerializer
 
@@ -49,8 +50,7 @@ class MyCouponsView(generics.ListAPIView):
         request_id = getattr(self.request, "_request_id", "n/a")
         logger.info("[req:%s] MyCouponsView.get_queryset start user=%s", request_id, getattr(user, "id", None))
 
-        # 만료 쿠폰 DB 삭제: 목록 조회마다 실행하던 자동 정리는 제거(프론트 비표시 + 조회 부하 감소).
-        # 필요 시 배치/관리 커맨드에서 delete_expired_coupons_for_user 활용.
+        delete_expired_coupons_for_user(user)
 
         # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
         # 신규가입 직후(1시간 이내)에는 스킵 - 이미 신규가입 쿠폰 1개만 발급됨
