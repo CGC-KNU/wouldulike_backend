@@ -2,6 +2,7 @@ import os
 import logging
 from datetime import timedelta
 
+from django.core.cache import cache
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError as DRFValidationError
@@ -39,6 +40,11 @@ AUTH_ISSUE_APP_OPEN_COUPON_ON_COUPON_LIST = (
     os.getenv("AUTH_ISSUE_APP_OPEN_COUPON_ON_COUPON_LIST", "1") in ("1", "true", "True")
 )
 
+# 만료 쿠폰 삭제는 연속 요청(예: ?status=ISSUED 후 전체 목록)마다 돌리지 않도록 짧게 스로틀
+_COUPON_EXPIRED_CLEANUP_CACHE_TTL_S = int(
+    os.getenv("COUPON_EXPIRED_CLEANUP_CACHE_TTL_S", "120")
+)
+
 
 class MyCouponsView(generics.ListAPIView):
     authentication_classes = [JWTAuthentication]
@@ -50,7 +56,13 @@ class MyCouponsView(generics.ListAPIView):
         request_id = getattr(self.request, "_request_id", "n/a")
         logger.info("[req:%s] MyCouponsView.get_queryset start user=%s", request_id, getattr(user, "id", None))
 
-        delete_expired_coupons_for_user(user)
+        cache_key = f"coupons:expired_cleanup:{user.id}"
+        try:
+            if not cache.get(cache_key):
+                delete_expired_coupons_for_user(user)
+                cache.set(cache_key, 1, _COUPON_EXPIRED_CLEANUP_CACHE_TTL_S)
+        except Exception:  # noqa: BLE001 — 캐시 실패 시에도 목록은 동작해야 함
+            delete_expired_coupons_for_user(user)
 
         # 앱 접속(쿠폰 목록 진입) 시 앱 접속 쿠폰 발급 시도
         # 신규가입 직후(1시간 이내)에는 스킵 - 이미 신규가입 쿠폰 1개만 발급됨

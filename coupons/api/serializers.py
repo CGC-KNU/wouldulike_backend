@@ -4,6 +4,51 @@ from restaurants.models import AffiliateRestaurant
 from ..models import Coupon, InviteCode
 
 
+class CouponListSerializer(serializers.ListSerializer):
+    """쿠폰 목록에서 식당 메타를 일괄 조회해 AffiliateRestaurant N+1을 막는다."""
+
+    def to_representation(self, data):
+        coupons = list(data)
+        rids = {c.restaurant_id for c in coupons if c.restaurant_id is not None}
+        name_hints: set[str] = set()
+        for c in coupons:
+            snap = c.benefit_snapshot or {}
+            if not c.restaurant_id and snap.get("restaurant_name"):
+                name_hints.add(snap["restaurant_name"])
+
+        if rids or name_hints:
+            alias = router.db_for_read(AffiliateRestaurant)
+            id_cache = self.child.context.setdefault("_restaurant_meta_cache_by_id", {})
+            name_cache = self.child.context.setdefault("_restaurant_meta_cache_by_name", {})
+            try:
+                if rids:
+                    for row in (
+                        AffiliateRestaurant.objects.using(alias)
+                        .filter(restaurant_id__in=rids)
+                        .values("restaurant_id", "name", "category")
+                    ):
+                        rid = row["restaurant_id"]
+                        meta = (row.get("name"), row.get("category"))
+                        id_cache.setdefault(rid, meta)
+                        if row.get("name"):
+                            name_cache.setdefault(row["name"], meta)
+                if name_hints:
+                    for row in (
+                        AffiliateRestaurant.objects.using(alias)
+                        .filter(name__in=name_hints)
+                        .values("name", "category")
+                    ):
+                        nm = row.get("name")
+                        if not nm:
+                            continue
+                        meta = (nm, row.get("category"))
+                        name_cache.setdefault(nm, meta)
+            except DatabaseError:
+                pass
+
+        return [self.child.to_representation(c) for c in coupons]
+
+
 class CouponSerializer(serializers.ModelSerializer):
     coupon_type_code = serializers.CharField(source="coupon_type.code", read_only=True)
     coupon_type_title = serializers.CharField(source="coupon_type.title", read_only=True)
@@ -13,6 +58,7 @@ class CouponSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Coupon
+        list_serializer_class = CouponListSerializer
         fields = (
             "code",
             "status",
