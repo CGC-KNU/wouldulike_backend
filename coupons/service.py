@@ -36,6 +36,8 @@ logger = logging.getLogger(__name__)
 GLOBAL_COUPON_EXPIRY = datetime(2026, 7, 31, 23, 59, 59, tzinfo=timezone.utc)
 # 데이트 기획전 쿠폰 만료일 (2026-04-12 23:59:59 KST = 2026-04-12 14:59:59 UTC)
 DATE_EVENT_COUPON_EXPIRES_AT = datetime(2026, 4, 12, 14, 59, 59, tzinfo=timezone.utc)
+# 중간고사 기획전 쿠폰 만료일 (2026-04-24 23:59:59 KST = 2026-04-24 14:59:59 UTC)
+MIDTERM_EVENT_COUPON_EXPIRES_AT = datetime(2026, 4, 24, 14, 59, 59, tzinfo=timezone.utc)
 REFERRAL_MAX_REWARDS_PER_REFERRER = 5
 
 # 운영진 계정 카카오 ID 목록 (환경 변수에서 읽어옴, 쉼표로 구분)
@@ -65,6 +67,20 @@ DATE_EVENT_APP_OPEN_COUPON_TYPE_CODE = os.getenv(
 DATE_EVENT_APP_OPEN_CAMPAIGN_CODE = os.getenv(
     "DATE_EVENT_APP_OPEN_CAMPAIGN_CODE",
     "DATE_EVENT_APP_OPEN",
+)
+# 중간고사 기획전 앱접속 발급 (MIDTERM_EVENT_SPECIAL + MIDTERM_EVENT_APP_OPEN)
+MIDTERM_EVENT_APP_OPEN_ENABLED = os.getenv("MIDTERM_EVENT_APP_OPEN_ENABLED", "0") in (
+    "1",
+    "true",
+    "True",
+)
+MIDTERM_EVENT_APP_OPEN_COUPON_TYPE_CODE = os.getenv(
+    "MIDTERM_EVENT_APP_OPEN_COUPON_TYPE_CODE",
+    "MIDTERM_EVENT_SPECIAL",
+)
+MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE = os.getenv(
+    "MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE",
+    "MIDTERM_EVENT_APP_OPEN",
 )
 # 지정된 쿠폰 타입 코드들에 한해, 앱접속 발급 시 식당당 benefit 1개만 발급
 APP_OPEN_SINGLE_BENEFIT_PER_RESTAURANT_CODES = {
@@ -138,6 +154,10 @@ def _resolve_coupon_expiry_for_issue(
     # 데이트 기획전 쿠폰은 운영 정책상 이벤트 종료일(4/12)로 고정 만료
     if coupon_type.code == DATE_EVENT_APP_OPEN_COUPON_TYPE_CODE:
         return DATE_EVENT_COUPON_EXPIRES_AT
+
+    # 중간고사 기획전 쿠폰은 운영 정책상 이벤트 종료일(4/24)로 고정 만료
+    if coupon_type.code == "MIDTERM_EVENT_SPECIAL":
+        return MIDTERM_EVENT_COUPON_EXPIRES_AT
 
     if (
         coupon_type.code in APP_OPEN_FIXED_EXPIRY_COUPON_CODES
@@ -1227,10 +1247,132 @@ def _issue_date_event_app_open(user: User, *, db_alias: str | None = None) -> li
     return issued
 
 
+def _issue_midterm_event_app_open(user: User, *, db_alias: str | None = None) -> list:
+    """
+    중간고사 기획전 앱접속 쿠폰 발급.
+    - MIDTERM_EVENT_SPECIAL 타입의 식당별 benefit을 사용자에게 전체 발급
+    - campaign(start_at/end_at, active) 범위 내에서만 발급
+    - 이벤트 기간 동안 사용자당 식당별 1회 발급
+    """
+    alias = db_alias or router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=MIDTERM_EVENT_APP_OPEN_COUPON_TYPE_CODE)
+        camp = Campaign.objects.using(alias).get(
+            code=MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE,
+            active=True,
+        )
+    except CouponType.DoesNotExist:
+        logger.info(
+            "midterm-event app-open not issued: coupon type missing (code=%s)",
+            MIDTERM_EVENT_APP_OPEN_COUPON_TYPE_CODE,
+        )
+        return []
+    except Campaign.DoesNotExist:
+        logger.info(
+            "midterm-event app-open not issued: campaign missing/inactive (code=%s)",
+            MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE,
+        )
+        return []
+
+    now = timezone.now()
+    if camp.start_at and now < camp.start_at:
+        return []
+    if camp.end_at and now > camp.end_at:
+        return []
+
+    all_restaurant_ids = list(
+        AffiliateRestaurant.objects.using(alias)
+        .filter(is_affiliate=True)
+        .values_list("restaurant_id", flat=True)
+    )
+    if not all_restaurant_ids:
+        return []
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    target_restaurant_ids = [rid for rid in all_restaurant_ids if rid not in excluded_ids]
+    if not target_restaurant_ids:
+        return []
+
+    issued: list[Coupon] = []
+    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
+
+    key_prefix = f"MIDTERM_EVENT_APP_OPEN:{user.id}:"
+    benefits_qs = (
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(
+            coupon_type=ct,
+            restaurant_id__in=target_restaurant_ids,
+            active=True,
+        )
+        .order_by("restaurant_id", "sort_order")
+    )
+    benefits_by_rid: dict[int, list] = defaultdict(list)
+    for b in benefits_qs:
+        benefits_by_rid[b.restaurant_id].append(b)
+
+    existing_keys = set(
+        Coupon.objects.using(alias)
+        .filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key__startswith=key_prefix,
+        )
+        .values_list("issue_key", flat=True)
+    )
+
+    for restaurant_id in target_restaurant_ids:
+        benefits = benefits_by_rid.get(restaurant_id, [])
+        if not benefits:
+            continue
+
+        for sort_order, benefit in enumerate(benefits):
+            issue_key = f"MIDTERM_EVENT_APP_OPEN:{user.id}:{restaurant_id}:{sort_order}"
+            if issue_key in existing_keys:
+                continue
+
+            benefit_snapshot = _build_benefit_snapshot(
+                ct,
+                restaurant_id,
+                benefit=benefit,
+                db_alias=alias,
+            )
+            try:
+                coupon = Coupon.objects.using(alias).create(
+                    code=make_coupon_code(),
+                    user=user,
+                    coupon_type=ct,
+                    campaign=camp,
+                    restaurant_id=restaurant_id,
+                    expires_at=_resolve_coupon_expiry_for_issue(ct),
+                    issue_key=issue_key,
+                    benefit_snapshot=benefit_snapshot,
+                )
+                issued.append(coupon)
+                existing_keys.add(issue_key)
+            except IntegrityError:
+                dup = (
+                    Coupon.objects.using(alias)
+                    .filter(
+                        user=user,
+                        coupon_type=ct,
+                        campaign=camp,
+                        issue_key=issue_key,
+                        restaurant_id=restaurant_id,
+                    )
+                    .first()
+                )
+                if dup:
+                    issued.append(dup)
+                    existing_keys.add(issue_key)
+
+    return issued
+
+
 def issue_app_open_coupon(user: User):
     """
     앱 접속(로그인/토큰 갱신 등) 시점에 발급되는 쿠폰.
-    APP_OPEN_LEGACY_ENABLED / APP_OPEN_MON_WED_ENABLED / DATE_EVENT_APP_OPEN_ENABLED
+    APP_OPEN_LEGACY_ENABLED / APP_OPEN_MON_WED_ENABLED / DATE_EVENT_APP_OPEN_ENABLED / MIDTERM_EVENT_APP_OPEN_ENABLED
     로 각각 온오프 가능.
     """
     issued: list[Coupon] = []
@@ -1238,6 +1380,9 @@ def issue_app_open_coupon(user: User):
 
     if DATE_EVENT_APP_OPEN_ENABLED:
         issued.extend(_issue_date_event_app_open(user, db_alias=alias))
+
+    if MIDTERM_EVENT_APP_OPEN_ENABLED:
+        issued.extend(_issue_midterm_event_app_open(user, db_alias=alias))
 
     if APP_OPEN_LEGACY_ENABLED:
         issued.extend(_issue_app_open_legacy(user, db_alias=alias))
@@ -2101,6 +2246,92 @@ def claim_final_exam_coupon(user: User, coupon_code: str):
         raise ValidationError("이미 발급받은 쿠폰입니다. 한 사람당 하나의 쿠폰 세트만 받을 수 있습니다.")
     
     return result
+
+
+MIDTERM_STUDYLIKE_COUPON_CODE = "STUDYLIKE"
+MIDTERM_STUDYLIKE_COUPON_COUNT = 3
+MIDTERM_STUDYLIKE_CAMPAIGN_CODE = "MIDTERM_EVENT_STUDYLIKE"
+
+
+@transaction.atomic
+def claim_midterm_studylike_coupon(user: User, coupon_code: str):
+    """
+    쿠폰 코드를 입력받아 중간고사 기획전 쿠폰을 랜덤 발급합니다.
+    - 코드: STUDYLIKE (대소문자 무관)
+    - 기간: 현재~2026-04-24 23:59:59 KST (쿠폰 만료도 동일하게 고정)
+    - 구성: MIDTERM_EVENT_SPECIAL benefit 풀(13종) 중 3종 무작위 발급 (중복 없음)
+    - 사용자당 1회만 발급
+    """
+    if (coupon_code or "").strip().upper() != MIDTERM_STUDYLIKE_COUPON_CODE:
+        raise ValidationError("invalid coupon code")
+
+    now = timezone.now()
+    if now > MIDTERM_EVENT_COUPON_EXPIRES_AT:
+        raise ValidationError("expired")
+
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="MIDTERM_EVENT_SPECIAL")
+    camp = Campaign.objects.using(alias).get(code=MIDTERM_STUDYLIKE_CAMPAIGN_CODE, active=True)
+
+    issue_key_prefix = f"MIDTERM_STUDYLIKE:{user.id}:"
+    existing_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key__startswith=issue_key_prefix,
+    )
+    if existing_qs.exists():
+        return {
+            "coupons": list(existing_qs.order_by("issued_at", "id")),
+            "total_issued": existing_qs.count(),
+            "already_issued": True,
+        }
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("no benefits available for midterm studylike coupon assignment")
+
+    sample_size = min(MIDTERM_STUDYLIKE_COUPON_COUNT, len(benefits))
+    selected_benefits = random.sample(benefits, sample_size)
+
+    issued_coupons: list[Coupon] = []
+    for benefit in selected_benefits:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{issue_key_prefix}{restaurant_id}:{sort_order}"
+
+        benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, benefit=benefit, db_alias=alias)
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": "[학생회 한정 쿠폰 📚]",
+                "subtitle": "[학생회 한정 쿠폰 📚]",
+            }
+
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=_resolve_coupon_expiry_for_issue(ct),
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        issued_coupons.append(coupon)
+
+    return {
+        "coupons": issued_coupons,
+        "total_issued": len(issued_coupons),
+        "already_issued": False,
+    }
 
 
 @transaction.atomic

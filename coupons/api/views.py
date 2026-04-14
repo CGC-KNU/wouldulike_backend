@@ -27,6 +27,7 @@ from ..service import (
     STAMP_DB_ALIAS,
     check_and_expire_coupon,
     claim_final_exam_coupon,
+    claim_midterm_studylike_coupon,
     issue_app_open_coupon,
     delete_expired_coupons_for_user,
 )
@@ -431,6 +432,42 @@ class ClaimFinalExamCouponView(APIView):
             msg = str(e)
             if "invalid coupon code" in msg.lower():
                 return Response({"detail": "유효하지 않은 쿠폰 코드입니다."}, status=400)
+            if "이미 발급받은" in msg or "already" in msg.lower():
+                return Response({"detail": msg}, status=409)
+            return Response({"detail": msg}, status=400)
+        except Exception as e:
+            if request.query_params.get("_diag") == "1":
+                import traceback
+                return Response({"detail": "internal error", "error": str(e), "trace": traceback.format_exc().splitlines()[-5:]}, status=500)
+            return Response({"detail": "internal error"}, status=500)
+
+
+class ClaimMidtermStudylikeCouponView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        coupon_code = request.data.get("coupon_code")
+        if not coupon_code:
+            return Response({"detail": "coupon_code required"}, status=400)
+
+        try:
+            result = claim_midterm_studylike_coupon(request.user, coupon_code)
+            if result.get("already_issued"):
+                return Response({"detail": "이미 발급받은 쿠폰입니다."}, status=409)
+            payload = {
+                "ok": True,
+                "total_issued": result["total_issued"],
+                "coupon_codes": [c.code for c in result["coupons"]],
+                "issued_coupons": format_issued_coupons(result["coupons"]),
+            }
+            return Response(payload, status=201)
+        except DjangoValidationError as e:
+            msg = str(e)
+            if "invalid coupon code" in msg.lower():
+                return Response({"detail": "유효하지 않은 쿠폰 코드입니다."}, status=400)
+            if "expired" in msg.lower():
+                return Response({"detail": "이벤트 기간이 종료되었습니다."}, status=410)
             if "이미 발급받은" in msg or "already" in msg.lower():
                 return Response({"detail": msg}, status=409)
             return Response({"detail": msg}, status=400)

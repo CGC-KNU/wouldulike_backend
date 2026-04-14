@@ -18,6 +18,8 @@ from coupons.service import (
     MAX_COUPONS_PER_RESTAURANT,
     ensure_invite_code,
     FULL_AFFILIATE_COUPON_CODE,
+    claim_midterm_studylike_coupon,
+    MIDTERM_EVENT_COUPON_EXPIRES_AT,
 )
 from coupons.api.serializers import CouponSerializer
 from coupons.models import RestaurantCouponBenefit
@@ -573,3 +575,73 @@ class MediumRareCouponTests(TestCase):
             with patch("coupons.service.issue_medium_rare_coupons", return_value={"coupons": [MagicMock(code="M002")], "total_issued": 1}):
                 accept_referral(referee=referee, ref_code="MEXILORD")
         self.assertEqual(ctx.exception.code, "medium_rare_daily_limit_reached")
+
+
+class MidtermStudylikeCouponTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def test_studylike_issues_three_random_coupons_from_pool(self):
+        user = self.user_model.objects.create_user(kakao_id=93001, password="pass")
+        ct, _ = CouponType.objects.get_or_create(
+            code="MIDTERM_EVENT_SPECIAL",
+            defaults={"title": "[중간고사 기획전 쿠폰]", "benefit_json": {}, "valid_days": 0, "per_user_limit": 1},
+        )
+        camp, _ = Campaign.objects.get_or_create(
+            code="MIDTERM_EVENT_STUDYLIKE",
+            defaults={"name": "중간고사 기획전 STUDYLIKE 쿠폰", "type": "FLASH", "active": True},
+        )
+
+        # 13종 풀 구성
+        base_rid = 990000
+        for i in range(13):
+            RestaurantCouponBenefit.objects.create(
+                coupon_type=ct,
+                restaurant_id=base_rid + i,
+                sort_order=0,
+                title=f"혜택{i}",
+                subtitle="",
+                benefit_json={},
+                active=True,
+            )
+
+        benefits = list(
+            RestaurantCouponBenefit.objects.filter(coupon_type=ct, active=True).order_by("restaurant_id", "sort_order")
+        )
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: benefits[:k]):
+            result = claim_midterm_studylike_coupon(user, "studylike")
+
+        self.assertFalse(result["already_issued"])
+        self.assertEqual(result["total_issued"], 3)
+        self.assertEqual(len(result["coupons"]), 3)
+        self.assertEqual(len({c.restaurant_id for c in result["coupons"]}), 3)
+        for c in result["coupons"]:
+            self.assertEqual(c.coupon_type_id, ct.id)
+            self.assertEqual(c.campaign_id, camp.id)
+            self.assertEqual(c.expires_at, MIDTERM_EVENT_COUPON_EXPIRES_AT)
+            self.assertEqual((c.benefit_snapshot or {}).get("subtitle"), "[학생회 한정 쿠폰 📚]")
+
+        # 사용자당 1회성
+        result2 = claim_midterm_studylike_coupon(user, "STUDYLIKE")
+        self.assertTrue(result2["already_issued"])
+        self.assertEqual(result2["total_issued"], 3)
+
+    def test_studylike_after_period_returns_expired(self):
+        user = self.user_model.objects.create_user(kakao_id=93002, password="pass")
+        CouponType.objects.get_or_create(
+            code="MIDTERM_EVENT_SPECIAL",
+            defaults={"title": "[중간고사 기획전 쿠폰]", "benefit_json": {}, "valid_days": 0, "per_user_limit": 1},
+        )
+        Campaign.objects.get_or_create(
+            code="MIDTERM_EVENT_STUDYLIKE",
+            defaults={"name": "중간고사 기획전 STUDYLIKE 쿠폰", "type": "FLASH", "active": True},
+        )
+        with patch("coupons.service.timezone.now", return_value=MIDTERM_EVENT_COUPON_EXPIRES_AT + timedelta(seconds=1)):
+            with self.assertRaises(ValidationError) as ctx:
+                claim_midterm_studylike_coupon(user, "STUDYLIKE")
+        self.assertIn("expired", str(ctx.exception))

@@ -12,6 +12,7 @@ from .views import (
     MyAllStampStatusView,
     MyStampStatusView,
     ClaimFinalExamCouponView,
+    ClaimMidtermStudylikeCouponView,
 )
 
 urlpatterns = [
@@ -24,6 +25,7 @@ urlpatterns = [
     path("coupons/referrals/qualify/", QualifyReferralView.as_view()),
     path("coupons/flash/claim/", FlashClaimView.as_view()),
     path("coupons/final-exam/claim/", ClaimFinalExamCouponView.as_view()),
+    path("coupons/midterm/studylike/claim/", ClaimMidtermStudylikeCouponView.as_view()),
 ]
 
 # Stamp endpoints
