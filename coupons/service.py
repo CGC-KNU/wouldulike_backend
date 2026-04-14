@@ -2,6 +2,7 @@ import uuid
 import random
 import logging
 import os
+import json
 from collections import defaultdict
 from datetime import date, datetime, timedelta, time
 from django.db import transaction, IntegrityError, router, DatabaseError
@@ -2088,6 +2089,215 @@ def claim_final_exam_coupon(user: User, coupon_code: str):
 MIDTERM_STUDYLIKE_COUPON_CODE = "STUDYLIKE"
 MIDTERM_STUDYLIKE_COUPON_COUNT = 3
 MIDTERM_STUDYLIKE_CAMPAIGN_CODE = "MIDTERM_EVENT_STUDYLIKE"
+
+# 중간고사 캠페인: 날짜별 쿠폰코드 / 25분 챌린지 코드
+MIDTERM_DAILY_CAMPAIGN_CODE = "MIDTERM_EVENT_DAILY_CODES"
+MIDTERM_DAILY_CODE_START_AT = datetime(2026, 4, 14, 15, 0, 0, tzinfo=timezone.utc)  # 4/15 00:00 KST
+MIDTERM_DAILY_SUBTITLE = "[중간고사 캠페인 📚]"
+
+# 코드(대문자) → {"store": 매장명, "coupon": 쿠폰 설명} (CSV 기준) — 사람이 수정하지 않도록 JSON 원문으로 로드
+MIDTERM_DAILY_CODE_META: dict[str, dict] = json.loads(
+    "{\"BDTLKDG\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"BJLWVCF\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"BJQWNIG\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"BJWQNJG\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"BKTPQLE\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"BLTVQMF\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"BMXTQEG\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}, \"BPRNWFH\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"BQVMXAG\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"BQXKDHI\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"BTVJPGI\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"BVKRNKE\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"CDJMRKC\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"CJDRQMC\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"CKLQRGB\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"CKMRWBE\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"CKQWNEE\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}, \"CPJMRDC\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"CQXJRIC\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"CRDVQFC\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"CRWJTHC\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"CVDRPJC\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"CVQJPLC\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"DJVTRGF\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"DKTRNHE\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"DKVCPMJ\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"DKXQLFI\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"DLVJQEC\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}, \"DNVPRLJ\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"DPRNJBG\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"DWNXLII\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"FVQTMAD\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"GVDJMCC\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"HCNWKAE\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"HJCNKHG\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"HJWMXFD\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"HMXPTDE\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"HNRXWLD\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"HPMKWID\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"HPTMXED\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}, \"HQLMTJD\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"HQRPLGD\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"HQTPWKD\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"HVKLMCH\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"HWMKTMD\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"HWMKYBH\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"JTNWCBC\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"JWKQNDI\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"KCPTRKI\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"KPLNWAB\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"LMDRKJH\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"LNVKPHB\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"LQPVSBD\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"LQWMRFA\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"LWQVKDD\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"LXPMWGG\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"LZTNVBK\": {\"coupon\": \"(캠페인 쿠폰) 랜덤 1종\", \"store\": \"25분 챌린지용\"}, \"MCTXQLI\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"MKWQPIA\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"MNBXTCJ\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"MTCVPFJ\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"MTRQVAA\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"MXVLQKJ\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"NKXWPJE\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"NLBTKFE\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"NQKJVAI\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"NQXPRME\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"NTDRQIE\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"NWQXRCB\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"NWXKQGE\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"NXLVQKB\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"NXRKPEB\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}, \"PLDQKLH\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"PLKTRCA\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"PMTRXDJ\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"PMXQLHD\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"PTQRMJA\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"QCLVTEI\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}, \"QCRNKGH\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"QCVTMIJ\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"QMVLTBA\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"QNRCWDF\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"QTPRNCG\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"QTRNPLA\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"QTRXLMI\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"QWXJCPD\": {\"coupon\": \"(캠페인 쿠폰) 랜덤 1종\", \"store\": \"25분 챌린지용\"}, \"QXPTNJI\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"QXRPCFF\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"RCKWNMG\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"RCLVTBI\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"RDMTCKG\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"RJLPTAF\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"RJVLPEF\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}, \"RJWNTLG\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"RKMVYEF\": {\"coupon\": \"(캠페인 쿠폰) 랜덤 1종\", \"store\": \"25분 챌린지용\"}, \"RPXWTGA\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"RTNXLDB\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"RTPVCJF\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"RVTLNIB\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"TKRPMIH\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"TLDRWAH\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"TQWPMEA\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}, \"TRMPLCD\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"TRMVPHH\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"TRWQPKA\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"VDCLMJJ\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"VKQPWDA\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"VQWLPHF\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"VTMKDFG\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"VTMNDGC\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"VTQKRMA\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"VTXQLBF\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"WCPRXAJ\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"WPDNKEH\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}, \"WQJNVKH\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"XCKQNCE\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"XCVPRDH\": {\"coupon\": \"생연어덮밥 10,000원 식사권\", \"store\": \"마름모식당\"}, \"XDMWKLB\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"XLVCPIF\": {\"coupon\": \"[17~20시 사용]\\n9,000원 이상 결제시 (테이블 당)\\n모든 유부 2P 제공\", \"store\": \"정직유부 경북대점\"}, \"XNWLKJB\": {\"coupon\": \"아메리카노 / 라떼 / 아이스티\\n사이즈 업\", \"store\": \"웃찌커피\"}, \"XPLNWMB\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"XPTKNFB\": {\"coupon\": \"뻥튀기 아이스크림 제공\", \"store\": \"사랑과평화 경북대점\"}, \"XQTRPHA\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"XRDKPBB\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"YHMPQRA\": {\"coupon\": \"(캠페인 쿠폰) 랜덤 1종\", \"store\": \"25분 챌린지용\"}, \"YMKQRGJ\": {\"coupon\": \"감자튀김 제공\", \"store\": \"부리또익스프레스\"}, \"YNPLTHJ\": {\"coupon\": \"인당 해시포테이토 1개\", \"store\": \"고씨네 대구경북대본점\"}, \"YPLXQKF\": {\"coupon\": \"갈릭버터 프라이즈 변경\\n(버거 주문시)\", \"store\": \"기프트버거 경대점\"}, \"YPMDJMH\": {\"coupon\": \"인원수 맞게 새우튀김 서비스\", \"store\": \"혜화문식당\"}, \"YRDQPCI\": {\"coupon\": \"샐러드 구매시)\\n- 아메리카노 기본사이즈 1,000원\\n- 아메리카노 빅사이즈 1,000원\", \"store\": \"스톡홀롬샐러드 경대정문점\"}, \"YVMCQLF\": {\"coupon\": \"고기 추가\\n(방문시 - 소고기류 제외)\", \"store\": \"다원국밥\"}, \"ZDXRJAC\": {\"coupon\": \"추억의 도시락\", \"store\": \"통통주먹구이 경북대점\"}, \"ZQNXPBJ\": {\"coupon\": \"미니빙수 제공\", \"store\": \"포차1번지먹새통 경북대점\"}, \"ZTRPJEJ\": {\"coupon\": \"우유 푸딩 테이크아웃 시\\n아메리카노 500원\", \"store\": \"주비 두루 향기롭다\"}}"
+)
+
+# 25분 챌린지용: 코드 → 랜덤 발급 개수 (CSV 기준)
+MIDTERM_CHALLENGE_CODE_COUNTS: dict[str, int] = json.loads(
+    "{\"BTLQWGH\": 3, \"CPNXJIK\": 3, \"DFLPRWX\": 10, \"DVRYMLN\": 3, \"RVKJXTA\": 5, \"SWMNPUB\": 5}"
+)
+
+
+def _normalize_text(value: str) -> str:
+    return "".join((value or "").strip().split())
+
+
+def _resolve_midterm_restaurant_id_from_store_name(store_name: str) -> int | None:
+    """
+    매장명(브랜치 포함 가능)으로 AffiliateRestaurant.restaurant_id를 최대한 안정적으로 찾는다.
+    - RestaurantCouponBenefit에서 restaurant_id를 찾기 위한 용도
+    - 로컬/테스트에서 restaurants 테이블이 없으면 None 반환
+    """
+    alias = router.db_for_read(AffiliateRestaurant)
+    raw = (store_name or "").strip()
+    if not raw:
+        return None
+
+    # 지점명 제거를 위해 첫 토큰(브랜드명에 가까운 부분)을 우선 사용
+    base = raw.split()[0]
+    candidates = [raw, base]
+
+    try:
+        for q in candidates:
+            q = q.strip()
+            if not q:
+                continue
+            rid = (
+                AffiliateRestaurant.objects.using(alias)
+                .filter(name__icontains=q)
+                .values_list("restaurant_id", flat=True)
+                .first()
+            )
+            if rid:
+                return int(rid)
+    except DatabaseError:
+        return None
+
+    return None
+
+
+@transaction.atomic
+def claim_midterm_daily_code_coupon(user: User, coupon_code: str):
+    """
+    중간고사 캠페인 날짜별/챌린지용 쿠폰 코드 입력 시 발급.
+    - 기간: 4/15 00:00 KST ~ 4/24 23:59:59 KST
+    - 제한(A): 코드 1개당 사용자 1회 (동일 코드 재입력 중복 발급 불가)
+    - 일반 코드: 해당 매장 쿠폰 1장 발급
+    - 챌린지 코드: MIDTERM_EVENT_SPECIAL 풀에서 랜덤 N장 발급
+    """
+    code = (coupon_code or "").strip().upper()
+    if not code:
+        raise ValidationError("invalid coupon code")
+
+    now = timezone.now()
+    if now < MIDTERM_DAILY_CODE_START_AT:
+        raise ValidationError("expired")
+    if now > MIDTERM_EVENT_COUPON_EXPIRES_AT:
+        raise ValidationError("expired")
+
+    alias = router.db_for_write(Coupon)
+    ct = CouponType.objects.using(alias).get(code="MIDTERM_EVENT_SPECIAL")
+    camp = Campaign.objects.using(alias).get(code=MIDTERM_DAILY_CAMPAIGN_CODE, active=True)
+
+    # 멱등성(코드 1회성): 같은 코드는 같은 issue_key로 막음
+    issue_key_prefix = f"MIDTERM_DAILY:{user.id}:{code}"
+    existing_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key__startswith=issue_key_prefix,
+    )
+    if existing_qs.exists():
+        return {
+            "coupons": list(existing_qs.order_by("issued_at", "id")),
+            "total_issued": existing_qs.count(),
+            "already_issued": True,
+        }
+
+    # 챌린지 코드: 랜덤 N종
+    if code in MIDTERM_CHALLENGE_CODE_COUNTS:
+        count = int(MIDTERM_CHALLENGE_CODE_COUNTS[code])
+        excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+        benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+        benefits = list(
+            RestaurantCouponBenefit.objects.using(benefit_alias)
+            .filter(coupon_type=ct, active=True)
+            .exclude(restaurant_id__in=excluded_ids)
+            .order_by("restaurant_id", "sort_order")
+        )
+        if not benefits:
+            raise ValidationError("no benefits available for midterm daily code assignment")
+
+        sample_size = min(count, len(benefits))
+        selected_benefits = random.sample(benefits, sample_size)
+
+        issued: list[Coupon] = []
+        for benefit in selected_benefits:
+            restaurant_id = benefit.restaurant_id
+            sort_order = getattr(benefit, "sort_order", 0)
+            issue_key = f"{issue_key_prefix}:{restaurant_id}:{sort_order}"
+
+            benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, benefit=benefit, db_alias=alias)
+            if benefit_snapshot:
+                benefit_snapshot = {
+                    **benefit_snapshot,
+                    "coupon_type_title": MIDTERM_DAILY_SUBTITLE,
+                    "subtitle": MIDTERM_DAILY_SUBTITLE,
+                }
+
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=_resolve_coupon_expiry_for_issue(ct),
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued.append(coupon)
+
+        return {"coupons": issued, "total_issued": len(issued), "already_issued": False}
+
+    # 일반 코드: 매장 1장
+    meta = MIDTERM_DAILY_CODE_META.get(code)
+    if not meta:
+        raise ValidationError("invalid coupon code")
+
+    store_name = (meta.get("store") or "").strip()
+    if store_name in ("25분 챌린지용",):
+        # 랜덤 1종 코드는 CHALLENGE_CODE_COUNTS에 포함되지 않으므로 여기서 처리
+        count = 1
+        excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+        benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+        benefits = list(
+            RestaurantCouponBenefit.objects.using(benefit_alias)
+            .filter(coupon_type=ct, active=True)
+            .exclude(restaurant_id__in=excluded_ids)
+            .order_by("restaurant_id", "sort_order")
+        )
+        if not benefits:
+            raise ValidationError("no benefits available for midterm daily code assignment")
+        benefit = random.choice(benefits)
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{issue_key_prefix}:{restaurant_id}:{sort_order}"
+        benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, benefit=benefit, db_alias=alias)
+        if benefit_snapshot:
+            benefit_snapshot = {**benefit_snapshot, "coupon_type_title": MIDTERM_DAILY_SUBTITLE, "subtitle": MIDTERM_DAILY_SUBTITLE}
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=_resolve_coupon_expiry_for_issue(ct),
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        return {"coupons": [coupon], "total_issued": 1, "already_issued": False}
+
+    restaurant_id = _resolve_midterm_restaurant_id_from_store_name(store_name)
+    if restaurant_id is None:
+        raise ValidationError("invalid coupon code")
+
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefit = (
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, restaurant_id=restaurant_id, active=True)
+        .order_by("sort_order")
+        .first()
+    )
+    if not benefit:
+        raise ValidationError("invalid coupon code")
+
+    issue_key = issue_key_prefix
+    benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, benefit=benefit, db_alias=alias)
+    if benefit_snapshot:
+        benefit_snapshot = {
+            **benefit_snapshot,
+            "coupon_type_title": MIDTERM_DAILY_SUBTITLE,
+            "subtitle": MIDTERM_DAILY_SUBTITLE,
+        }
+    coupon = Coupon.objects.using(alias).create(
+        code=make_coupon_code(),
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        restaurant_id=restaurant_id,
+        expires_at=_resolve_coupon_expiry_for_issue(ct),
+        issue_key=issue_key,
+        benefit_snapshot=benefit_snapshot,
+    )
+    return {"coupons": [coupon], "total_issued": 1, "already_issued": False}
 
 
 @transaction.atomic

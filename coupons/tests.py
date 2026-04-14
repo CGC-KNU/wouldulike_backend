@@ -20,6 +20,8 @@ from coupons.service import (
     FULL_AFFILIATE_COUPON_CODE,
     claim_midterm_studylike_coupon,
     MIDTERM_EVENT_COUPON_EXPIRES_AT,
+    claim_midterm_daily_code_coupon,
+    MIDTERM_DAILY_CODE_START_AT,
 )
 from coupons.api.serializers import CouponSerializer
 from coupons.models import RestaurantCouponBenefit
@@ -589,3 +591,56 @@ class MidtermStudylikeCouponTests(TestCase):
             with self.assertRaises(ValidationError) as ctx:
                 claim_midterm_studylike_coupon(user, "STUDYLIKE")
         self.assertIn("expired", str(ctx.exception))
+
+
+class MidtermDailyCodeCouponTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def setUp(self):
+        self.user = self.user_model.objects.create_user(kakao_id=94001, password="pass")
+        self.ct, _ = CouponType.objects.get_or_create(
+            code="MIDTERM_EVENT_SPECIAL",
+            defaults={"title": "[중간고사 기획전 쿠폰]", "benefit_json": {}, "valid_days": 0, "per_user_limit": 1},
+        )
+        self.camp, _ = Campaign.objects.get_or_create(
+            code="MIDTERM_EVENT_DAILY_CODES",
+            defaults={"name": "중간고사 캠페인 날짜별 쿠폰코드", "type": "FLASH", "active": True},
+        )
+
+    def test_daily_code_before_start_is_expired(self):
+        with patch("coupons.service.timezone.now", return_value=MIDTERM_DAILY_CODE_START_AT - timedelta(seconds=1)):
+            with self.assertRaises(ValidationError) as ctx:
+                claim_midterm_daily_code_coupon(self.user, "MTRQVAA")
+        self.assertIn("expired", str(ctx.exception))
+
+    def test_challenge_code_issues_three_and_is_idempotent(self):
+        # benefit 풀 구성
+        for i in range(10):
+            RestaurantCouponBenefit.objects.create(
+                coupon_type=self.ct,
+                restaurant_id=777000 + i,
+                sort_order=0,
+                title=f"혜택{i}",
+                subtitle="",
+                benefit_json={},
+                active=True,
+            )
+
+        with patch("coupons.service.timezone.now", return_value=MIDTERM_DAILY_CODE_START_AT + timedelta(hours=1)):
+            # 랜덤 3종 코드
+            with patch("coupons.service.random.sample", side_effect=lambda seq, k: list(seq)[:k]):
+                result = claim_midterm_daily_code_coupon(self.user, "BTLQWGH")
+        self.assertFalse(result["already_issued"])
+        self.assertEqual(result["total_issued"], 3)
+        self.assertEqual(len({c.restaurant_id for c in result["coupons"]}), 3)
+
+        with patch("coupons.service.timezone.now", return_value=MIDTERM_DAILY_CODE_START_AT + timedelta(hours=2)):
+            result2 = claim_midterm_daily_code_coupon(self.user, "BTLQWGH")
+        self.assertTrue(result2["already_issued"])
+        self.assertEqual(result2["total_issued"], 3)
