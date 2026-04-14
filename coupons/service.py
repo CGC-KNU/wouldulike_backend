@@ -1215,6 +1215,12 @@ def _issue_date_event_app_open(user: User, *, db_alias: str | None = None) -> li
                 benefit=benefit,
                 db_alias=alias,
             )
+            if benefit_snapshot:
+                benefit_snapshot = {
+                    **benefit_snapshot,
+                    "coupon_type_title": "[중간고사 캠페인 📚]",
+                    "subtitle": "[중간고사 캠페인 📚]",
+                }
             try:
                 coupon = Coupon.objects.using(alias).create(
                     code=make_coupon_code(),
