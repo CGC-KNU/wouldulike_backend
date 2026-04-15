@@ -2974,16 +2974,20 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
 
     try:
 
+        # coupons DB(cloudsql)에서 accounts_user(default)로 cross-DB JOIN이 발생하면
+        # `accounts_user` 테이블이 없어서 500이 난다. (멀티 DB 환경에서 join 불가)
+        # 따라서 InviteCode는 user_id만 가져오고, User는 default에서 별도로 로드한다.
         invite_code = (
             InviteCode.objects.using(db_alias)
-            .select_related("user")
+            .only("id", "code", "user_id", "campaign_code")
             .get(code=ref_code)
         )
-
-        referrer = invite_code.user
+        referrer = User.objects.using("default").get(id=invite_code.user_id)
 
     except InviteCode.DoesNotExist:
 
+        raise ValidationError("invalid referral code")
+    except User.DoesNotExist:
         raise ValidationError("invalid referral code")
 
     if referrer.id == referee.id:
