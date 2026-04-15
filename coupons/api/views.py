@@ -239,6 +239,8 @@ class AcceptReferralView(APIView):
                     "booth_visit_already_issued",
                     "roulette_already_issued",
                     "medium_rare_code_already_used",
+                        "midterm_studylike_already_issued",
+                        "midterm_daily_code_already_issued",
                 )
                 else status.HTTP_400_BAD_REQUEST
             )

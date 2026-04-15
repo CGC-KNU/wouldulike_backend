@@ -2519,6 +2519,52 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
     
     if ref_code in BLOCKED_CODES:
         raise ValidationError("invalid referral code")
+
+    # ---------------------------------------------------------------------
+    # 중간고사 캠페인 쿠폰코드(추천코드 입력 UI 재사용)
+    # - STUDYLIKE: 기획전 랜덤 3종
+    # - 날짜별/챌린지 코드: CSV 기반 코드 → 발급 (claim_midterm_daily_code_coupon)
+    #
+    # 기존 앱 플로우에서 추천코드 입력 UI(`/coupons/referrals/accept/`)를 재사용하고 있어
+    # 쿠폰코드들도 여기서 처리한다.
+    # ---------------------------------------------------------------------
+    if ref_code == MIDTERM_STUDYLIKE_COUPON_CODE:
+        result = claim_midterm_studylike_coupon(referee, ref_code)
+        if result.get("already_issued"):
+            raise ValidationError(
+                "이미 STUDYLIKE 쿠폰을 발급받았습니다.",
+                code="midterm_studylike_already_issued",
+            )
+        with transaction.atomic(using=db_alias):
+            base_qs = Referral.objects.using(db_alias)
+            referral = base_qs.create(
+                referrer=referee,
+                referee=referee,
+                code_used=ref_code,
+                campaign_code=MIDTERM_STUDYLIKE_CAMPAIGN_CODE,
+                status="QUALIFIED",
+                qualified_at=timezone.now(),
+            )
+        return referral, result["coupons"]
+
+    if ref_code in MIDTERM_DAILY_CODE_META or ref_code in MIDTERM_CHALLENGE_CODE_COUNTS:
+        result = claim_midterm_daily_code_coupon(referee, ref_code)
+        if result.get("already_issued"):
+            raise ValidationError(
+                "이미 해당 중간고사 쿠폰코드를 사용했습니다.",
+                code="midterm_daily_code_already_issued",
+            )
+        with transaction.atomic(using=db_alias):
+            base_qs = Referral.objects.using(db_alias)
+            referral = base_qs.create(
+                referrer=referee,
+                referee=referee,
+                code_used=ref_code,
+                campaign_code=MIDTERM_DAILY_CAMPAIGN_CODE,
+                status="QUALIFIED",
+                qualified_at=timezone.now(),
+            )
+        return referral, result["coupons"]
     
     # 신학기 추천코드 이벤트 처리 (newsemester / newsemeseter)
     if ref_code in ("NEWSEMESTER", "NEWSEMESETER"):
