@@ -469,6 +469,11 @@ class ClaimMidtermStudylikeCouponView(APIView):
                 return Response({"detail": "유효하지 않은 쿠폰 코드입니다."}, status=400)
             if "expired" in msg.lower():
                 return Response({"detail": "이벤트 기간이 종료되었습니다."}, status=410)
+            if "event not configured" in msg.lower():
+                return Response(
+                    {"detail": "이벤트 설정이 아직 반영되지 않았습니다. 잠시 후 다시 시도해주세요."},
+                    status=503,
+                )
             if "이미 발급받은" in msg or "already" in msg.lower():
                 return Response({"detail": msg}, status=409)
             return Response({"detail": msg}, status=400)
@@ -505,6 +510,11 @@ class ClaimMidtermDailyCodeCouponView(APIView):
                 return Response({"detail": "유효하지 않은 쿠폰 코드입니다."}, status=400)
             if "expired" in msg.lower():
                 return Response({"detail": "이벤트 기간이 종료되었습니다."}, status=410)
+            if "event not configured" in msg.lower():
+                return Response(
+                    {"detail": "이벤트 설정이 아직 반영되지 않았습니다. 잠시 후 다시 시도해주세요."},
+                    status=503,
+                )
             if "이미 발급받은" in msg or "already" in msg.lower():
                 return Response({"detail": msg}, status=409)
             return Response({"detail": msg}, status=400)

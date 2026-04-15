@@ -2164,8 +2164,11 @@ def claim_midterm_daily_code_coupon(user: User, coupon_code: str):
         raise ValidationError("expired")
 
     alias = router.db_for_write(Coupon)
-    ct = CouponType.objects.using(alias).get(code="MIDTERM_EVENT_SPECIAL")
-    camp = Campaign.objects.using(alias).get(code=MIDTERM_DAILY_CAMPAIGN_CODE, active=True)
+    try:
+        ct = CouponType.objects.using(alias).get(code="MIDTERM_EVENT_SPECIAL")
+        camp = Campaign.objects.using(alias).get(code=MIDTERM_DAILY_CAMPAIGN_CODE, active=True)
+    except (CouponType.DoesNotExist, Campaign.DoesNotExist):
+        raise ValidationError("event not configured")
 
     # 멱등성(코드 1회성): 같은 코드는 같은 issue_key로 막음
     issue_key_prefix = f"MIDTERM_DAILY:{user.id}:{code}"
@@ -2317,8 +2320,14 @@ def claim_midterm_studylike_coupon(user: User, coupon_code: str):
         raise ValidationError("expired")
 
     alias = router.db_for_write(Coupon)
-    ct = CouponType.objects.using(alias).get(code="MIDTERM_EVENT_SPECIAL")
-    camp = Campaign.objects.using(alias).get(code=MIDTERM_STUDYLIKE_CAMPAIGN_CODE, active=True)
+    try:
+        ct = CouponType.objects.using(alias).get(code="MIDTERM_EVENT_SPECIAL")
+        camp = Campaign.objects.using(alias).get(
+            code=MIDTERM_STUDYLIKE_CAMPAIGN_CODE, active=True
+        )
+    except (CouponType.DoesNotExist, Campaign.DoesNotExist):
+        # 운영/스테이징에서 마이그레이션 누락 또는 캠페인 비활성화 시
+        raise ValidationError("event not configured")
 
     issue_key_prefix = f"MIDTERM_STUDYLIKE:{user.id}:"
     existing_qs = Coupon.objects.using(alias).filter(
@@ -2343,7 +2352,7 @@ def claim_midterm_studylike_coupon(user: User, coupon_code: str):
         .order_by("restaurant_id", "sort_order")
     )
     if not benefits:
-        raise ValidationError("no benefits available for midterm studylike coupon assignment")
+        raise ValidationError("event not configured")
 
     sample_size = min(MIDTERM_STUDYLIKE_COUPON_COUNT, len(benefits))
     selected_benefits = random.sample(benefits, sample_size)
