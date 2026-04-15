@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
 from django.contrib.auth import get_user_model
+from django.db import router
 from coupons.models import InviteCode
 from coupons.service import ensure_invite_code
 
@@ -35,15 +36,19 @@ class Command(BaseCommand):
         code_referral = options.get("code_referral")
 
         try:
-            user = User.objects.get(kakao_id=kakao_id)
+            # User는 기본 DB(default)에 존재
+            user = User.objects.using("default").get(kakao_id=kakao_id)
         except User.DoesNotExist:
             self.stdout.write(
                 self.style.ERROR(f"카카오 ID {kakao_id}에 해당하는 사용자를 찾을 수 없습니다.")
             )
             return
 
+        # InviteCode는 coupons DB 라우터 기준 DB(cloudsql)에 저장되어야 함
+        alias = router.db_for_write(InviteCode)
+
         # 기존 InviteCode 확인 (일반 사용자용 기본 코드는 무시)
-        existing_codes = InviteCode.objects.filter(user=user)
+        existing_codes = InviteCode.objects.using(alias).filter(user_id=user.id)
         if existing_codes.exists():
             self.stdout.write(
                 self.style.WARNING(
@@ -54,10 +59,10 @@ class Command(BaseCommand):
         # SIGNUP 타입 추천코드 생성
         if code_signup:
             # 지정된 코드로 생성
-            invite_signup, created = InviteCode.objects.update_or_create(
+            invite_signup, created = InviteCode.objects.using(alias).update_or_create(
                 code=code_signup,
                 defaults={
-                    "user": user,
+                    "user_id": user.id,
                     "campaign_code": "EVENT_REWARD_SIGNUP",
                 },
             )
@@ -84,11 +89,11 @@ class Command(BaseCommand):
             for attempt in range(max_attempts):
                 length = 12 if attempt >= 8 else 8
                 code = make_coupon_code(length).upper()
-                if InviteCode.objects.filter(code=code).exists():
+                if InviteCode.objects.using(alias).filter(code=code).exists():
                     continue
                 try:
-                    invite_signup = InviteCode.objects.create(
-                        user=user, code=code, campaign_code="EVENT_REWARD_SIGNUP"
+                    invite_signup = InviteCode.objects.using(alias).create(
+                        user_id=user.id, code=code, campaign_code="EVENT_REWARD_SIGNUP"
                     )
                     break
                 except Exception:
@@ -97,9 +102,12 @@ class Command(BaseCommand):
             if not invite_signup:
                 # Fallback
                 fallback_code = f"EVTS{user.id:06d}{uuid.uuid4().hex[:4].upper()}"
-                invite_signup, _ = InviteCode.objects.update_or_create(
-                    user=user,
-                    defaults={"code": fallback_code[:16], "campaign_code": "EVENT_REWARD_SIGNUP"},
+                invite_signup, _ = InviteCode.objects.using(alias).update_or_create(
+                    user_id=user.id,
+                    defaults={
+                        "code": fallback_code[:16],
+                        "campaign_code": "EVENT_REWARD_SIGNUP",
+                    },
                 )
 
             self.stdout.write(
@@ -110,10 +118,10 @@ class Command(BaseCommand):
 
         # REFERRAL 타입 추천코드 생성
         if code_referral:
-            invite_referral, created = InviteCode.objects.update_or_create(
+            invite_referral, created = InviteCode.objects.using(alias).update_or_create(
                 code=code_referral,
                 defaults={
-                    "user": user,
+                    "user_id": user.id,
                     "campaign_code": "EVENT_REWARD_REFERRAL",
                 },
             )
@@ -139,11 +147,11 @@ class Command(BaseCommand):
             for attempt in range(max_attempts):
                 length = 12 if attempt >= 8 else 8
                 code = make_coupon_code(length).upper()
-                if InviteCode.objects.filter(code=code).exists():
+                if InviteCode.objects.using(alias).filter(code=code).exists():
                     continue
                 try:
-                    invite_referral = InviteCode.objects.create(
-                        user=user, code=code, campaign_code="EVENT_REWARD_REFERRAL"
+                    invite_referral = InviteCode.objects.using(alias).create(
+                        user_id=user.id, code=code, campaign_code="EVENT_REWARD_REFERRAL"
                     )
                     break
                 except Exception:
@@ -152,9 +160,12 @@ class Command(BaseCommand):
             if not invite_referral:
                 # Fallback
                 fallback_code = f"EVTR{user.id:06d}{uuid.uuid4().hex[:4].upper()}"
-                invite_referral, _ = InviteCode.objects.update_or_create(
-                    user=user,
-                    defaults={"code": fallback_code[:16], "campaign_code": "EVENT_REWARD_REFERRAL"},
+                invite_referral, _ = InviteCode.objects.using(alias).update_or_create(
+                    user_id=user.id,
+                    defaults={
+                        "code": fallback_code[:16],
+                        "campaign_code": "EVENT_REWARD_REFERRAL",
+                    },
                 )
 
             self.stdout.write(

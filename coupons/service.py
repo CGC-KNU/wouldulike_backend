@@ -562,7 +562,13 @@ def _expires_at(ct: CouponType, *, issued_at: datetime | None = None) -> datetim
 
 def ensure_invite_code(user: User) -> InviteCode:
     # 일반 사용자는 campaign_code가 없는 기본 InviteCode 하나만 가짐
-    invite = InviteCode.objects.filter(user=user, campaign_code__isnull=True).first()
+    # 멀티 DB: InviteCode는 coupons DB(cloudsql)에 저장됨. User는 default에 있어도 user_id로 매칭한다.
+    alias = router.db_for_write(InviteCode)
+    invite = (
+        InviteCode.objects.using(alias)
+        .filter(user_id=user.id, campaign_code__isnull=True)
+        .first()
+    )
     if invite:
         return invite
 
@@ -570,16 +576,20 @@ def ensure_invite_code(user: User) -> InviteCode:
     for attempt in range(max_attempts):
         length = 12 if attempt >= 8 else 8
         code = make_coupon_code(length).upper()
-        if InviteCode.objects.filter(code=code).exists():
+        if InviteCode.objects.using(alias).filter(code=code).exists():
             continue
         try:
-            return InviteCode.objects.create(user=user, code=code, campaign_code=None)
+            return InviteCode.objects.using(alias).create(
+                user_id=user.id,
+                code=code,
+                campaign_code=None,
+            )
         except IntegrityError:
             continue
 
     fallback_code = f"INV{user.id:06d}{uuid.uuid4().hex[:4].upper()}"
-    invite, _ = InviteCode.objects.update_or_create(
-        user=user,
+    invite, _ = InviteCode.objects.using(alias).update_or_create(
+        user_id=user.id,
         campaign_code__isnull=True,
         defaults={"code": fallback_code[:16]},
     )
