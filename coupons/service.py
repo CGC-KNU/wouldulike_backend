@@ -168,6 +168,40 @@ def _resolve_coupon_expiry_for_issue(
     return _expires_at(coupon_type, issued_at=issued_at)
 
 
+def _cap_expires_at_by_campaign(expires_at: datetime, campaign: Campaign | None) -> datetime:
+    """
+    캠페인 종료 시각(end_at)이 존재하면 쿠폰 만료일을 end_at을 넘지 않도록 캡핑.
+    - end_at이 없으면 그대로 반환
+    - timezone-naive 값이 들어오면 aware로 보정(UTC 기준)
+    """
+    if campaign is None or not campaign.end_at:
+        return expires_at
+
+    end_at = campaign.end_at
+    if timezone.is_naive(end_at):
+        end_at = timezone.make_aware(end_at, timezone=timezone.utc)
+    if timezone.is_naive(expires_at):
+        expires_at = timezone.make_aware(expires_at, timezone=timezone.utc)
+
+    return end_at if expires_at > end_at else expires_at
+
+
+def _resolve_expires_at_for_issue(
+    coupon_type: CouponType,
+    *,
+    campaign: Campaign | None,
+    issued_at: datetime | None = None,
+) -> datetime:
+    """
+    발급 시 만료일 결정:
+    1) 쿠폰 타입/이벤트 정책 기반 만료일(_resolve_coupon_expiry_for_issue)
+    2) 캠페인 end_at이 있으면 end_at으로 캡핑
+    """
+    base = issued_at or timezone.now()
+    expires_at = _resolve_coupon_expiry_for_issue(coupon_type, issued_at=base)
+    return _cap_expires_at_by_campaign(expires_at, campaign)
+
+
 def delete_expired_coupons_for_user(
     user: User,
     *,
@@ -513,12 +547,15 @@ def _create_coupon_with_restaurant(
     extra_fields: dict | None = None,
 ) -> Coupon:
     alias = db_alias or router.db_for_write(Coupon)
+    resolved_expires_at = expires_at or _resolve_expires_at_for_issue(
+        coupon_type, campaign=campaign
+    )
     fields = {
         "code": code or make_coupon_code(),
         "user": user,
         "coupon_type": coupon_type,
         "campaign": campaign,
-        "expires_at": expires_at or _expires_at(coupon_type),
+        "expires_at": resolved_expires_at,
         "issue_key": issue_key,
     }
     if extra_fields:
@@ -656,7 +693,9 @@ def _issue_coupons_for_target_restaurants(
                     coupon_type=coupon_type,
                     campaign=campaign,
                     restaurant_id=restaurant_id,
-                    expires_at=_expires_at(coupon_type),
+                    expires_at=_resolve_expires_at_for_issue(
+                        coupon_type, campaign=campaign
+                    ),
                     issue_key=issue_key,
                     benefit_snapshot=benefit_snapshot,
                 )
@@ -745,7 +784,9 @@ def _issue_coupons_for_single_restaurant(
                 coupon_type=coupon_type,
                 campaign=campaign,
                 restaurant_id=restaurant_id,
-                expires_at=_expires_at(coupon_type),
+                expires_at=_resolve_expires_at_for_issue(
+                    coupon_type, campaign=campaign
+                ),
                 issue_key=issue_key,
                 benefit_snapshot=benefit_snapshot,
             )
@@ -867,7 +908,9 @@ def _issue_app_open_mon_wed(user: User, *, db_alias: str | None = None):
             coupon_type=ct,
             campaign=camp,
             restaurant_id=restaurant_id,
-            expires_at=_expires_at(ct, issued_at=kst),
+            expires_at=_resolve_expires_at_for_issue(
+                ct, campaign=camp, issued_at=kst
+            ),
             issue_key=issue_key,
             benefit_snapshot=benefit_snapshot,
         )
@@ -1013,7 +1056,7 @@ def _issue_app_open_legacy(user: User, *, db_alias: str | None = None) -> list:
                     coupon_type=ct,
                     campaign=camp,
                     restaurant_id=restaurant_id,
-                    expires_at=_resolve_coupon_expiry_for_issue(ct),
+                    expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
                     issue_key=issue_key,
                     benefit_snapshot=benefit_snapshot,
                 )
@@ -1141,7 +1184,7 @@ def _issue_date_event_app_open(user: User, *, db_alias: str | None = None) -> li
                     coupon_type=ct,
                     campaign=camp,
                     restaurant_id=restaurant_id,
-                    expires_at=_resolve_coupon_expiry_for_issue(ct),
+                    expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
                     issue_key=issue_key,
                     benefit_snapshot=benefit_snapshot,
                 )
@@ -1263,7 +1306,7 @@ def _issue_midterm_event_app_open(user: User, *, db_alias: str | None = None) ->
                     coupon_type=ct,
                     campaign=camp,
                     restaurant_id=restaurant_id,
-                    expires_at=_resolve_coupon_expiry_for_issue(ct),
+                    expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
                     issue_key=issue_key,
                     benefit_snapshot=benefit_snapshot,
                 )
@@ -1388,7 +1431,7 @@ def issue_ambassador_coupons(
                     coupon_type=ct,
                     campaign=camp,
                     restaurant_id=restaurant_id,
-                    expires_at=_expires_at(ct),
+                    expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
                     issue_key=issue_key,
                     benefit_snapshot=benefit_snapshot,
                 )
@@ -1478,7 +1521,7 @@ def _issue_event_reward_coupons(
             coupon_type=ct,
             campaign=camp,
             restaurant_id=restaurant_id,
-            expires_at=_expires_at(ct),
+            expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
             issue_key=issue_key,
             benefit_snapshot=benefit_snapshot,
         )
@@ -1569,7 +1612,7 @@ def issue_final_exam_coupons(user: User):
                 coupon_type=ct,
                 campaign=camp,
                 restaurant_id=restaurant_id,
-                expires_at=_expires_at(ct),
+                expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
                 issue_key=issue_key,
                 benefit_snapshot=benefit_snapshot,
             )
@@ -1662,7 +1705,7 @@ def issue_full_affiliate_coupons(user: User):
                 coupon_type=ct,
                 campaign=camp,
                 restaurant_id=restaurant_id,
-                expires_at=_expires_at(ct),
+                expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
                 issue_key=issue_key,
                 benefit_snapshot=benefit_snapshot,
             )
@@ -1727,7 +1770,7 @@ def issue_booth_visit_coupon(user: User, *, ref_code_used: str = BOOTH_VISIT_REF
         coupon_type=ct,
         campaign=camp,
         restaurant_id=restaurant_id,
-        expires_at=_expires_at(ct),
+        expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
         issue_key=issue_key,
         benefit_snapshot=benefit_snapshot,
     )
@@ -1802,7 +1845,7 @@ def issue_roulette_coupons(
             coupon_type=ct,
             campaign=camp,
             restaurant_id=restaurant_id,
-            expires_at=_expires_at(ct),
+            expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
             issue_key=issue_key,
             benefit_snapshot=benefit_snapshot,
         )
@@ -1885,7 +1928,7 @@ def issue_new_semester_coupons(user: User):
             coupon_type=ct,
             campaign=camp,
             restaurant_id=restaurant_id,
-            expires_at=_expires_at(ct),
+            expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
             issue_key=issue_key,
             benefit_snapshot=benefit_snapshot,
         )
@@ -1972,7 +2015,7 @@ def issue_knulike_coupons(user: User):
             coupon_type=ct,
             campaign=camp,
             restaurant_id=restaurant_id,
-            expires_at=_expires_at(ct),
+            expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
             issue_key=issue_key,
             benefit_snapshot=benefit_snapshot,
         )
@@ -2058,7 +2101,7 @@ def issue_datelike_coupons(user: User):
             coupon_type=ct,
             campaign=camp,
             restaurant_id=restaurant_id,
-            expires_at=_resolve_coupon_expiry_for_issue(ct),
+            expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
             issue_key=issue_key,
             benefit_snapshot=benefit_snapshot,
         )
@@ -2232,7 +2275,7 @@ def claim_midterm_daily_code_coupon(user: User, coupon_code: str):
                 coupon_type=ct,
                 campaign=camp,
                 restaurant_id=restaurant_id,
-                expires_at=_resolve_coupon_expiry_for_issue(ct),
+                expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
                 issue_key=issue_key,
                 benefit_snapshot=benefit_snapshot,
             )
@@ -2272,7 +2315,7 @@ def claim_midterm_daily_code_coupon(user: User, coupon_code: str):
             coupon_type=ct,
             campaign=camp,
             restaurant_id=restaurant_id,
-            expires_at=_resolve_coupon_expiry_for_issue(ct),
+            expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
             issue_key=issue_key,
             benefit_snapshot=benefit_snapshot,
         )
@@ -2306,7 +2349,7 @@ def claim_midterm_daily_code_coupon(user: User, coupon_code: str):
         coupon_type=ct,
         campaign=camp,
         restaurant_id=restaurant_id,
-        expires_at=_resolve_coupon_expiry_for_issue(ct),
+        expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
         issue_key=issue_key,
         benefit_snapshot=benefit_snapshot,
     )
@@ -2387,7 +2430,7 @@ def claim_midterm_studylike_coupon(user: User, coupon_code: str):
             coupon_type=ct,
             campaign=camp,
             restaurant_id=restaurant_id,
-            expires_at=_resolve_coupon_expiry_for_issue(ct),
+            expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
             issue_key=issue_key,
             benefit_snapshot=benefit_snapshot,
         )
