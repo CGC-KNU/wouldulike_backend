@@ -43,12 +43,18 @@ class Command(BaseCommand):
             default=None,
             help="처리 최대 건수 제한 (디버깅용)",
         )
+        parser.add_argument(
+            "--only-active-campaigns",
+            action="store_true",
+            help="active=True 캠페인만 대상으로 제한 (기본: inactive 포함)",
+        )
 
     def handle(self, *args, **options):
         campaign_code = (options.get("campaign_code") or "").strip() or None
         dry_run = bool(options.get("dry_run"))
         batch_size = int(options.get("batch_size") or 2000)
         limit = options.get("limit")
+        only_active_campaigns = bool(options.get("only_active_campaigns"))
         statuses = [
             s.strip().upper()
             for s in (options.get("statuses") or "").split(",")
@@ -57,7 +63,9 @@ class Command(BaseCommand):
 
         alias = router.db_for_write(Coupon)
 
-        camp_qs = Campaign.objects.using(alias).filter(active=True, end_at__isnull=False)
+        camp_qs = Campaign.objects.using(alias).filter(end_at__isnull=False)
+        if only_active_campaigns:
+            camp_qs = camp_qs.filter(active=True)
         if campaign_code:
             camp_qs = camp_qs.filter(code=campaign_code)
         camps = list(camp_qs.only("id", "code", "end_at"))
