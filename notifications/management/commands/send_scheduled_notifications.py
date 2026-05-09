@@ -87,6 +87,12 @@ class Command(BaseCommand):
         partial_count = 0
 
         for notification in notifications:
+            # 이 커맨드는 "예약 알림을 한 번 처리"하는 역할.
+            # 토큰이 없거나 전송이 실패하더라도, 계속 sent=False로 남아 있으면
+            # 다음 스케줄 실행에서 다른 알림과 함께 다시 시도되며 "의도치 않은 재발송"이 생길 수 있음.
+            #
+            # 따라서 (dry-run이 아닌 경우) 아래의 실패 경로에서도 sent=True로 마킹하여
+            # 재처리 큐에서 빠지게 한다.
             # 대상 토큰 계산: target_kakao_ids 가 있으면 해당 사용자만, 없으면 전체
             if notification.target_kakao_ids:
                 target_ids = notification.target_kakao_ids or []
@@ -181,6 +187,9 @@ class Command(BaseCommand):
                     )
                 )
                 failure_count += 1
+                if not dry_run:
+                    notification.sent = True
+                    notification.save(update_fields=["sent"])
                 continue
 
             if dry_run:
@@ -212,6 +221,9 @@ class Command(BaseCommand):
                             "Check FCM configuration (FCM_PROJECT_ID, FCM_SERVICE_ACCOUNT_FILE/JSON)."
                         )
                     )
+                if not dry_run:
+                    notification.sent = True
+                    notification.save(update_fields=["sent"])
                 continue
 
             if dry_run:
@@ -246,6 +258,8 @@ class Command(BaseCommand):
                         f"Notification {notification.id} failed: {response}"
                     )
                 )
+                notification.sent = True
+                notification.save(update_fields=["sent"])
                 continue
 
             if failures:
@@ -291,7 +305,11 @@ class Command(BaseCommand):
                     )
 
             notification.sent = True
-            notification.save(update_fields=["sent"])
+            if not notification.sent_at:
+                notification.sent_at = timezone.now()
+                notification.save(update_fields=["sent", "sent_at"])
+            else:
+                notification.save(update_fields=["sent"])
             sent_count += 1
 
         if dry_run:

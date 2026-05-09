@@ -1,4 +1,3 @@
-from datetime import timedelta
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
@@ -98,20 +97,15 @@ def _trigger_weekly_notification(day_key: str):
     message = _build_weekly_message(day_key)
 
     now = timezone.now()
-    duplicate_window_start = now - timedelta(minutes=15)
-    recent_duplicate = (
-        Notification.objects.filter(
-            content=message,
-            target_kakao_ids=None,
-            created_at__gte=duplicate_window_start,
-        )
-        .order_by("-created_at")
-        .first()
-    )
-    if recent_duplicate:
-        return recent_duplicate
+    # 일자 단위 idempotency (Cloud Scheduler 재시도/중복 호출 방지)
+    today_kst = now.astimezone(KST).date().isoformat()
+    dedupe_key = f"weekly_{day_key}:{today_kst}"
+    existing = Notification.objects.filter(dedupe_key=dedupe_key).first()
+    if existing:
+        return existing
 
     notification = Notification.objects.create(
+        dedupe_key=dedupe_key,
         content=message,
         scheduled_time=now,
         sent=False,
@@ -148,4 +142,19 @@ def trigger_weekly_wed(request):
     if not _is_weekly_allowed_window("wed"):
         return HttpResponse("SKIPPED")
     _trigger_weekly_notification("wed")
+    return HttpResponse("OK")
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def trigger_coupon_expiry_d3(request):
+    """
+    쿠폰 만료 D-3 알림 스케줄 적재.
+    - Cloud Scheduler가 매일 1회 호출하는 것을 권장
+    - X-CRON-TOKEN 헤더 필수
+    """
+    if not _is_valid_cron_token(request):
+        return HttpResponseForbidden("Forbidden")
+
+    call_command("schedule_coupon_expiry_d3_notifications")
     return HttpResponse("OK")

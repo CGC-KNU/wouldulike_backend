@@ -5,6 +5,7 @@ from .views import (
     trigger_send_scheduled_notifications,
     trigger_weekly_mon,
     trigger_weekly_wed,
+    trigger_coupon_expiry_d3,
 )
 
 urlpatterns = [
@@ -26,5 +27,11 @@ urlpatterns = [
         "internal/cron/weekly-wed/",
         trigger_weekly_wed,
         name="notifications-cron-weekly-wed",
+    ),
+    # 쿠폰 만료 D-3 알림 스케줄 적재 (매일 1회 호출 권장)
+    path(
+        "internal/cron/coupon-expiry-d3/",
+        trigger_coupon_expiry_d3,
+        name="notifications-cron-coupon-expiry-d3",
     ),
 ]
