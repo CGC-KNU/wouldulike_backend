@@ -74,11 +74,13 @@ class MyCouponsView(generics.ListAPIView):
         should_issue_app_open = (
             getattr(user, "is_authenticated", False)
             and AUTH_ISSUE_APP_OPEN_COUPON_ON_COUPON_LIST
-            and not is_new_user
         )
         if should_issue_app_open:
             try:
-                coupons = issue_app_open_coupon(user)
+                coupons = issue_app_open_coupon(
+                    user,
+                    include_standard=not is_new_user,
+                )
                 if coupons:
                     self._issued_app_open_coupons = coupons
                     codes = [c.code for c in coupons]

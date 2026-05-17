@@ -177,6 +177,18 @@ def _resolve_coupon_expiry_for_issue(
     if coupon_type.code == "MIDTERM_EVENT_SPECIAL":
         return MIDTERM_EVENT_COUPON_EXPIRES_AT
 
+    if coupon_type.code == JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE:
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
+        from coupons.festival_jungdunbam import wednesday_expires_at_kst
+
+        base = issued_at or timezone.now()
+        kst = base.astimezone(ZoneInfo("Asia/Seoul"))
+        return wednesday_expires_at_kst(kst)
+
     if (
         coupon_type.code in APP_OPEN_FIXED_EXPIRY_COUPON_CODES
         and APP_OPEN_FIXED_EXPIRES_AT is not None
@@ -945,6 +957,8 @@ def _issue_app_open_mon_wed(user: User, *, db_alias: str | None = None):
 def _issue_jungdunbam_festival_wed(user: User, *, db_alias: str | None = None) -> list:
     """
     수요일(KST) 앱 접속 시 축제 주막(우주라이크 X 정든밤) 음료 쿠폰 1장 발급.
+    - 발급: 수요일 당일 1회(issue_key=날짜)
+    - 만료: 발급 수요일 KST 23:59:59
     APP_OPEN_WED(술집 랜덤 1장)과 별도이며, RESTAURANTS_EXCLUDED_FROM_ALL 우회해 고정 식당에 발급.
     """
     if not JUNGDUNBAM_FESTIVAL_WED_ENABLED:
@@ -955,9 +969,12 @@ def _issue_jungdunbam_festival_wed(user: User, *, db_alias: str | None = None) -
     except ImportError:
         from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
 
+    from coupons.festival_jungdunbam import is_wednesday_kst, wednesday_expires_at_kst
+
     alias = db_alias or router.db_for_write(Coupon)
-    kst = timezone.now().astimezone(ZoneInfo("Asia/Seoul"))
-    if kst.weekday() != 2:
+    now = timezone.now()
+    kst = now.astimezone(ZoneInfo("Asia/Seoul"))
+    if not is_wednesday_kst(now):
         return []
 
     ct_code = JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE
@@ -975,14 +992,17 @@ def _issue_jungdunbam_festival_wed(user: User, *, db_alias: str | None = None) -
         )
         return []
 
-    now = timezone.now()
     if camp.start_at and now < camp.start_at:
         return []
     if camp.end_at and now > camp.end_at:
         return []
 
     date_str = kst.strftime("%Y%m%d")
-    issue_key = f"{ct_code}:{user.id}:{date_str}"
+    issue_key = f"JUNGDUNBAM_WED:{user.id}:{date_str}"
+    expires_at = _cap_expires_at_by_campaign(
+        wednesday_expires_at_kst(kst),
+        camp,
+    )
 
     existing = (
         Coupon.objects.using(alias)
@@ -1022,9 +1042,7 @@ def _issue_jungdunbam_festival_wed(user: User, *, db_alias: str | None = None) -
             coupon_type=ct,
             campaign=camp,
             restaurant_id=restaurant_id,
-            expires_at=_resolve_expires_at_for_issue(
-                ct, campaign=camp, issued_at=kst
-            ),
+            expires_at=expires_at,
             issue_key=issue_key,
             benefit_snapshot=benefit_snapshot,
         )
@@ -1445,14 +1463,19 @@ def _issue_midterm_event_app_open(user: User, *, db_alias: str | None = None) ->
     return issued
 
 
-def issue_app_open_coupon(user: User):
+def issue_app_open_coupon(user: User, *, include_standard: bool = True):
     """
-    앱 접속(로그인/토큰 갱신 등) 시점에 발급되는 쿠폰.
-    APP_OPEN_LEGACY_ENABLED / APP_OPEN_MON_WED_ENABLED / JUNGDUNBAM_FESTIVAL_WED_ENABLED /
-    DATE_EVENT_APP_OPEN_ENABLED / MIDTERM_EVENT_APP_OPEN_ENABLED 로 각각 온오프 가능.
+    앱 접속(로그인/토큰 갱신/쿠폰함 등) 시점에 발급되는 쿠폰.
+    include_standard=False 이면 축제 주막 수요일 쿠폰만 시도(신규가입 1시간 제한 시 사용).
     """
     issued: list[Coupon] = []
     alias = router.db_for_write(Coupon)
+
+    if JUNGDUNBAM_FESTIVAL_WED_ENABLED:
+        issued.extend(_issue_jungdunbam_festival_wed(user, db_alias=alias))
+
+    if not include_standard:
+        return issued
 
     if DATE_EVENT_APP_OPEN_ENABLED:
         issued.extend(_issue_date_event_app_open(user, db_alias=alias))
@@ -1465,9 +1488,6 @@ def issue_app_open_coupon(user: User):
 
     if APP_OPEN_MON_WED_ENABLED:
         issued.extend(_issue_app_open_mon_wed(user, db_alias=alias))
-
-    if JUNGDUNBAM_FESTIVAL_WED_ENABLED:
-        issued.extend(_issue_jungdunbam_festival_wed(user, db_alias=alias))
 
     return issued
 

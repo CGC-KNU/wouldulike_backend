@@ -402,9 +402,9 @@ class KakaoLoginView(APIView):
                     )
 
             # 앱 접속(로그인) 쿠폰 발급 - 신규가입(created) 시에는 스킵 (이미 신규가입 쿠폰 1개 발급됨)
-            if not created and AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
+            if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
                 try:
-                    issue_app_open_coupon(user)
+                    issue_app_open_coupon(user, include_standard=not created)
                 except Exception as exc:
                     logger.warning(
                         "failed to issue app-open coupon on login for user %s: %s",
@@ -579,9 +579,9 @@ class AppleLoginView(APIView):
                 )
 
         # 앱 접속 쿠폰 - 신규가입(created) 시에는 스킵 (이미 신규가입 쿠폰 1개 발급됨)
-        if not created and AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
+        if AUTH_ISSUE_APP_OPEN_COUPON_ON_LOGIN:
             try:
-                issue_app_open_coupon(user)
+                issue_app_open_coupon(user, include_standard=not created)
             except Exception as exc:
                 logger.warning(
                     'failed to issue app-open coupon on Apple login for user %s: %s',

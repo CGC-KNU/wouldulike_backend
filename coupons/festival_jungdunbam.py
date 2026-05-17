@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time
 
 from django.db import connections
 from django.utils import timezone
@@ -54,6 +54,21 @@ COUPON_TYPES_TO_EXCLUDE = [
     "STAMP_REWARD_9",
     "STAMP_REWARD_10",
 ]
+
+
+def wednesday_expires_at_kst(kst: datetime) -> datetime:
+    """발급일(수요일) KST 23:59:59 — 당일 자정까지 사용."""
+    return datetime.combine(kst.date(), time(23, 59, 59), tzinfo=kst.tzinfo)
+
+
+def is_wednesday_kst(now=None) -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
+    kst = (now or timezone.now()).astimezone(ZoneInfo("Asia/Seoul"))
+    return kst.weekday() == 2
 
 
 def _kst_aware(dt: datetime):
@@ -288,7 +303,7 @@ def ensure_jungdunbam_festival_data(*, db_alias: str | None = None) -> str:
         code=COUPON_TYPE_CODE,
         defaults={
             "title": "수요일 축제 주막 쿠폰",
-            "valid_days": 3,
+            "valid_days": 0,
             "per_user_limit": 1,
             "benefit_json": {"type": "fixed", "value": 0},
         },
