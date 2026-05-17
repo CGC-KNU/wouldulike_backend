@@ -21,7 +21,10 @@ from coupons.service import (
     claim_midterm_studylike_coupon,
     MIDTERM_EVENT_COUPON_EXPIRES_AT,
     claim_midterm_daily_code_coupon,
+    claim_gaehwalike_coupon,
     MIDTERM_DAILY_CODE_START_AT,
+    GAEHWALIKE_EVENT_COUPON_EXPIRES_AT,
+    GAEHWALIKE_SUBTITLE,
     _issue_jungdunbam_festival_wed,
     issue_app_open_coupon,
     get_stamp_status,
@@ -603,6 +606,93 @@ class MidtermStudylikeCouponTests(TestCase):
         with patch("coupons.service.timezone.now", return_value=MIDTERM_EVENT_COUPON_EXPIRES_AT + timedelta(seconds=1)):
             with self.assertRaises(ValidationError) as ctx:
                 claim_midterm_studylike_coupon(user, "STUDYLIKE")
+        self.assertIn("expired", str(ctx.exception))
+
+
+class GaehwalikeCouponTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def test_gaehwalike_issues_three_random_coupons_from_pool(self):
+        user = self.user_model.objects.create_user(kakao_id=95001, password="pass")
+        ct, _ = CouponType.objects.get_or_create(
+            code="GAEHWALIKE",
+            defaults={"title": GAEHWALIKE_SUBTITLE, "benefit_json": {}, "valid_days": 0, "per_user_limit": 1},
+        )
+        camp, _ = Campaign.objects.get_or_create(
+            code="GAEHWALIKE_EVENT",
+            defaults={"name": "성년의날 GAEHWALIKE 쿠폰", "type": "FLASH", "active": True},
+        )
+
+        base_rid = 980000
+        for i in range(10):
+            RestaurantCouponBenefit.objects.create(
+                coupon_type=ct,
+                restaurant_id=base_rid + i,
+                sort_order=0,
+                title=f"혜택{i}",
+                subtitle="",
+                benefit_json={},
+                active=True,
+            )
+
+        benefits = list(
+            RestaurantCouponBenefit.objects.filter(coupon_type=ct, active=True).order_by(
+                "restaurant_id", "sort_order"
+            )
+        )
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: benefits[:k]):
+            result = claim_gaehwalike_coupon(user, "gaehwalike")
+
+        self.assertFalse(result["already_issued"])
+        self.assertEqual(result["total_issued"], 3)
+        self.assertEqual(len(result["coupons"]), 3)
+        self.assertEqual(len({c.restaurant_id for c in result["coupons"]}), 3)
+        for c in result["coupons"]:
+            self.assertEqual(c.coupon_type_id, ct.id)
+            self.assertEqual(c.campaign_id, camp.id)
+            self.assertEqual(c.expires_at, GAEHWALIKE_EVENT_COUPON_EXPIRES_AT)
+            self.assertEqual((c.benefit_snapshot or {}).get("subtitle"), GAEHWALIKE_SUBTITLE)
+
+        result2 = claim_gaehwalike_coupon(user, "GAEHWALIKE")
+        self.assertTrue(result2["already_issued"])
+        self.assertEqual(result2["total_issued"], 3)
+
+    def test_gaehwalike_invalid_code(self):
+        user = self.user_model.objects.create_user(kakao_id=95002, password="pass")
+        CouponType.objects.get_or_create(
+            code="GAEHWALIKE",
+            defaults={"title": GAEHWALIKE_SUBTITLE, "benefit_json": {}, "valid_days": 0, "per_user_limit": 1},
+        )
+        Campaign.objects.get_or_create(
+            code="GAEHWALIKE_EVENT",
+            defaults={"name": "성년의날 GAEHWALIKE 쿠폰", "type": "FLASH", "active": True},
+        )
+        with self.assertRaises(ValidationError) as ctx:
+            claim_gaehwalike_coupon(user, "WRONGCODE")
+        self.assertIn("invalid coupon code", str(ctx.exception).lower())
+
+    def test_gaehwalike_after_period_returns_expired(self):
+        user = self.user_model.objects.create_user(kakao_id=95003, password="pass")
+        CouponType.objects.get_or_create(
+            code="GAEHWALIKE",
+            defaults={"title": GAEHWALIKE_SUBTITLE, "benefit_json": {}, "valid_days": 0, "per_user_limit": 1},
+        )
+        Campaign.objects.get_or_create(
+            code="GAEHWALIKE_EVENT",
+            defaults={"name": "성년의날 GAEHWALIKE 쿠폰", "type": "FLASH", "active": True},
+        )
+        with patch(
+            "coupons.service.timezone.now",
+            return_value=GAEHWALIKE_EVENT_COUPON_EXPIRES_AT + timedelta(seconds=1),
+        ):
+            with self.assertRaises(ValidationError) as ctx:
+                claim_gaehwalike_coupon(user, "GAEHWALIKE")
         self.assertIn("expired", str(ctx.exception))
 
 

@@ -39,6 +39,8 @@ GLOBAL_COUPON_EXPIRY = datetime(2026, 7, 31, 23, 59, 59, tzinfo=timezone.utc)
 DATE_EVENT_COUPON_EXPIRES_AT = datetime(2026, 4, 12, 14, 59, 59, tzinfo=timezone.utc)
 # 중간고사 기획전 쿠폰 만료일 (2026-04-24 23:59:59 KST = 2026-04-24 14:59:59 UTC)
 MIDTERM_EVENT_COUPON_EXPIRES_AT = datetime(2026, 4, 24, 14, 59, 59, tzinfo=timezone.utc)
+# 성년의날 GAEHWALIKE 쿠폰 만료일 (2026-05-31 23:59:59 KST = 2026-05-31 14:59:59 UTC)
+GAEHWALIKE_EVENT_COUPON_EXPIRES_AT = datetime(2026, 5, 31, 14, 59, 59, tzinfo=timezone.utc)
 REFERRAL_MAX_REWARDS_PER_REFERRER = 5
 
 # 운영진 계정 카카오 ID 목록 (환경 변수에서 읽어옴, 쉼표로 구분)
@@ -176,6 +178,10 @@ def _resolve_coupon_expiry_for_issue(
     # 중간고사 기획전 쿠폰은 운영 정책상 이벤트 종료일(4/24)로 고정 만료
     if coupon_type.code == "MIDTERM_EVENT_SPECIAL":
         return MIDTERM_EVENT_COUPON_EXPIRES_AT
+
+    # 성년의날 GAEHWALIKE 쿠폰은 이벤트 종료일(5/31)로 고정 만료
+    if coupon_type.code == "GAEHWALIKE":
+        return GAEHWALIKE_EVENT_COUPON_EXPIRES_AT
 
     if coupon_type.code == JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE:
         try:
@@ -2282,6 +2288,11 @@ MIDTERM_STUDYLIKE_COUPON_CODE = "STUDYLIKE"
 MIDTERM_STUDYLIKE_COUPON_COUNT = 3
 MIDTERM_STUDYLIKE_CAMPAIGN_CODE = "MIDTERM_EVENT_STUDYLIKE"
 
+GAEHWALIKE_COUPON_CODE = "GAEHWALIKE"
+GAEHWALIKE_COUPON_COUNT = 3
+GAEHWALIKE_CAMPAIGN_CODE = "GAEHWALIKE_EVENT"
+GAEHWALIKE_SUBTITLE = "[성년의날 행사 🌹]"
+
 # 중간고사 캠페인: 날짜별 쿠폰코드 / 25분 챌린지 코드
 MIDTERM_DAILY_CAMPAIGN_CODE = "MIDTERM_EVENT_DAILY_CODES"
 MIDTERM_DAILY_CODE_START_AT = datetime(2026, 4, 14, 15, 0, 0, tzinfo=timezone.utc)  # 4/15 00:00 KST
@@ -2583,6 +2594,90 @@ def claim_midterm_studylike_coupon(user: User, coupon_code: str):
 
 
 @transaction.atomic
+def claim_gaehwalike_coupon(user: User, coupon_code: str):
+    """
+    쿠폰 코드를 입력받아 성년의날 GAEHWALIKE 쿠폰을 랜덤 발급합니다.
+    - 코드: GAEHWALIKE (대소문자 무관)
+    - 기간: ~2026-05-31 23:59:59 KST
+    - 구성: GAEHWALIKE benefit 풀 중 3종 무작위 발급 (중복 없음)
+    - 사용자당 1회만 발급
+    """
+    if (coupon_code or "").strip().upper() != GAEHWALIKE_COUPON_CODE:
+        raise ValidationError("invalid coupon code")
+
+    now = timezone.now()
+    if now > GAEHWALIKE_EVENT_COUPON_EXPIRES_AT:
+        raise ValidationError("expired")
+
+    alias = router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code="GAEHWALIKE")
+        camp = Campaign.objects.using(alias).get(code=GAEHWALIKE_CAMPAIGN_CODE, active=True)
+    except (CouponType.DoesNotExist, Campaign.DoesNotExist):
+        raise ValidationError("event not configured")
+
+    issue_key_prefix = f"GAEHWALIKE:{user.id}:"
+    existing_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key__startswith=issue_key_prefix,
+    )
+    if existing_qs.exists():
+        return {
+            "coupons": list(existing_qs.order_by("issued_at", "id")),
+            "total_issued": existing_qs.count(),
+            "already_issued": True,
+        }
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("event not configured")
+
+    sample_size = min(GAEHWALIKE_COUPON_COUNT, len(benefits))
+    selected_benefits = random.sample(benefits, sample_size)
+
+    issued_coupons: list[Coupon] = []
+    for benefit in selected_benefits:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{issue_key_prefix}{restaurant_id}:{sort_order}"
+
+        benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, benefit=benefit, db_alias=alias)
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": GAEHWALIKE_SUBTITLE,
+                "subtitle": GAEHWALIKE_SUBTITLE,
+            }
+
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        issued_coupons.append(coupon)
+
+    return {
+        "coupons": issued_coupons,
+        "total_issued": len(issued_coupons),
+        "already_issued": False,
+    }
+
+
+@transaction.atomic
 def redeem_coupon(user: User, coupon_code: str, restaurant_id: int, pin: str):
     alias = router.db_for_write(Coupon)
     coupon = locked_get(Coupon.objects, using_alias=alias, code=coupon_code, user=user)
@@ -2705,6 +2800,7 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
     # ---------------------------------------------------------------------
     # 중간고사 캠페인 쿠폰코드(추천코드 입력 UI 재사용)
     # - STUDYLIKE: 기획전 랜덤 3종
+    # - GAEHWALIKE: 성년의날 랜덤 3종
     # - 날짜별/챌린지 코드: CSV 기반 코드 → 발급 (claim_midterm_daily_code_coupon)
     #
     # 기존 앱 플로우에서 추천코드 입력 UI(`/coupons/referrals/accept/`)를 재사용하고 있어
@@ -2724,6 +2820,25 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                 referee=referee,
                 code_used=ref_code,
                 campaign_code=MIDTERM_STUDYLIKE_CAMPAIGN_CODE,
+                status="QUALIFIED",
+                qualified_at=timezone.now(),
+            )
+        return referral, result["coupons"]
+
+    if ref_code == GAEHWALIKE_COUPON_CODE:
+        result = claim_gaehwalike_coupon(referee, ref_code)
+        if result.get("already_issued"):
+            raise ValidationError(
+                "이미 GAEHWALIKE 쿠폰을 발급받았습니다.",
+                code="gaehwalike_already_issued",
+            )
+        with transaction.atomic(using=db_alias):
+            base_qs = Referral.objects.using(db_alias)
+            referral = base_qs.create(
+                referrer=referee,
+                referee=referee,
+                code_used=ref_code,
+                campaign_code=GAEHWALIKE_CAMPAIGN_CODE,
                 status="QUALIFIED",
                 qualified_at=timezone.now(),
             )

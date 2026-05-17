@@ -29,6 +29,7 @@ from ..service import (
     claim_final_exam_coupon,
     claim_midterm_studylike_coupon,
     claim_midterm_daily_code_coupon,
+    claim_gaehwalike_coupon,
     issue_app_open_coupon,
     delete_expired_coupons_for_user,
 )
@@ -243,6 +244,7 @@ class AcceptReferralView(APIView):
                     "medium_rare_code_already_used",
                         "midterm_studylike_already_issued",
                         "midterm_daily_code_already_issued",
+                        "gaehwalike_already_issued",
                 )
                 else status.HTTP_400_BAD_REQUEST
             )
@@ -507,6 +509,47 @@ class ClaimMidtermDailyCodeCouponView(APIView):
 
         try:
             result = claim_midterm_daily_code_coupon(request.user, coupon_code)
+            if result.get("already_issued"):
+                return Response({"detail": "이미 발급받은 쿠폰입니다."}, status=409)
+            payload = {
+                "ok": True,
+                "total_issued": result["total_issued"],
+                "coupon_codes": [c.code for c in result["coupons"]],
+                "issued_coupons": format_issued_coupons(result["coupons"]),
+            }
+            return Response(payload, status=201)
+        except DjangoValidationError as e:
+            msg = str(e)
+            if "invalid coupon code" in msg.lower():
+                return Response({"detail": "유효하지 않은 쿠폰 코드입니다."}, status=400)
+            if "expired" in msg.lower():
+                return Response({"detail": "이벤트 기간이 종료되었습니다."}, status=410)
+            if "event not configured" in msg.lower():
+                return Response(
+                    {"detail": "이벤트 설정이 아직 반영되지 않았습니다. 잠시 후 다시 시도해주세요."},
+                    status=503,
+                )
+            if "이미 발급받은" in msg or "already" in msg.lower():
+                return Response({"detail": msg}, status=409)
+            return Response({"detail": msg}, status=400)
+        except Exception as e:
+            if request.query_params.get("_diag") == "1":
+                import traceback
+                return Response({"detail": "internal error", "error": str(e), "trace": traceback.format_exc().splitlines()[-5:]}, status=500)
+            return Response({"detail": "internal error"}, status=500)
+
+
+class ClaimGaehwalikeCouponView(APIView):
+    authentication_classes = [JWTAuthentication]
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        coupon_code = request.data.get("coupon_code")
+        if not coupon_code:
+            return Response({"detail": "coupon_code required"}, status=400)
+
+        try:
+            result = claim_gaehwalike_coupon(request.user, coupon_code)
             if result.get("already_issued"):
                 return Response({"detail": "이미 발급받은 쿠폰입니다."}, status=409)
             payload = {
