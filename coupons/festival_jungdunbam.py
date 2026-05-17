@@ -22,6 +22,9 @@ STAMP_DISABLED_NOTES = (
     "오늘 하루만 운영되는 페이지입니다."
 )
 STAMP_DISABLED_RESTAURANT_IDS = frozenset({RESTAURANT_ID})
+# 앱 식당 탭·제휴 목록 비노출 (쿠폰 발급·PIN·쿠폰함 사용은 유지)
+IS_AFFILIATE_IN_APP = False
+RESTAURANT_IDS_HIDDEN_FROM_APP = frozenset({RESTAURANT_ID})
 CATEGORY = "주점"
 ZONE = "주막"
 ADDRESS = "경북대학교 대구캠퍼스 80주년 축제 주막"
@@ -78,6 +81,15 @@ def _kst_aware(dt: datetime):
         from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
 
     return dt.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+
+
+def restaurant_list_hidden_sql() -> tuple[str, list[int]]:
+    """식당 목록 API용 NOT IN 절 (파라미터 바인딩)."""
+    ids = sorted(RESTAURANT_IDS_HIDDEN_FROM_APP)
+    if not ids:
+        return "", []
+    placeholders = ", ".join(["%s"] * len(ids))
+    return f" AND restaurant_id NOT IN ({placeholders})", ids
 
 
 def resolve_cloudsql_alias() -> str:
@@ -205,7 +217,7 @@ def upsert_affiliate_row(*, alias: str, pin: str, now) -> None:
             UPDATE restaurants_affiliate
             SET
               name = %s,
-              is_affiliate = TRUE,
+              is_affiliate = %s,
               description = %s,
               address = %s,
               category = %s,
@@ -218,6 +230,7 @@ def upsert_affiliate_row(*, alias: str, pin: str, now) -> None:
         """
         params = [
             RESTAURANT_NAME,
+            IS_AFFILIATE_IN_APP,
             DESCRIPTION,
             ADDRESS,
             CATEGORY,
@@ -232,11 +245,12 @@ def upsert_affiliate_row(*, alias: str, pin: str, now) -> None:
               restaurant_id, name, is_affiliate, description, address,
               category, zone, phone_number, url, s3_image_urls,
               pin_secret, pin_updated_at
-            ) VALUES (%s, %s, TRUE, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, NULL, NULL, %s, %s, %s)
         """
         params = [
             RESTAURANT_ID,
             RESTAURANT_NAME,
+            IS_AFFILIATE_IN_APP,
             DESCRIPTION,
             ADDRESS,
             CATEGORY,
@@ -276,7 +290,7 @@ def ensure_jungdunbam_festival_data(*, db_alias: str | None = None) -> str:
         restaurant_id=RESTAURANT_ID,
         defaults={
             "name": RESTAURANT_NAME,
-            "is_affiliate": True,
+            "is_affiliate": IS_AFFILIATE_IN_APP,
             "description": DESCRIPTION,
             "address": ADDRESS,
             "category": CATEGORY,
