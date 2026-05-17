@@ -90,12 +90,20 @@ def get_festival_promotions_for_app() -> list[dict]:
 
 
 def build_stamp_disabled_api_payload(*, updated_at=None) -> dict:
+    """
+    스탬프 미사용 식당용 API 페이로드.
+
+    target/current 를 null 로 두어 프론트의 `target || 10` 레거시 폴백을 막고,
+    legacy_stamp_defaults=false 로 5·10개 기본 혜택 문구를 쓰지 않도록 한다.
+    """
     return {
-        "current": 0,
-        "target": 0,
+        "current": None,
+        "target": None,
         "rewards": [],
         "notes": STAMP_DISABLED_NOTES,
         "stamp_enabled": False,
+        "legacy_stamp_defaults": False,
+        "show_stamp_card": False,
         "promotions": get_festival_promotions_for_app(),
         "updated_at": updated_at,
     }

@@ -24,6 +24,7 @@ from coupons.service import (
     MIDTERM_DAILY_CODE_START_AT,
     _issue_jungdunbam_festival_wed,
     get_stamp_status,
+    get_stamp_rewards_for_restaurant,
     JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
     JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE,
     JUNGDUNBAM_FESTIVAL_WED_CAMPAIGN_CODE,
@@ -752,8 +753,26 @@ class JungdunbamFestivalWedTests(TestCase):
 
         data = get_stamp_status(self.user, JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
         self.assertFalse(data["stamp_enabled"])
+        self.assertFalse(data["legacy_stamp_defaults"])
+        self.assertFalse(data["show_stamp_card"])
         self.assertEqual(data["rewards"], [])
-        self.assertEqual(data["target"], 0)
+        self.assertIsNone(data["target"])
+        self.assertIsNone(data["current"])
         self.assertIn("스탬프", data["notes"])
         self.assertEqual(len(data["promotions"]), 1)
         self.assertEqual(data["promotions"][0]["title"], "음료수 1개")
+
+    def test_stamp_rewards_empty_even_with_legacy_rule_in_db(self):
+        StampRewardRule.objects.create(
+            restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+            rule_type="THRESHOLD",
+            config_json={
+                "thresholds": [
+                    {"stamps": 5, "coupon_type_code": "STAMP_REWARD_5"},
+                ],
+                "cycle_target": 10,
+            },
+            active=True,
+        )
+        rewards = get_stamp_rewards_for_restaurant(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
+        self.assertEqual(rewards, [])

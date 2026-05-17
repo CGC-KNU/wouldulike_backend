@@ -367,6 +367,14 @@ class AddStampView(APIView):
                     },
                     status=400,
                 )
+            if code == "stamp_disabled" or "stamp accumulation is not available" in msg:
+                return Response(
+                    {
+                        "detail": "이 주막은 스탬프 적립·보상이 없습니다.",
+                        "code": "stamp_disabled",
+                    },
+                    status=400,
+                )
             return Response(
                 {
                     "detail": "스탬프 적립에 실패했어요. 잠시 후 다시 시도해 주세요.",
