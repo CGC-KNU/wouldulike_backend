@@ -31,8 +31,12 @@ def _resolve_use_cloudsql_unified() -> bool:
         return True
     if flag == "0":
         return False
-  # 미설정: CloudSQL + 구 RDS default 조합이면 자동 통합
-    if cloudsql_host and "rds.amazonaws.com" in default_host:
+  # 미설정: CloudSQL 사용 시 통합 (구 RDS default / 동일 호스트 / default 미설정)
+    if not cloudsql_host:
+        return False
+    if not default_host or default_host == cloudsql_host:
+        return True
+    if "rds.amazonaws.com" in default_host:
         return True
     return False
 
