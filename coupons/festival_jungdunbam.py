@@ -22,9 +22,8 @@ STAMP_DISABLED_NOTES = (
     "오늘 하루만 운영되는 페이지입니다."
 )
 STAMP_DISABLED_RESTAURANT_IDS = frozenset({RESTAURANT_ID})
-# 앱 식당 탭·제휴 목록 비노출 (쿠폰 발급·PIN·쿠폰함 사용은 유지)
+# 앱 제휴 목록 비노출 (쿠폰 발급·PIN·쿠폰함 사용은 유지)
 IS_AFFILIATE_IN_APP = False
-RESTAURANT_IDS_HIDDEN_FROM_APP = frozenset({RESTAURANT_ID})
 CATEGORY = "주점"
 ZONE = "주막"
 ADDRESS = "경북대학교 대구캠퍼스 80주년 축제 주막"
@@ -81,15 +80,6 @@ def _kst_aware(dt: datetime):
         from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
 
     return dt.replace(tzinfo=ZoneInfo("Asia/Seoul"))
-
-
-def restaurant_list_hidden_sql() -> tuple[str, list[int]]:
-    """식당 목록 API용 NOT IN 절 (파라미터 바인딩)."""
-    ids = sorted(RESTAURANT_IDS_HIDDEN_FROM_APP)
-    if not ids:
-        return "", []
-    placeholders = ", ".join(["%s"] * len(ids))
-    return f" AND restaurant_id NOT IN ({placeholders})", ids
 
 
 def resolve_cloudsql_alias() -> str:

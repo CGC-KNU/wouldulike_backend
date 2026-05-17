@@ -11,16 +11,12 @@ import random
 import logging
 
 from coupons.service import get_active_affiliate_restaurant_ids_for_user
-from coupons.festival_jungdunbam import (
-    RESTAURANT_IDS_HIDDEN_FROM_APP,
-    restaurant_list_hidden_sql,
-)
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # 진행 식당 수가 적을 때 전체 제휴 목록을 돌려주는 분기에서 동일 쿼리 반복을 줄이기 위한 캐시
-_AFFILIATE_ALL_ROWS_CACHE_KEY = "restaurants:active_affiliate_all_rows_v2"
+_AFFILIATE_ALL_ROWS_CACHE_KEY = "restaurants:active_affiliate_all_rows_v1"
 _AFFILIATE_ALL_ROWS_CACHE_TTL = 120
 
 
@@ -342,9 +338,6 @@ def get_restaurant_tab_list(request):
         where_keyword = " AND name ILIKE %s"
         params.append(f"%{q}%")
 
-    hidden_clause, hidden_params = restaurant_list_hidden_sql()
-    list_params = [*params, *hidden_params]
-
     try:
         affiliate_restaurants = []
         general_restaurants = []
@@ -367,10 +360,9 @@ def get_restaurant_tab_list(request):
                     FROM restaurants_affiliate
                     WHERE is_affiliate = TRUE
                     {where_keyword}
-                    {hidden_clause}
                     ORDER BY restaurant_id
                     """,
-                    list_params,
+                    params,
                 )
                 affiliate_rows = cursor.fetchall()
                 affiliate_restaurants = [
@@ -383,13 +375,12 @@ def get_restaurant_tab_list(request):
                 FROM restaurants_affiliate
                 WHERE (is_affiliate = FALSE OR is_affiliate IS NULL)
                 {where_keyword}
-                {hidden_clause}
                 """,
-                list_params,
+                params,
             )
             total_general_count = cursor.fetchone()[0]
 
-            general_query_params = [*list_params, limit, offset]
+            general_query_params = [*params, limit, offset]
             cursor.execute(
                 f"""
                 SELECT
@@ -405,7 +396,6 @@ def get_restaurant_tab_list(request):
                 FROM restaurants_affiliate
                 WHERE (is_affiliate = FALSE OR is_affiliate IS NULL)
                 {where_keyword}
-                {hidden_clause}
                 ORDER BY restaurant_id
                 LIMIT %s OFFSET %s
                 """,
@@ -447,11 +437,10 @@ def get_restaurant_tab_list(request):
 @require_http_methods(["GET"])
 def get_affiliate_restaurants(request):
     """Return all affiliate restaurants with key details."""
-    hidden_clause, hidden_params = restaurant_list_hidden_sql()
     try:
         with connections['cloudsql'].cursor() as cursor:
             cursor.execute(
-                f"""
+                """
                 SELECT
                     restaurant_id,
                     name,
@@ -464,9 +453,7 @@ def get_affiliate_restaurants(request):
                     s3_image_urls
                 FROM restaurants_affiliate
                 WHERE is_affiliate = TRUE
-                {hidden_clause}
-                """,
-                hidden_params,
+                """
             )
             rows = cursor.fetchall()
 
@@ -504,13 +491,8 @@ def get_active_affiliate_restaurants(request):
     if error_response:
         return error_response
 
-    hidden_clause, hidden_params = restaurant_list_hidden_sql()
     try:
-        restaurant_ids = [
-            rid
-            for rid in get_active_affiliate_restaurant_ids_for_user(user)
-            if rid not in RESTAURANT_IDS_HIDDEN_FROM_APP
-        ]
+        restaurant_ids = get_active_affiliate_restaurant_ids_for_user(user)
         if len(restaurant_ids) <= 2:
             source = "all"
             rows = cache.get(_AFFILIATE_ALL_ROWS_CACHE_KEY)
@@ -530,9 +512,7 @@ def get_active_affiliate_restaurants(request):
                             s3_image_urls
                         FROM restaurants_affiliate
                         WHERE is_affiliate = TRUE
-                        {hidden_clause}
-                        """,
-                        hidden_params,
+                        """
                     )
                     rows = cursor.fetchall()
                 cache.set(
