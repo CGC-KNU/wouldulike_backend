@@ -157,8 +157,8 @@ cloudsql_db_password=your_db_password
 cloudsql_db_host=your_cloudsql_host
 cloudsql_db_port=5432
 
-# RDS 제거 후 CloudSQL만 사용할 때 필수 (default/rds/cloudsql alias 모두 cloudsql_* 사용)
-DJANGO_USE_CLOUDSQL_UNIFIED=1
+# 단일 DB에 accounts+coupons+restaurants 가 모두 있을 때만 1 (DB 이름이 다르면 0)
+# DJANGO_USE_CLOUDSQL_UNIFIED=1
 
 # 레거시 분리 DB (UNIFIED=0 일 때만)
 # default_db_*  — 구 AWS RDS (사용자)
@@ -262,15 +262,11 @@ OPERATIONS_ADMIN_RESET_PASSWORDS=0
 ### 데이터베이스 라우터
 - `TypeDescriptionRouter`: UNIFIED 모드에서는 모든 앱을 `default`(CloudSQL)로 라우팅
 
-### 마이그레이션
+### 마이그레이션 (Koyeb release 와 동일)
 ```bash
-# CloudSQL 통합 운영
-DJANGO_USE_CLOUDSQL_UNIFIED=1 python manage.py migrate
-
-# 레거시 분리 DB
+# default=계정 DB, cloudsql=쿠폰·식당 DB (호스트가 같아도 DB 이름이 다를 수 있음)
 python manage.py migrate
 python manage.py migrate --database=cloudsql
-python manage.py migrate --database=rds
 ```
 
 ### 로컬 개발

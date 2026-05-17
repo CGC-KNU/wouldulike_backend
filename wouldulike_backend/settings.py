@@ -19,25 +19,24 @@ DISABLE_EXTERNAL_DBS = os.getenv("DJANGO_DISABLE_EXTERNAL_DBS", "0") == "1"
 
 def _resolve_use_cloudsql_unified() -> bool:
     """
-    RDS → CloudSQL 이전 후 default_db_host 가 구 RDS를 가리키는 경우가 많아,
-    cloudsql_db_host 가 설정돼 있으면 자동으로 통합 모드를 켠다.
-  - DJANGO_USE_CLOUDSQL_UNIFIED=1|0 으로 명시적 override 가능
+    단일 CloudSQL DB에 accounts·coupons·restaurants 가 모두 있을 때만 1 로 켭니다.
+    호스트만 같고 DB 이름(default_db_name / cloudsql_db_name)이 다르면 통합하면 안 됩니다.
+    (통합 시 default 가 cloudsql_db_* 로 덮어써져 accounts_user 가 없는 DB를 보게 됨)
     """
     flag = (os.getenv("DJANGO_USE_CLOUDSQL_UNIFIED") or "").strip()
-    cloudsql_host = (os.getenv("cloudsql_db_host") or "").strip()
-    default_host = (os.getenv("default_db_host") or "").strip()
-
     if flag == "1":
+        default_name = (os.getenv("default_db_name") or "").strip()
+        cloudsql_name = (os.getenv("cloudsql_db_name") or "").strip()
+        if default_name and cloudsql_name and default_name != cloudsql_name:
+            raise ImproperlyConfigured(
+                "DJANGO_USE_CLOUDSQL_UNIFIED=1 이지만 default_db_name 과 cloudsql_db_name 이 "
+                f"다릅니다 ({default_name!r} vs {cloudsql_name!r}). "
+                "분리 DB면 DJANGO_USE_CLOUDSQL_UNIFIED=0 으로 두세요."
+            )
         return True
     if flag == "0":
         return False
-  # 미설정: CloudSQL 사용 시 통합 (구 RDS default / 동일 호스트 / default 미설정)
-    if not cloudsql_host:
-        return False
-    if not default_host or default_host == cloudsql_host:
-        return True
-    if "rds.amazonaws.com" in default_host:
-        return True
+    # 미설정: 자동 통합 비활성 (명시적으로 1 을 줄 때만 통합)
     return False
 
 
