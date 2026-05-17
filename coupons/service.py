@@ -1029,10 +1029,12 @@ def _issue_jungdunbam_festival_wed(user: User, *, db_alias: str | None = None) -
     benefit_snapshot = _build_benefit_snapshot(
         ct, restaurant_id, benefit=benefit, db_alias=alias
     )
+    from coupons.festival_jungdunbam import BENEFIT_SUBTITLE
+
     if benefit_snapshot:
         benefit_snapshot = {
             **benefit_snapshot,
-            "subtitle": "[🎪 축제 주막 쿠폰 🎪]",
+            "subtitle": BENEFIT_SUBTITLE,
         }
 
     try:

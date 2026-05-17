@@ -697,7 +697,7 @@ class JungdunbamFestivalWedTests(TestCase):
             sort_order=0,
             defaults={
                 "title": "음료수 1개",
-                "subtitle": "[🎪 축제 주막 쿠폰 🎪]",
+                "subtitle": "[경북대 80주년 축제 🎉]",
                 "benefit_json": {"type": "fixed", "value": 0},
                 "active": True,
             },
