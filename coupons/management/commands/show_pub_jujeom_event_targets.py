@@ -18,6 +18,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         alias = router.db_for_read(AffiliateRestaurant)
+        coupon_alias = router.db_for_read(CouponType)
         target_ids = sorted(_get_jujeom_restaurant_ids(db_alias=alias))
         name_map = {
             r["restaurant_id"]: r
@@ -55,15 +56,25 @@ class Command(BaseCommand):
                 f"(category={row.get('category') or '-'}, pub_option={row.get('pub_option') or '-'})"
             )
 
+        self.stdout.write(f"\n쿠폰 DB alias: {coupon_alias!r} (제휴식당: {alias!r})\n")
+
         try:
-            ct = CouponType.objects.get(code=PUB_JUJEOM_EVENT_COUPON_TYPE_CODE)
+            ct = CouponType.objects.using(coupon_alias).get(
+                code=PUB_JUJEOM_EVENT_COUPON_TYPE_CODE
+            )
         except CouponType.DoesNotExist:
-            self.stdout.write(self.style.WARNING("\nCouponType PUB_JUJEOM_EVENT 없음 (마이그레이션 필요)"))
+            self.stdout.write(
+                self.style.WARNING(
+                    "\nCouponType PUB_JUJEOM_EVENT 없음 — 아래 중 하나 실행:\n"
+                    "  python manage.py migrate coupons 0066\n"
+                    "  python manage.py ensure_pub_jujeom_event\n"
+                )
+            )
             return
 
-        excluded = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+        excluded = _get_excluded_restaurant_ids(ct.code, db_alias=coupon_alias)
         benefit_ids = sorted(
-            RestaurantCouponBenefit.objects.filter(
+            RestaurantCouponBenefit.objects.using(coupon_alias).filter(
                 coupon_type=ct,
                 active=True,
                 restaurant_id__in=target_ids,
