@@ -83,6 +83,17 @@ MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE = os.getenv(
     "MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE",
     "MIDTERM_EVENT_APP_OPEN",
 )
+# 경북대 80주년 축제 주막(우주라이크 X 정든밤): 수요일 앱 접속 시 음료 쿠폰 1장 (APP_OPEN_WED 와 별도)
+JUNGDUNBAM_FESTIVAL_RESTAURANT_ID = int(
+    os.getenv("JUNGDUNBAM_FESTIVAL_RESTAURANT_ID", "298")
+)
+JUNGDUNBAM_FESTIVAL_WED_ENABLED = os.getenv("JUNGDUNBAM_FESTIVAL_WED_ENABLED", "1") in (
+    "1",
+    "true",
+    "True",
+)
+JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE = "JUNGDUNBAM_FESTIVAL_WED"
+JUNGDUNBAM_FESTIVAL_WED_CAMPAIGN_CODE = "JUNGDUNBAM_FESTIVAL_WED_EVENT"
 # 지정된 쿠폰 타입 코드들에 한해, 앱접속 발급 시 식당당 benefit 1개만 발급
 APP_OPEN_SINGLE_BENEFIT_PER_RESTAURANT_CODES = {
     code.strip()
@@ -228,7 +239,8 @@ MAX_COUPONS_PER_RESTAURANT = 200
 # 30: 고니식탁, 147: 포차1번지먹새통, 65: 팀스 쿠치나 (쿠폰 발급 제외, 제휴는 유지)
 # 148(Better), 284(와비사비)는 제휴 아님 → AffiliateRestaurant에 없음
 # RESTAURANTS_EXCLUDED_FROM_ALL: 모든 쿠폰 발급에서 제외 (팀스 쿠치나 등)
-RESTAURANTS_EXCLUDED_FROM_ALL: set[int] = {65}
+# 298: 우주라이크 X 정든밤 축제 주막 — JUNGDUNBAM_FESTIVAL_WED 전용 발급만 허용
+RESTAURANTS_EXCLUDED_FROM_ALL: set[int] = {65, 298}
 # RESTAURANTS_EXCLUDED_FROM_NON_STAMP: 스탬프 적립 보상 쿠폰 제외, 그 외 모든 쿠폰 발급에서 제외 (고니식탁 등)
 RESTAURANTS_EXCLUDED_FROM_NON_STAMP: set[int] = {30}
 COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
@@ -728,9 +740,8 @@ def _issue_coupons_for_single_restaurant(
 ) -> list:
     """
     한 식당만 선정하여 해당 식당에 대해 쿠폰을 발급한다.
-    - 신규가입(WELCOME_3000), 친구초대 추천인(REFERRAL_BONUS_REFERRER): 식당당 benefit 첫 행 1장.
-    - 친구초대 피추천인(REFERRAL_BONUS_REFEREE): 해당 식당에 활성 benefit이 여러 줄이면
-      그중 무작위 1줄만 골라 1장 발급(한 번의 보상에 4종이 동시에 나가지 않음).
+    - 신규가입/친구초대(추천인/피추천인) 모두: 해당 식당의 활성 benefit 여러 줄 중
+      무작위 1줄만 골라 1장 발급(한 번의 보상에 4종이 동시에 나가지 않음).
     """
     alias = db_alias or router.db_for_write(Coupon)
     restaurant_id = _select_restaurant_for_coupon(coupon_type, db_alias=alias)
@@ -742,13 +753,10 @@ def _issue_coupons_for_single_restaurant(
         .filter(coupon_type=coupon_type, restaurant_id=restaurant_id, active=True)
         .order_by("sort_order", "id")
     )
-    if coupon_type.code == "REFERRAL_BONUS_REFEREE":
-        pool = list(benefit_qs)
-        if not pool:
-            return issued
-        benefits = [random.choice(pool)]
-    else:
-        benefits = list(benefit_qs[:1])
+    pool = list(benefit_qs)
+    if not pool:
+        return issued
+    benefits = [random.choice(pool)]
     if not benefits:
         return issued
 
@@ -778,6 +786,10 @@ def _issue_coupons_for_single_restaurant(
                 db_alias=alias,
                 issue_type_label=issue_type_label,
             )
+            # 발급 경로(신규가입/친구초대 등)를 쿠폰 카드에 명확히 표시하기 위해
+            # RestaurantCouponBenefit.subtitle과 무관하게 발급 시점에 subtitle을 덮어쓴다.
+            if issue_type_label:
+                benefit_snapshot["subtitle"] = issue_type_label
             coupon = Coupon.objects.using(alias).create(
                 code=make_coupon_code(),
                 user=user,
@@ -819,7 +831,7 @@ def issue_signup_coupon(user: User):
         campaign=camp,
         issue_key_prefix=f"SIGNUP:{user.id}",
         db_alias=alias,
-        issue_type_label="신규가입 쿠폰",
+        issue_type_label="신규가입",
     )
 
 
@@ -901,6 +913,102 @@ def _issue_app_open_mon_wed(user: User, *, db_alias: str | None = None):
         ct, restaurant_id, benefit=benefit, db_alias=alias
     )
     # 한국 시간 기준 만료일 계산 (3일 후 23:59 KST)
+    try:
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=_resolve_expires_at_for_issue(
+                ct, campaign=camp, issued_at=kst
+            ),
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        return [coupon]
+    except IntegrityError:
+        dup = (
+            Coupon.objects.using(alias)
+            .filter(user=user, coupon_type=ct, campaign=camp, issue_key=issue_key)
+            .first()
+        )
+        return [dup] if dup else []
+
+
+def _issue_jungdunbam_festival_wed(user: User, *, db_alias: str | None = None) -> list:
+    """
+    수요일(KST) 앱 접속 시 축제 주막(우주라이크 X 정든밤) 음료 쿠폰 1장 발급.
+    APP_OPEN_WED(술집 랜덤 1장)과 별도이며, RESTAURANTS_EXCLUDED_FROM_ALL 우회해 고정 식당에 발급.
+    """
+    if not JUNGDUNBAM_FESTIVAL_WED_ENABLED:
+        return []
+
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
+    alias = db_alias or router.db_for_write(Coupon)
+    kst = timezone.now().astimezone(ZoneInfo("Asia/Seoul"))
+    if kst.weekday() != 2:
+        return []
+
+    ct_code = JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE
+    camp_code = JUNGDUNBAM_FESTIVAL_WED_CAMPAIGN_CODE
+    restaurant_id = JUNGDUNBAM_FESTIVAL_RESTAURANT_ID
+
+    try:
+        ct = CouponType.objects.using(alias).get(code=ct_code)
+        camp = Campaign.objects.using(alias).get(code=camp_code, active=True)
+    except (CouponType.DoesNotExist, Campaign.DoesNotExist):
+        logger.warning(
+            "jungdunbam festival wed: CouponType %s or Campaign %s not found",
+            ct_code,
+            camp_code,
+        )
+        return []
+
+    now = timezone.now()
+    if camp.start_at and now < camp.start_at:
+        return []
+    if camp.end_at and now > camp.end_at:
+        return []
+
+    date_str = kst.strftime("%Y%m%d")
+    issue_key = f"{ct_code}:{user.id}:{date_str}"
+
+    existing = (
+        Coupon.objects.using(alias)
+        .filter(user=user, coupon_type=ct, campaign=camp, issue_key=issue_key)
+        .first()
+    )
+    if existing:
+        return [existing]
+
+    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
+    benefit = (
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, restaurant_id=restaurant_id, active=True)
+        .order_by("sort_order")
+        .first()
+    )
+    if not benefit:
+        logger.warning(
+            "jungdunbam festival wed: no active benefit (restaurant_id=%s)",
+            restaurant_id,
+        )
+        return []
+
+    benefit_snapshot = _build_benefit_snapshot(
+        ct, restaurant_id, benefit=benefit, db_alias=alias
+    )
+    if benefit_snapshot:
+        benefit_snapshot = {
+            **benefit_snapshot,
+            "subtitle": "[🎪 축제 주막 쿠폰 🎪]",
+        }
+
     try:
         coupon = Coupon.objects.using(alias).create(
             code=make_coupon_code(),
@@ -1334,8 +1442,8 @@ def _issue_midterm_event_app_open(user: User, *, db_alias: str | None = None) ->
 def issue_app_open_coupon(user: User):
     """
     앱 접속(로그인/토큰 갱신 등) 시점에 발급되는 쿠폰.
-    APP_OPEN_LEGACY_ENABLED / APP_OPEN_MON_WED_ENABLED / DATE_EVENT_APP_OPEN_ENABLED / MIDTERM_EVENT_APP_OPEN_ENABLED
-    로 각각 온오프 가능.
+    APP_OPEN_LEGACY_ENABLED / APP_OPEN_MON_WED_ENABLED / JUNGDUNBAM_FESTIVAL_WED_ENABLED /
+    DATE_EVENT_APP_OPEN_ENABLED / MIDTERM_EVENT_APP_OPEN_ENABLED 로 각각 온오프 가능.
     """
     issued: list[Coupon] = []
     alias = router.db_for_write(Coupon)
@@ -1351,6 +1459,9 @@ def issue_app_open_coupon(user: User):
 
     if APP_OPEN_MON_WED_ENABLED:
         issued.extend(_issue_app_open_mon_wed(user, db_alias=alias))
+
+    if JUNGDUNBAM_FESTIVAL_WED_ENABLED:
+        issued.extend(_issue_jungdunbam_festival_wed(user, db_alias=alias))
 
     return issued
 
@@ -3374,6 +3485,7 @@ def _qualify_pending_referrals_locked(
                     campaign=ref_camp,
                     issue_key_prefix=f"REFERRAL_REFERRER:{ref.referrer_id}:{referee.id}",
                     db_alias=db_alias,
+                    issue_type_label="친구초대",
                 )
                 issued_coupons.extend(ref_coupons)
 
@@ -3383,6 +3495,7 @@ def _qualify_pending_referrals_locked(
                 campaign=ref_camp,
                 issue_key_prefix=f"REFERRAL_REFEREE:{referee.id}",
                 db_alias=db_alias,
+                issue_type_label="친구초대",
             )
             issued_coupons.extend(referee_coupons)
             results.append(ref)

@@ -150,28 +150,21 @@ gunicorn wouldulike_backend.wsgi:application --bind 0.0.0.0:8000
 
 ### 데이터베이스
 ```env
-# 기본 데이터베이스 (사용자 데이터)
-default_db_name=your_db_name
-default_db_user=your_db_user
-default_db_password=your_db_password
-default_db_host=your_db_host
-default_db_port=5432
-
-# RDS 데이터베이스 (유형 데이터)
-rds_db_name=your_rds_db_name
-rds_db_user=your_rds_db_user
-rds_db_password=your_rds_password
-rds_db_host=your_rds_host
-rds_db_port=5432
-
-# CloudSQL 데이터베이스
-cloudsql_db_name=your_cloudsql_db_name
-cloudsql_db_user=your_cloudsql_db_user
-cloudsql_db_password=your_cloudsql_password
+# CloudSQL (운영 단일 DB — 계정·쿠폰·식당·유형 데이터 통합)
+cloudsql_db_name=your_db_name
+cloudsql_db_user=your_db_user
+cloudsql_db_password=your_db_password
 cloudsql_db_host=your_cloudsql_host
 cloudsql_db_port=5432
 
-# 로컬 SQLite 사용 (개발용)
+# RDS 제거 후 CloudSQL만 사용할 때 필수 (default/rds/cloudsql alias 모두 cloudsql_* 사용)
+DJANGO_USE_CLOUDSQL_UNIFIED=1
+
+# 레거시 분리 DB (UNIFIED=0 일 때만)
+# default_db_*  — 구 AWS RDS (사용자)
+# rds_db_*      — 구 AWS RDS (유형)
+
+# 로컬 SQLite 사용 (CloudSQL 없이 마이그레이션·테스트만)
 DJANGO_USE_LOCAL_SQLITE=0
 DJANGO_DISABLE_EXTERNAL_DBS=0
 ```
@@ -263,15 +256,25 @@ OPERATIONS_ADMIN_RESET_PASSWORDS=0
 ## 🗄 데이터베이스
 
 ### 데이터베이스 구조
-- **default**: 사용자 데이터, 쿠폰, 스탬프 등
-- **rds**: 유형 데이터
-- **cloudsql**: 레스토랑 정보 (읽기 전용)
+- **운영(권장)**: `DJANGO_USE_CLOUDSQL_UNIFIED=1` — CloudSQL 단일 DB에 전체 데이터
+- **레거시**: `default`(사용자) + `cloudsql`(쿠폰·식당) + `rds`(유형) 분리
 
 ### 데이터베이스 라우터
-- `TypeDescriptionRouter`: 타입 설명 관련 모델을 RDS로 라우팅
+- `TypeDescriptionRouter`: UNIFIED 모드에서는 모든 앱을 `default`(CloudSQL)로 라우팅
+
+### 마이그레이션
+```bash
+# CloudSQL 통합 운영
+DJANGO_USE_CLOUDSQL_UNIFIED=1 python manage.py migrate
+
+# 레거시 분리 DB
+python manage.py migrate
+python manage.py migrate --database=cloudsql
+python manage.py migrate --database=rds
+```
 
 ### 로컬 개발
-로컬 개발 시 SQLite를 사용할 수 있습니다:
+CloudSQL에 접속할 수 없을 때만 SQLite:
 ```env
 DJANGO_USE_LOCAL_SQLITE=1
 ```

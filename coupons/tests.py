@@ -22,6 +22,11 @@ from coupons.service import (
     MIDTERM_EVENT_COUPON_EXPIRES_AT,
     claim_midterm_daily_code_coupon,
     MIDTERM_DAILY_CODE_START_AT,
+    _issue_jungdunbam_festival_wed,
+    JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+    JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE,
+    JUNGDUNBAM_FESTIVAL_WED_CAMPAIGN_CODE,
+    RESTAURANTS_EXCLUDED_FROM_ALL,
 )
 from coupons.api.serializers import CouponSerializer
 from coupons.models import RestaurantCouponBenefit
@@ -644,3 +649,85 @@ class MidtermDailyCodeCouponTests(TestCase):
             result2 = claim_midterm_daily_code_coupon(self.user, "BTLQWGH")
         self.assertTrue(result2["already_issued"])
         self.assertEqual(result2["total_issued"], 3)
+
+
+class JungdunbamFestivalWedTests(TestCase):
+    """축제 주막 수요일 전용 앱 접속 쿠폰."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(
+            post_save.connect, coupon_signals.on_user_created, sender=cls.user_model
+        )
+
+    def setUp(self):
+        self.user = self.user_model.objects.create_user(kakao_id=95001, password="pass")
+        self.ct, _ = CouponType.objects.update_or_create(
+            code=JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE,
+            defaults={
+                "title": "수요일 축제 주막 쿠폰",
+                "valid_days": 3,
+                "per_user_limit": 1,
+                "benefit_json": {"type": "fixed", "value": 0},
+            },
+        )
+        self.camp, _ = Campaign.objects.update_or_create(
+            code=JUNGDUNBAM_FESTIVAL_WED_CAMPAIGN_CODE,
+            defaults={
+                "name": "우주라이크 X 정든밤 축제 (수요일)",
+                "type": "FLASH",
+                "active": True,
+            },
+        )
+        RestaurantCouponBenefit.objects.update_or_create(
+            coupon_type=self.ct,
+            restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+            sort_order=0,
+            defaults={
+                "title": "음료수 1개",
+                "subtitle": "[🎪 축제 주막 쿠폰 🎪]",
+                "benefit_json": {"type": "fixed", "value": 0},
+                "active": True,
+            },
+        )
+
+    def test_excluded_from_all_standard_coupons(self):
+        self.assertIn(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID, RESTAURANTS_EXCLUDED_FROM_ALL)
+
+    def test_issues_on_wednesday_only(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        wed_kst = datetime(2026, 5, 20, 10, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        wed_utc = wed_kst.astimezone(ZoneInfo("UTC"))
+
+        with patch("coupons.service.timezone.now", return_value=wed_utc):
+            issued = _issue_jungdunbam_festival_wed(self.user)
+        self.assertEqual(len(issued), 1)
+        self.assertEqual(issued[0].restaurant_id, JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
+        self.assertEqual(issued[0].coupon_type.code, JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE)
+        self.assertEqual(
+            issued[0].benefit_snapshot.get("title"),
+            "음료수 1개",
+        )
+
+        thu_kst = datetime(2026, 5, 21, 10, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        thu_utc = thu_kst.astimezone(ZoneInfo("UTC"))
+        with patch("coupons.service.timezone.now", return_value=thu_utc):
+            self.assertEqual(_issue_jungdunbam_festival_wed(self.user), [])
+
+    def test_idempotent_same_wednesday(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        wed_utc = datetime(2026, 5, 20, 1, 0, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("coupons.service.timezone.now", return_value=wed_utc):
+            first = _issue_jungdunbam_festival_wed(self.user)
+            second = _issue_jungdunbam_festival_wed(self.user)
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(first[0].id, second[0].id)

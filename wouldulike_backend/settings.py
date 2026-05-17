@@ -17,6 +17,29 @@ USE_LOCAL_SQLITE = os.getenv("DJANGO_USE_LOCAL_SQLITE", "0") == "1"
 DISABLE_EXTERNAL_DBS = os.getenv("DJANGO_DISABLE_EXTERNAL_DBS", "0") == "1"
 
 
+def _resolve_use_cloudsql_unified() -> bool:
+    """
+    RDS → CloudSQL 이전 후 default_db_host 가 구 RDS를 가리키는 경우가 많아,
+    cloudsql_db_host 가 설정돼 있으면 자동으로 통합 모드를 켠다.
+  - DJANGO_USE_CLOUDSQL_UNIFIED=1|0 으로 명시적 override 가능
+    """
+    flag = (os.getenv("DJANGO_USE_CLOUDSQL_UNIFIED") or "").strip()
+    cloudsql_host = (os.getenv("cloudsql_db_host") or "").strip()
+    default_host = (os.getenv("default_db_host") or "").strip()
+
+    if flag == "1":
+        return True
+    if flag == "0":
+        return False
+  # 미설정: CloudSQL + 구 RDS default 조합이면 자동 통합
+    if cloudsql_host and "rds.amazonaws.com" in default_host:
+        return True
+    return False
+
+
+USE_CLOUDSQL_UNIFIED = _resolve_use_cloudsql_unified()
+
+
 secret_file = os.path.join(BASE_DIR, 'secrets.json')  # secrets.json 파일 위치를 명시
 
 with open(secret_file) as f:
@@ -137,40 +160,58 @@ TEMPLATES = [
 WSGI_APPLICATION = 'wouldulike_backend.wsgi.application'
 
 
-DATABASES = {
-    'default': {   
-        # 사용자 데이터베이스
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('default_db_name'),
-        'USER': os.getenv('default_db_user'),
-        'PASSWORD': os.getenv('default_db_password'),
-        'HOST': os.getenv('default_db_host'),
-        'PORT': os.getenv('default_db_port'),
-        'CONN_MAX_AGE': 90,
+_CLOUDSQL_DATABASE = {
+    "ENGINE": "django.db.backends.postgresql",
+    "NAME": os.getenv("cloudsql_db_name"),
+    "USER": os.getenv("cloudsql_db_user"),
+    "PASSWORD": os.getenv("cloudsql_db_password"),
+    "HOST": os.getenv("cloudsql_db_host"),
+    "PORT": os.getenv("cloudsql_db_port"),
+    "CONN_MAX_AGE": 90,
+    "OPTIONS": {
+        "options": "-c client_encoding=utf8",
     },
-    'rds': {
-        # 유형 데이터베이스
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('rds_db_name'),
-        'USER': os.getenv('rds_db_user'),
-        'PASSWORD': os.getenv('rds_db_password'),
-        'HOST': os.getenv('rds_db_host'),
-        'PORT': os.getenv('rds_db_port'),
-        'CONN_MAX_AGE': 90,
-        'OPTIONS': {
-            'options': '-c client_encoding=utf8',
+}
+
+DATABASES = {
+    "default": {
+        # 사용자·계정 데이터 (레거시: AWS RDS)
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("default_db_name"),
+        "USER": os.getenv("default_db_user"),
+        "PASSWORD": os.getenv("default_db_password"),
+        "HOST": os.getenv("default_db_host"),
+        "PORT": os.getenv("default_db_port"),
+        "CONN_MAX_AGE": 90,
+    },
+    "rds": {
+        # 유형 데이터 (레거시: AWS RDS, 라우터 호환용 alias)
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": os.getenv("rds_db_name"),
+        "USER": os.getenv("rds_db_user"),
+        "PASSWORD": os.getenv("rds_db_password"),
+        "HOST": os.getenv("rds_db_host"),
+        "PORT": os.getenv("rds_db_port"),
+        "CONN_MAX_AGE": 90,
+        "OPTIONS": {
+            "options": "-c client_encoding=utf8",
         },
     },
-    'cloudsql': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('cloudsql_db_name'),
-        'USER': os.getenv('cloudsql_db_user'),
-        'PASSWORD': os.getenv('cloudsql_db_password'),
-        'HOST': os.getenv('cloudsql_db_host'),
-        'PORT': os.getenv('cloudsql_db_port'),
-        'CONN_MAX_AGE': 90,
-    }
+    "cloudsql": _CLOUDSQL_DATABASE.copy(),
 }
+
+if USE_CLOUDSQL_UNIFIED:
+    if not (os.getenv("cloudsql_db_host") or "").strip():
+        raise ImproperlyConfigured(
+            "CloudSQL 통합 모드(DJANGO_USE_CLOUDSQL_UNIFIED 또는 자동 감지)가 켜져 있지만 "
+            "cloudsql_db_host 가 비어 있습니다. .env 에 cloudsql_db_* 를 설정하세요."
+        )
+    _unified = _CLOUDSQL_DATABASE.copy()
+    DATABASES = {
+        "default": _unified.copy(),
+        "cloudsql": _unified.copy(),
+        "rds": _unified.copy(),
+    }
 
 
 
