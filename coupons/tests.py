@@ -9,6 +9,7 @@ from django.db.models.signals import post_save
 from django.utils import timezone
 
 from coupons.models import Campaign, Coupon, CouponType, InviteCode, Referral
+from restaurants.models import AffiliateRestaurant
 from coupons.service import (
     accept_referral,
     issue_signup_coupon,
@@ -22,9 +23,13 @@ from coupons.service import (
     MIDTERM_EVENT_COUPON_EXPIRES_AT,
     claim_midterm_daily_code_coupon,
     claim_gaehwalike_coupon,
+    claim_pub_jujeom_event_coupon,
     MIDTERM_DAILY_CODE_START_AT,
     GAEHWALIKE_EVENT_COUPON_EXPIRES_AT,
     GAEHWALIKE_SUBTITLE,
+    PUB_JUJEOM_EVENT_COUPON_EXPIRES_AT,
+    PUB_JUJEOM_EVENT_SUBTITLE,
+    AFFILIATE_CATEGORY_JUJEOM,
     _issue_jungdunbam_festival_wed,
     issue_app_open_coupon,
     get_stamp_status,
@@ -618,7 +623,7 @@ class GaehwalikeCouponTests(TestCase):
         post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
         cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
 
-    def test_gaehwalike_issues_three_random_coupons_from_pool(self):
+    def test_gaehwalike_issues_ten_random_coupons_from_pool(self):
         user = self.user_model.objects.create_user(kakao_id=95001, password="pass")
         ct, _ = CouponType.objects.get_or_create(
             code="GAEHWALIKE",
@@ -630,7 +635,7 @@ class GaehwalikeCouponTests(TestCase):
         )
 
         base_rid = 980000
-        for i in range(10):
+        for i in range(12):
             RestaurantCouponBenefit.objects.create(
                 coupon_type=ct,
                 restaurant_id=base_rid + i,
@@ -650,9 +655,9 @@ class GaehwalikeCouponTests(TestCase):
             result = claim_gaehwalike_coupon(user, "gaehwalike")
 
         self.assertFalse(result["already_issued"])
-        self.assertEqual(result["total_issued"], 3)
-        self.assertEqual(len(result["coupons"]), 3)
-        self.assertEqual(len({c.restaurant_id for c in result["coupons"]}), 3)
+        self.assertEqual(result["total_issued"], 10)
+        self.assertEqual(len(result["coupons"]), 10)
+        self.assertEqual(len({c.restaurant_id for c in result["coupons"]}), 10)
         for c in result["coupons"]:
             self.assertEqual(c.coupon_type_id, ct.id)
             self.assertEqual(c.campaign_id, camp.id)
@@ -661,7 +666,7 @@ class GaehwalikeCouponTests(TestCase):
 
         result2 = claim_gaehwalike_coupon(user, "GAEHWALIKE")
         self.assertTrue(result2["already_issued"])
-        self.assertEqual(result2["total_issued"], 3)
+        self.assertEqual(result2["total_issued"], 10)
 
     def test_gaehwalike_invalid_code(self):
         user = self.user_model.objects.create_user(kakao_id=95002, password="pass")
@@ -694,6 +699,141 @@ class GaehwalikeCouponTests(TestCase):
             with self.assertRaises(ValidationError) as ctx:
                 claim_gaehwalike_coupon(user, "GAEHWALIKE")
         self.assertIn("expired", str(ctx.exception))
+
+
+class PubJujeomEventCouponTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def _seed_jujeom_pool(self, n: int = 8):
+        user = self.user_model.objects.create_user(kakao_id=96000 + n, password="pass")
+        ct, _ = CouponType.objects.get_or_create(
+            code="PUB_JUJEOM_EVENT",
+            defaults={
+                "title": PUB_JUJEOM_EVENT_SUBTITLE,
+                "benefit_json": {},
+                "valid_days": 0,
+                "per_user_limit": 1,
+            },
+        )
+        camp, _ = Campaign.objects.get_or_create(
+            code="PUB_JUJEOM_EVENT_CODES",
+            defaults={"name": "주점 이벤트", "type": "FLASH", "active": True},
+        )
+        base_rid = 990000
+        for i in range(n):
+            rid = base_rid + i
+            AffiliateRestaurant.objects.update_or_create(
+                restaurant_id=rid,
+                defaults={
+                    "name": f"주점테스트{i}",
+                    "is_affiliate": True,
+                    "category": AFFILIATE_CATEGORY_JUJEOM,
+                },
+            )
+            RestaurantCouponBenefit.objects.create(
+                coupon_type=ct,
+                restaurant_id=rid,
+                sort_order=0,
+                title=f"혜택{i}",
+                subtitle="",
+                benefit_json={},
+                active=True,
+            )
+        return user, ct, camp
+
+    def test_junyoung_excludes_non_pub_non_jujeom(self):
+        user, ct, _ = self._seed_jujeom_pool(6)
+        excluded_rid = 990100
+        AffiliateRestaurant.objects.update_or_create(
+            restaurant_id=excluded_rid,
+            defaults={"name": "일반식당", "is_affiliate": True, "category": "식당"},
+        )
+        RestaurantCouponBenefit.objects.create(
+            coupon_type=ct,
+            restaurant_id=excluded_rid,
+            sort_order=0,
+            title="일반",
+            subtitle="",
+            benefit_json={},
+            active=True,
+        )
+
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):
+            result = claim_pub_jujeom_event_coupon(user, "junyoung")
+
+        self.assertFalse(result["already_issued"])
+        self.assertEqual(result["total_issued"], 1)
+        self.assertNotIn(excluded_rid, {c.restaurant_id for c in result["coupons"]})
+        self.assertEqual(result["coupons"][0].expires_at, PUB_JUJEOM_EVENT_COUPON_EXPIRES_AT)
+
+    def test_pub_option_ne_included_like_wednesday(self):
+        user = self.user_model.objects.create_user(kakao_id=96100, password="pass")
+        ct, _ = CouponType.objects.get_or_create(
+            code="PUB_JUJEOM_EVENT",
+            defaults={
+                "title": PUB_JUJEOM_EVENT_SUBTITLE,
+                "benefit_json": {},
+                "valid_days": 0,
+                "per_user_limit": 1,
+            },
+        )
+        Campaign.objects.get_or_create(
+            code="PUB_JUJEOM_EVENT_CODES",
+            defaults={"name": "주점 이벤트", "type": "FLASH", "active": True},
+        )
+        pub_rid = 990200
+        AffiliateRestaurant.objects.update_or_create(
+            restaurant_id=pub_rid,
+            defaults={
+                "name": "술집테스트",
+                "is_affiliate": True,
+                "category": "한식",
+                "pub_option": "네",
+            },
+        )
+        RestaurantCouponBenefit.objects.create(
+            coupon_type=ct,
+            restaurant_id=pub_rid,
+            sort_order=0,
+            title="술집혜택",
+            subtitle="",
+            benefit_json={},
+            active=True,
+        )
+
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):
+            result = claim_pub_jujeom_event_coupon(user, "JUNYOUNG")
+
+        self.assertEqual(result["total_issued"], 1)
+        self.assertEqual(result["coupons"][0].restaurant_id, pub_rid)
+
+    def test_jeonghwan_issues_three_yunji_five(self):
+        user, _, _ = self._seed_jujeom_pool(8)
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):
+            r3 = claim_pub_jujeom_event_coupon(user, "JEONGHWAN")
+            r5 = claim_pub_jujeom_event_coupon(user, "yunji")
+        self.assertEqual(r3["total_issued"], 3)
+        self.assertEqual(r5["total_issued"], 5)
+        self.assertEqual(len({c.restaurant_id for c in r3["coupons"]}), 3)
+
+    def test_same_code_idempotent(self):
+        user, _, _ = self._seed_jujeom_pool(5)
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):
+            first = claim_pub_jujeom_event_coupon(user, "JUNYOUNG")
+            second = claim_pub_jujeom_event_coupon(user, "JUNYOUNG")
+        self.assertFalse(first["already_issued"])
+        self.assertTrue(second["already_issued"])
+
+    def test_invalid_code(self):
+        user = self.user_model.objects.create_user(kakao_id=96099, password="pass")
+        with self.assertRaises(ValidationError):
+            claim_pub_jujeom_event_coupon(user, "NOTACODE")
 
 
 class MidtermDailyCodeCouponTests(TestCase):
