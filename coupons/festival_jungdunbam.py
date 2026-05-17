@@ -13,7 +13,16 @@ from django.utils import timezone
 RESTAURANT_ID = 298
 MERCHANT_PIN = "0629"
 RESTAURANT_NAME = "우주라이크 X 정든밤"
-DESCRIPTION = "경북대 80주년 축제 주막"
+DESCRIPTION = (
+    "경북대 80주년 축제 주막 · 스탬프 없음 · "
+    "매주 수요일 앱 접속 시 음료수 1개 쿠폰 (기존 수요일 쿠폰과 별도)"
+)
+STAMP_DISABLED_NOTES = (
+    "이 주막은 스탬프 적립·보상이 없습니다. "
+    "매주 수요일(KST) 앱 접속 시 음료수 1개 쿠폰이 쿠폰함에 발급됩니다. "
+    "(기존 수요일 술집 쿠폰과 별도)"
+)
+STAMP_DISABLED_RESTAURANT_IDS = frozenset({RESTAURANT_ID})
 CATEGORY = "주점"
 ZONE = "주막"
 ADDRESS = "경북대학교 대구캠퍼스 80주년 축제 주막"
@@ -62,6 +71,45 @@ def resolve_cloudsql_alias() -> str:
     if "cloudsql" in connections.databases:
         return "cloudsql"
     return "default"
+
+
+def is_stamp_disabled_restaurant(restaurant_id: int) -> bool:
+    return int(restaurant_id) in STAMP_DISABLED_RESTAURANT_IDS
+
+
+def get_festival_promotions_for_app() -> list[dict]:
+    """스탬프 대신 앱에 보여줄 축제 쿠폰 안내."""
+    return [
+        {
+            "title": BENEFIT_TITLE,
+            "subtitle": BENEFIT_SUBTITLE,
+            "description": "매주 수요일 앱 접속 시 쿠폰함에 자동 발급",
+            "coupon_type_code": COUPON_TYPE_CODE,
+        }
+    ]
+
+
+def build_stamp_disabled_api_payload(*, updated_at=None) -> dict:
+    return {
+        "current": 0,
+        "target": 0,
+        "rewards": [],
+        "notes": STAMP_DISABLED_NOTES,
+        "stamp_enabled": False,
+        "promotions": get_festival_promotions_for_app(),
+        "updated_at": updated_at,
+    }
+
+
+def disable_stamp_rewards_for_jungdunbam(*, db_alias: str) -> None:
+    """스탬프 규칙·STAMP_REWARD benefit 제거 (0022 시드·레거시 폴백 방지)."""
+    from coupons.models import RestaurantCouponBenefit, StampRewardRule
+
+    StampRewardRule.objects.using(db_alias).filter(restaurant_id=RESTAURANT_ID).delete()
+    RestaurantCouponBenefit.objects.using(db_alias).filter(
+        restaurant_id=RESTAURANT_ID,
+        coupon_type__code__startswith="STAMP_REWARD",
+    ).update(active=False)
 
 
 def upsert_affiliate_row(*, alias: str, pin: str, now) -> None:
@@ -226,5 +274,7 @@ def ensure_jungdunbam_festival_data(*, db_alias: str | None = None) -> str:
             restaurant_id=RESTAURANT_ID,
             defaults={},
         )
+
+    disable_stamp_rewards_for_jungdunbam(db_alias=alias)
 
     return alias

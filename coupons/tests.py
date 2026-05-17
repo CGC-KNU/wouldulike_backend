@@ -23,11 +23,14 @@ from coupons.service import (
     claim_midterm_daily_code_coupon,
     MIDTERM_DAILY_CODE_START_AT,
     _issue_jungdunbam_festival_wed,
+    get_stamp_status,
     JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
     JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE,
     JUNGDUNBAM_FESTIVAL_WED_CAMPAIGN_CODE,
     RESTAURANTS_EXCLUDED_FROM_ALL,
 )
+from coupons.models import StampRewardRule
+from coupons.festival_jungdunbam import disable_stamp_rewards_for_jungdunbam
 from coupons.api.serializers import CouponSerializer
 from coupons.models import RestaurantCouponBenefit
 
@@ -731,3 +734,26 @@ class JungdunbamFestivalWedTests(TestCase):
         self.assertEqual(len(first), 1)
         self.assertEqual(len(second), 1)
         self.assertEqual(first[0].id, second[0].id)
+
+    def test_stamp_disabled_shows_festival_promotion_not_rewards(self):
+        StampRewardRule.objects.create(
+            restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+            rule_type="THRESHOLD",
+            config_json={
+                "thresholds": [
+                    {"stamps": 5, "coupon_type_code": "STAMP_REWARD_5"},
+                    {"stamps": 10, "coupon_type_code": "STAMP_REWARD_10"},
+                ],
+                "cycle_target": 10,
+            },
+            active=True,
+        )
+        disable_stamp_rewards_for_jungdunbam(db_alias="default")
+
+        data = get_stamp_status(self.user, JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
+        self.assertFalse(data["stamp_enabled"])
+        self.assertEqual(data["rewards"], [])
+        self.assertEqual(data["target"], 0)
+        self.assertIn("스탬프", data["notes"])
+        self.assertEqual(len(data["promotions"]), 1)
+        self.assertEqual(data["promotions"][0]["title"], "음료수 1개")

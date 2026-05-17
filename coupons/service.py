@@ -94,6 +94,12 @@ JUNGDUNBAM_FESTIVAL_WED_ENABLED = os.getenv("JUNGDUNBAM_FESTIVAL_WED_ENABLED", "
 )
 JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE = "JUNGDUNBAM_FESTIVAL_WED"
 JUNGDUNBAM_FESTIVAL_WED_CAMPAIGN_CODE = "JUNGDUNBAM_FESTIVAL_WED_EVENT"
+
+
+def _is_stamp_disabled_restaurant(restaurant_id: int) -> bool:
+    from coupons.festival_jungdunbam import is_stamp_disabled_restaurant
+
+    return is_stamp_disabled_restaurant(restaurant_id)
 # 지정된 쿠폰 타입 코드들에 한해, 앱접속 발급 시 식당당 benefit 1개만 발급
 APP_OPEN_SINGLE_BENEFIT_PER_RESTAURANT_CODES = {
     code.strip()
@@ -3588,6 +3594,8 @@ def _get_legacy_config() -> dict:
 
 def _get_cycle_target_for_restaurant(restaurant_id: int) -> int:
     """식당별 cycle_target 반환 (규칙 없으면 10)."""
+    if _is_stamp_disabled_restaurant(restaurant_id):
+        return 0
     rule = _get_stamp_reward_rule(restaurant_id)
     if rule and rule.config_json:
         return rule.config_json.get("cycle_target", 10)
@@ -3609,6 +3617,9 @@ def _build_rewards_for_restaurants_batch(
     result: dict[int, list[dict]] = {}
 
     for restaurant_id in restaurant_ids:
+        if _is_stamp_disabled_restaurant(restaurant_id):
+            result[restaurant_id] = []
+            continue
         rule = rule_map.get(restaurant_id)
         if not rule:
             config = legacy_config
@@ -3678,6 +3689,9 @@ def get_stamp_rewards_for_restaurant(restaurant_id: int) -> list[dict]:
     식당별 스탬프 적립 시 발급되는 쿠폰 목록 반환.
     프론트에서 "N개 적립 시 ~ 혜택" 표시용.
     """
+    if _is_stamp_disabled_restaurant(restaurant_id):
+        return []
+
     alias = STAMP_DB_ALIAS
     rule = _get_stamp_reward_rule(restaurant_id)
 
@@ -3824,6 +3838,12 @@ def add_stamp(
         raise ValidationError(
             "stamp count must be between 1 and 4",
             code="invalid_stamp_count",
+        )
+
+    if _is_stamp_disabled_restaurant(restaurant_id):
+        raise ValidationError(
+            "stamp accumulation is not available for this restaurant",
+            code="stamp_disabled",
         )
 
     # 멱등(같은 요청 재발급 방지)
@@ -4097,41 +4117,45 @@ def get_all_stamp_statuses(
         )
 
     def _target(rid: int) -> int:
+        if _is_stamp_disabled_restaurant(rid):
+            return 0
         return target_map.get(rid, STAMP_LEGACY_CYCLE_TARGET)
 
     def _notes(rid: int) -> str:
         return notes_map.get(rid, "")
+
+    def _row(restaurant_id: int, wallet) -> dict:
+        if _is_stamp_disabled_restaurant(restaurant_id):
+            from coupons.festival_jungdunbam import build_stamp_disabled_api_payload
+
+            payload = build_stamp_disabled_api_payload(
+                updated_at=wallet.updated_at if wallet else None,
+            )
+            payload["restaurant_id"] = restaurant_id
+            return payload
+        return {
+            "restaurant_id": restaurant_id,
+            "current": wallet.stamps if wallet else 0,
+            "target": _target(restaurant_id),
+            "rewards": rewards_map.get(restaurant_id, []),
+            "notes": _notes(restaurant_id),
+            "stamp_enabled": True,
+            "promotions": [],
+            "updated_at": wallet.updated_at if wallet else None,
+        }
 
     results: list[dict] = []
     seen_ids: set[int] = set()
 
     for restaurant_id in accessible_ids:
         wallet = wallet_map.get(restaurant_id)
-        results.append(
-            {
-                "restaurant_id": restaurant_id,
-                "current": wallet.stamps if wallet else 0,
-                "target": _target(restaurant_id),
-                "rewards": rewards_map.get(restaurant_id, []),
-                "notes": _notes(restaurant_id),
-                "updated_at": wallet.updated_at if wallet else None,
-            }
-        )
+        results.append(_row(restaurant_id, wallet))
         seen_ids.add(restaurant_id)
 
     extra_ids = sorted(set(wallet_map.keys()) - seen_ids)
     for restaurant_id in extra_ids:
         wallet = wallet_map[restaurant_id]
-        results.append(
-            {
-                "restaurant_id": restaurant_id,
-                "current": wallet.stamps,
-                "target": _target(restaurant_id),
-                "rewards": rewards_map.get(restaurant_id, []),
-                "notes": _notes(restaurant_id),
-                "updated_at": wallet.updated_at,
-            }
-        )
+        results.append(_row(restaurant_id, wallet))
 
     return results
 
@@ -4164,6 +4188,18 @@ def get_active_affiliate_restaurant_ids_for_user(user: User) -> list[int]:
 
 
 def get_stamp_status(user: User, restaurant_id: int):
+    if _is_stamp_disabled_restaurant(restaurant_id):
+        from coupons.festival_jungdunbam import build_stamp_disabled_api_payload
+
+        stamp_alias = router.db_for_read(StampWallet)
+        try:
+            w = StampWallet.objects.using(stamp_alias).get(
+                user=user, restaurant_id=restaurant_id
+            )
+            return build_stamp_disabled_api_payload(updated_at=w.updated_at)
+        except StampWallet.DoesNotExist:
+            return build_stamp_disabled_api_payload(updated_at=None)
+
     target = _get_cycle_target_for_restaurant(restaurant_id)
     rewards = get_stamp_rewards_for_restaurant(restaurant_id)
     rule = _get_stamp_reward_rule(restaurant_id)
@@ -4175,7 +4211,17 @@ def get_stamp_status(user: User, restaurant_id: int):
             "target": target,
             "rewards": rewards,
             "notes": notes,
+            "stamp_enabled": True,
+            "promotions": [],
             "updated_at": w.updated_at,
         }
     except StampWallet.DoesNotExist:
-        return {"current": 0, "target": target, "rewards": rewards, "notes": notes, "updated_at": None}
+        return {
+            "current": 0,
+            "target": target,
+            "rewards": rewards,
+            "notes": notes,
+            "stamp_enabled": True,
+            "promotions": [],
+            "updated_at": None,
+        }
