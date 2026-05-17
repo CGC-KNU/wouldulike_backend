@@ -31,7 +31,10 @@ from coupons.service import (
     RESTAURANTS_EXCLUDED_FROM_ALL,
 )
 from coupons.models import StampRewardRule
-from coupons.festival_jungdunbam import disable_stamp_rewards_for_jungdunbam
+from coupons.festival_jungdunbam import (
+    STAMP_DISABLED_NOTES,
+    ensure_stamp_disabled_rule_for_jungdunbam,
+)
 from coupons.api.serializers import CouponSerializer
 from coupons.models import RestaurantCouponBenefit
 
@@ -749,7 +752,12 @@ class JungdunbamFestivalWedTests(TestCase):
             },
             active=True,
         )
-        disable_stamp_rewards_for_jungdunbam(db_alias="default")
+        ensure_stamp_disabled_rule_for_jungdunbam(db_alias="default")
+
+        rule = StampRewardRule.objects.get(restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
+        self.assertFalse(rule.config_json["stamp_enabled"])
+        self.assertEqual(rule.config_json["notes"], STAMP_DISABLED_NOTES)
+        self.assertEqual(rule.config_json["thresholds"], [])
 
         data = get_stamp_status(self.user, JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
         self.assertFalse(data["stamp_enabled"])

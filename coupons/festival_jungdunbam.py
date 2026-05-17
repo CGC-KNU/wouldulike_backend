@@ -73,7 +73,18 @@ def resolve_cloudsql_alias() -> str:
 
 
 def is_stamp_disabled_restaurant(restaurant_id: int) -> bool:
-    return int(restaurant_id) in STAMP_DISABLED_RESTAURANT_IDS
+    """하드코딩 ID 또는 DB StampRewardRule.config_json 기준."""
+    rid = int(restaurant_id)
+    if rid in STAMP_DISABLED_RESTAURANT_IDS:
+        return True
+    from coupons.models import StampRewardRule
+
+    alias = resolve_cloudsql_alias()
+    try:
+        rule = StampRewardRule.objects.using(alias).get(restaurant_id=rid, active=True)
+    except StampRewardRule.DoesNotExist:
+        return False
+    return stamp_rule_config_disables_stamps(rule.config_json)
 
 
 def get_festival_promotions_for_app() -> list[dict]:
@@ -88,35 +99,81 @@ def get_festival_promotions_for_app() -> list[dict]:
     ]
 
 
-def build_stamp_disabled_api_payload(*, updated_at=None) -> dict:
-    """
-    스탬프 미사용 식당용 API 페이로드.
-
-    target/current 를 null 로 두어 프론트의 `target || 10` 레거시 폴백을 막고,
-    legacy_stamp_defaults=false 로 5·10개 기본 혜택 문구를 쓰지 않도록 한다.
-    """
+def build_jungdunbam_stamp_rule_config() -> dict:
+    """StampRewardRule.config_json — 프론트·API가 DB에서 읽는 스탬프 설정."""
     return {
-        "current": None,
-        "target": None,
-        "rewards": [],
-        "notes": STAMP_DISABLED_NOTES,
         "stamp_enabled": False,
+        "stamp_disabled": True,
         "legacy_stamp_defaults": False,
         "show_stamp_card": False,
+        "thresholds": [],
+        "cycle_target": None,
+        "notes": STAMP_DISABLED_NOTES,
         "promotions": get_festival_promotions_for_app(),
+    }
+
+
+def stamp_rule_config_disables_stamps(config: dict | None) -> bool:
+    if not config:
+        return False
+    if config.get("stamp_disabled") is True:
+        return True
+    if config.get("stamp_enabled") is False:
+        return True
+    return False
+
+
+def build_stamp_disabled_api_payload(
+    *,
+    updated_at=None,
+    rule_config: dict | None = None,
+) -> dict:
+    """
+    스탬프 미사용 식당용 API 페이로드 (DB config_json 과 동일 필드).
+
+    target/current 를 null 로 두어 프론트의 `target || 10` 레거시 폴백을 막는다.
+    """
+    cfg = rule_config if rule_config is not None else build_jungdunbam_stamp_rule_config()
+    promotions = cfg.get("promotions")
+    if promotions is None:
+        promotions = get_festival_promotions_for_app()
+    return {
+        "current": None,
+        "target": cfg.get("cycle_target"),
+        "rewards": [],
+        "notes": (cfg.get("notes") or STAMP_DISABLED_NOTES).strip(),
+        "stamp_enabled": False,
+        "legacy_stamp_defaults": bool(cfg.get("legacy_stamp_defaults", False)),
+        "show_stamp_card": bool(cfg.get("show_stamp_card", False)),
+        "promotions": promotions,
         "updated_at": updated_at,
     }
 
 
-def disable_stamp_rewards_for_jungdunbam(*, db_alias: str) -> None:
-    """스탬프 규칙·STAMP_REWARD benefit 제거 (0022 시드·레거시 폴백 방지)."""
+def ensure_stamp_disabled_rule_for_jungdunbam(*, db_alias: str) -> None:
+    """
+    스탬프 비활성 설정을 StampRewardRule 에 명시 (삭제하지 않음).
+    STAMP_REWARD benefit 은 비활성화해 레거시 5·10개 혜택 문구가 붙지 않게 한다.
+    """
     from coupons.models import RestaurantCouponBenefit, StampRewardRule
 
-    StampRewardRule.objects.using(db_alias).filter(restaurant_id=RESTAURANT_ID).delete()
+    StampRewardRule.objects.using(db_alias).update_or_create(
+        restaurant_id=RESTAURANT_ID,
+        defaults={
+            "rule_type": "THRESHOLD",
+            "config_json": build_jungdunbam_stamp_rule_config(),
+            "active": True,
+        },
+    )
     RestaurantCouponBenefit.objects.using(db_alias).filter(
         restaurant_id=RESTAURANT_ID,
         coupon_type__code__startswith="STAMP_REWARD",
     ).update(active=False)
+
+
+def disable_stamp_rewards_for_jungdunbam(*, db_alias: str) -> None:
+    """하위 호환 alias."""
+    ensure_stamp_disabled_rule_for_jungdunbam(db_alias=db_alias)
 
 
 def upsert_affiliate_row(*, alias: str, pin: str, now) -> None:
@@ -282,6 +339,6 @@ def ensure_jungdunbam_festival_data(*, db_alias: str | None = None) -> str:
             defaults={},
         )
 
-    disable_stamp_rewards_for_jungdunbam(db_alias=alias)
+    ensure_stamp_disabled_rule_for_jungdunbam(db_alias=alias)
 
     return alias

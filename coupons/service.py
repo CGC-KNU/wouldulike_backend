@@ -3573,8 +3573,11 @@ STAMP_DB_ALIAS = "cloudsql"
 
 def _get_stamp_reward_rule(restaurant_id: int) -> StampRewardRule | None:
     """식당별 스탬프 보상 규칙 조회. 없으면 None."""
+    from coupons.festival_jungdunbam import resolve_cloudsql_alias
+
+    alias = resolve_cloudsql_alias()
     try:
-        return StampRewardRule.objects.using(STAMP_DB_ALIAS).get(
+        return StampRewardRule.objects.using(alias).get(
             restaurant_id=restaurant_id, active=True
         )
     except StampRewardRule.DoesNotExist:
@@ -4126,10 +4129,18 @@ def get_all_stamp_statuses(
 
     def _row(restaurant_id: int, wallet) -> dict:
         if _is_stamp_disabled_restaurant(restaurant_id):
-            from coupons.festival_jungdunbam import build_stamp_disabled_api_payload
+            from coupons.festival_jungdunbam import (
+                build_jungdunbam_stamp_rule_config,
+                build_stamp_disabled_api_payload,
+            )
 
+            rule = rule_map.get(restaurant_id)
+            cfg = rule.config_json if rule else None
+            if cfg is None and restaurant_id == JUNGDUNBAM_FESTIVAL_RESTAURANT_ID:
+                cfg = build_jungdunbam_stamp_rule_config()
             payload = build_stamp_disabled_api_payload(
                 updated_at=wallet.updated_at if wallet else None,
+                rule_config=cfg,
             )
             payload["restaurant_id"] = restaurant_id
             return payload
@@ -4189,16 +4200,28 @@ def get_active_affiliate_restaurant_ids_for_user(user: User) -> list[int]:
 
 def get_stamp_status(user: User, restaurant_id: int):
     if _is_stamp_disabled_restaurant(restaurant_id):
-        from coupons.festival_jungdunbam import build_stamp_disabled_api_payload
+        from coupons.festival_jungdunbam import (
+            build_jungdunbam_stamp_rule_config,
+            build_stamp_disabled_api_payload,
+        )
+
+        rule = _get_stamp_reward_rule(restaurant_id)
+        cfg = rule.config_json if rule else None
+        if cfg is None and restaurant_id == JUNGDUNBAM_FESTIVAL_RESTAURANT_ID:
+            cfg = build_jungdunbam_stamp_rule_config()
 
         stamp_alias = router.db_for_read(StampWallet)
         try:
             w = StampWallet.objects.using(stamp_alias).get(
                 user=user, restaurant_id=restaurant_id
             )
-            return build_stamp_disabled_api_payload(updated_at=w.updated_at)
+            return build_stamp_disabled_api_payload(
+                updated_at=w.updated_at, rule_config=cfg
+            )
         except StampWallet.DoesNotExist:
-            return build_stamp_disabled_api_payload(updated_at=None)
+            return build_stamp_disabled_api_payload(
+                updated_at=None, rule_config=cfg
+            )
 
     target = _get_cycle_target_for_restaurant(restaurant_id)
     rewards = get_stamp_rewards_for_restaurant(restaurant_id)
