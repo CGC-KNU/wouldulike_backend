@@ -3632,17 +3632,24 @@ def _build_rewards_for_restaurants_batch(
     rule_map: dict[int, StampRewardRule],
     ct_map: dict[str, CouponType],
     benefit_map: dict[tuple[int, str], dict],
+    *,
+    stamp_disabled_ids: set[int] | None = None,
 ) -> dict[int, list[dict]]:
     """
     식당 ID 목록에 대해 rewards를 배치로 생성.
     rule_map, ct_map, benefit_map은 이미 프리페치된 데이터.
     반환: {restaurant_id: [reward_dict, ...]}
     """
+    from coupons.festival_jungdunbam import stamp_disabled_restaurant_ids
+
+    if stamp_disabled_ids is None:
+        stamp_disabled_ids = stamp_disabled_restaurant_ids(rule_map)
+
     legacy_config = _get_legacy_config()
     result: dict[int, list[dict]] = {}
 
     for restaurant_id in restaurant_ids:
-        if _is_stamp_disabled_restaurant(restaurant_id):
+        if restaurant_id in stamp_disabled_ids:
             result[restaurant_id] = []
             continue
         rule = rule_map.get(restaurant_id)
@@ -4086,6 +4093,7 @@ def get_all_stamp_statuses(
         try:
             accessible_ids = list(
                 AffiliateRestaurant.objects.using(restaurant_alias)
+                .filter(is_affiliate=True)
                 .order_by("restaurant_id")
                 .values_list("restaurant_id", flat=True)
             )
@@ -4104,6 +4112,10 @@ def get_all_stamp_statuses(
     rule_map = {r.restaurant_id: r for r in rule_qs}
     target_map = {r.restaurant_id: r.config_json.get("cycle_target", 10) for r in rule_qs}
     notes_map = {r.restaurant_id: (r.config_json.get("notes") or "") for r in rule_qs}
+
+    from coupons.festival_jungdunbam import stamp_disabled_restaurant_ids
+
+    stamp_disabled_ids = stamp_disabled_restaurant_ids(rule_map)
 
     # 배치 프리페치: rewards 생성에 필요한 CouponType, RestaurantCouponBenefit
     rewards_map: dict[int, list[dict]] = {}
@@ -4138,11 +4150,15 @@ def get_all_stamp_statuses(
             }
 
         rewards_map = _build_rewards_for_restaurants_batch(
-            all_rids, rule_map, ct_map, benefit_map
+            all_rids,
+            rule_map,
+            ct_map,
+            benefit_map,
+            stamp_disabled_ids=stamp_disabled_ids,
         )
 
     def _target(rid: int) -> int:
-        if _is_stamp_disabled_restaurant(rid):
+        if rid in stamp_disabled_ids:
             return 0
         return target_map.get(rid, STAMP_LEGACY_CYCLE_TARGET)
 
@@ -4150,7 +4166,7 @@ def get_all_stamp_statuses(
         return notes_map.get(rid, "")
 
     def _row(restaurant_id: int, wallet) -> dict:
-        if _is_stamp_disabled_restaurant(restaurant_id):
+        if restaurant_id in stamp_disabled_ids:
             from coupons.festival_jungdunbam import (
                 build_jungdunbam_stamp_rule_config,
                 build_stamp_disabled_api_payload,

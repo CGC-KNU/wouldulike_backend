@@ -100,18 +100,22 @@ def resolve_cloudsql_alias() -> str:
 
 
 def is_stamp_disabled_restaurant(restaurant_id: int) -> bool:
-    """하드코딩 ID 또는 DB StampRewardRule.config_json 기준."""
-    rid = int(restaurant_id)
-    if rid in STAMP_DISABLED_RESTAURANT_IDS:
-        return True
-    from coupons.models import StampRewardRule
+    """단건 조회용 — 고정 ID만 (DB 왕복 없음). 배치는 stamp_disabled_restaurant_ids 사용."""
+    return int(restaurant_id) in STAMP_DISABLED_RESTAURANT_IDS
 
-    alias = resolve_cloudsql_alias()
-    try:
-        rule = StampRewardRule.objects.using(alias).get(restaurant_id=rid, active=True)
-    except StampRewardRule.DoesNotExist:
-        return False
-    return stamp_rule_config_disables_stamps(rule.config_json)
+
+def stamp_disabled_restaurant_ids(
+    rule_map: dict[int, object] | None = None,
+) -> set[int]:
+    """rule_map 에서 stamp 비활성 식당 + 고정 ID 를 한 번에 수집."""
+    disabled = set(STAMP_DISABLED_RESTAURANT_IDS)
+    if not rule_map:
+        return disabled
+    for rid, rule in rule_map.items():
+        config = getattr(rule, "config_json", None) or {}
+        if stamp_rule_config_disables_stamps(config):
+            disabled.add(int(rid))
+    return disabled
 
 
 def get_festival_promotions_for_app() -> list[dict]:
