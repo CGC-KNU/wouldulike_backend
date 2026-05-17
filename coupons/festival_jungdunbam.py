@@ -18,9 +18,8 @@ DESCRIPTION = (
     "매주 수요일 앱 접속 시 음료수 1개 쿠폰 (기존 수요일 쿠폰과 별도)"
 )
 STAMP_DISABLED_NOTES = (
-    "이 주막은 스탬프 적립·보상이 없습니다. "
-    "매주 수요일(KST) 앱 접속 시 음료수 1개 쿠폰이 쿠폰함에 발급됩니다. "
-    "(기존 수요일 술집 쿠폰과 별도)"
+    "이 주막은 스탬프 적립·보상이 없습니다.\n"
+    "오늘 하루만 운영되는 페이지입니다."
 )
 STAMP_DISABLED_RESTAURANT_IDS = frozenset({RESTAURANT_ID})
 CATEGORY = "주점"

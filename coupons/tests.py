@@ -758,7 +758,8 @@ class JungdunbamFestivalWedTests(TestCase):
         self.assertEqual(data["rewards"], [])
         self.assertIsNone(data["target"])
         self.assertIsNone(data["current"])
-        self.assertIn("스탬프", data["notes"])
+        self.assertIn("스탬프 적립·보상이 없습니다", data["notes"])
+        self.assertIn("오늘 하루만 운영되는 페이지", data["notes"])
         self.assertEqual(len(data["promotions"]), 1)
         self.assertEqual(data["promotions"][0]["title"], "음료수 1개")
 
