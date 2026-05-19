@@ -96,7 +96,12 @@ def ensure_child_dept_event_data(*, db_alias: str | None = None) -> str:
         restaurant_id__in=target_ids,
         active=True,
     )
+    from coupons.festival_jungdunbam import festival_restaurant_ids_excluded_from_pub_pools
+
+    skip_ids = festival_restaurant_ids_excluded_from_pub_pools()
     for benefit in source_benefits:
+        if benefit.restaurant_id in skip_ids:
+            continue
         RestaurantCouponBenefit.objects.using(alias).update_or_create(
             coupon_type=child_type,
             restaurant_id=benefit.restaurant_id,

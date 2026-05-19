@@ -28,22 +28,56 @@ def _kst_aware(dt: datetime):
     return dt.replace(tzinfo=ZoneInfo("Asia/Seoul"))
 
 
-def pub_jujeom_target_restaurant_ids(*, db_alias: str) -> set[int]:
-    from restaurants.models import AffiliateRestaurant
-
+def _pub_jujeom_target_ids_from_connection(connection) -> set[int]:
+    """restaurants_affiliate raw SQL (마이그레이션 state 모델에 is_affiliate 없을 때 대비)."""
     target: set[int] = set()
-    for row in (
-        AffiliateRestaurant.objects.using(db_alias)
-        .filter(is_affiliate=True)
-        .values("restaurant_id", "pub_option", "category")
-    ):
-        rid = int(row["restaurant_id"])
-        cat = (row.get("category") or "").strip()
-        pub = (row.get("pub_option") or "").strip()
-        is_pub = pub == "네" or pub.startswith("네,") or cat == "술집"
-        if cat == AFFILIATE_CATEGORY_JUJEOM or is_pub:
-            target.add(rid)
-    target.discard(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT restaurant_id, category, pub_option
+            FROM restaurants_affiliate
+            WHERE is_affiliate = TRUE
+            """
+        )
+        for rid, cat, pub in cursor.fetchall():
+            cat = (cat or "").strip()
+            pub = (pub or "").strip()
+            is_pub = pub == "네" or pub.startswith("네,") or cat == "술집"
+            if cat == AFFILIATE_CATEGORY_JUJEOM or is_pub:
+                target.add(int(rid))
+    return target
+
+
+def pub_jujeom_target_restaurant_ids(*, db_alias: str) -> set[int]:
+    from django.db import connections
+
+    from coupons.festival_jungdunbam import festival_restaurant_ids_excluded_from_pub_pools
+
+    conn = connections[db_alias]
+    if conn.vendor == "sqlite":
+        from django.core.exceptions import FieldError
+        from restaurants.models import AffiliateRestaurant
+
+        target: set[int] = set()
+        try:
+            rows = (
+                AffiliateRestaurant.objects.using(db_alias)
+                .filter(is_affiliate=True)
+                .values("restaurant_id", "pub_option", "category")
+            )
+        except FieldError:
+            rows = []
+        for row in rows:
+            rid = int(row["restaurant_id"])
+            cat = (row.get("category") or "").strip()
+            pub = (row.get("pub_option") or "").strip()
+            is_pub = pub == "네" or pub.startswith("네,") or cat == "술집"
+            if cat == AFFILIATE_CATEGORY_JUJEOM or is_pub:
+                target.add(rid)
+    else:
+        target = _pub_jujeom_target_ids_from_connection(conn)
+
+    target -= festival_restaurant_ids_excluded_from_pub_pools()
     return target
 
 
@@ -100,8 +134,6 @@ def ensure_pub_jujeom_event_data(*, db_alias: str | None = None) -> str:
         active=True,
     )
     for benefit in source_benefits:
-        if benefit.restaurant_id == JUNGDUNBAM_FESTIVAL_RESTAURANT_ID:
-            continue
         RestaurantCouponBenefit.objects.using(alias).update_or_create(
             coupon_type=pub_type,
             restaurant_id=benefit.restaurant_id,
