@@ -22,8 +22,8 @@ STAMP_DISABLED_NOTES = (
     "오늘 하루만 운영되는 페이지입니다."
 )
 STAMP_DISABLED_RESTAURANT_IDS = frozenset({RESTAURANT_ID})
-# 앱 제휴 목록 비노출 (쿠폰 발급·PIN·쿠폰함 사용은 유지)
-IS_AFFILIATE_IN_APP = False
+# 앱 제휴 목록 노출
+IS_AFFILIATE_IN_APP = True
 CATEGORY = "주점"
 ZONE = "주막"
 ADDRESS = "경북대학교 대구캠퍼스 80주년 축제 주막"
