@@ -247,6 +247,71 @@ def build_stamp_disabled_api_payload(
     return payload
 
 
+def _reassign_restaurant_coupon_benefits(
+    *, alias: str, old_id: int, new_id: int
+) -> None:
+    from coupons.models import RestaurantCouponBenefit
+
+    new_keys = set(
+        RestaurantCouponBenefit.objects.using(alias)
+        .filter(restaurant_id=new_id)
+        .values_list("coupon_type_id", "sort_order")
+    )
+    old_benefits = list(
+        RestaurantCouponBenefit.objects.using(alias).filter(restaurant_id=old_id)
+    )
+    for benefit in old_benefits:
+        key = (benefit.coupon_type_id, benefit.sort_order)
+        if key in new_keys:
+            benefit.delete()
+        else:
+            benefit.restaurant_id = new_id
+            benefit.save(update_fields=["restaurant_id"])
+            new_keys.add(key)
+
+
+def _reassign_coupon_restaurant_exclusions(
+    *, alias: str, old_id: int, new_id: int
+) -> None:
+    from coupons.models import CouponRestaurantExclusion
+
+    new_type_ids = set(
+        CouponRestaurantExclusion.objects.using(alias)
+        .filter(restaurant_id=new_id)
+        .values_list("coupon_type_id", flat=True)
+    )
+    for row in CouponRestaurantExclusion.objects.using(alias).filter(
+        restaurant_id=old_id
+    ):
+        if row.coupon_type_id in new_type_ids:
+            row.delete()
+        else:
+            row.restaurant_id = new_id
+            row.save(update_fields=["restaurant_id"])
+            new_type_ids.add(row.coupon_type_id)
+
+
+def _reassign_stamp_wallets(*, alias: str, old_id: int, new_id: int) -> None:
+    from coupons.models import StampEvent, StampWallet
+
+    for wallet in StampWallet.objects.using(alias).filter(restaurant_id=old_id):
+        existing = (
+            StampWallet.objects.using(alias)
+            .filter(user_id=wallet.user_id, restaurant_id=new_id)
+            .first()
+        )
+        if existing:
+            existing.stamps = (existing.stamps or 0) + (wallet.stamps or 0)
+            existing.save(update_fields=["stamps"])
+            StampEvent.objects.using(alias).filter(
+                user_id=wallet.user_id, restaurant_id=old_id
+            ).update(restaurant_id=new_id)
+            wallet.delete()
+        else:
+            wallet.restaurant_id = new_id
+            wallet.save(update_fields=["restaurant_id"])
+
+
 def reassign_festival_restaurant_id(
     *,
     db_alias: str,
@@ -260,35 +325,40 @@ def reassign_festival_restaurant_id(
 
     from coupons.models import (
         Coupon,
-        CouponRestaurantExclusion,
         MerchantPin,
-        RestaurantCouponBenefit,
         StampEvent,
         StampRewardRule,
-        StampWallet,
     )
     from restaurants.models import AffiliateRestaurant
 
     alias = db_alias
-    for model in (
-        Coupon,
-        RestaurantCouponBenefit,
-        CouponRestaurantExclusion,
-        MerchantPin,
-        StampWallet,
-        StampEvent,
-        StampRewardRule,
-    ):
-        model.objects.using(alias).filter(restaurant_id=old_id).update(
+
+    Coupon.objects.using(alias).filter(restaurant_id=old_id).update(
+        restaurant_id=new_id
+    )
+    StampEvent.objects.using(alias).filter(restaurant_id=old_id).update(
+        restaurant_id=new_id
+    )
+
+    _reassign_restaurant_coupon_benefits(alias=alias, old_id=old_id, new_id=new_id)
+    _reassign_coupon_restaurant_exclusions(alias=alias, old_id=old_id, new_id=new_id)
+    _reassign_stamp_wallets(alias=alias, old_id=old_id, new_id=new_id)
+
+    if StampRewardRule.objects.using(alias).filter(restaurant_id=new_id).exists():
+        StampRewardRule.objects.using(alias).filter(restaurant_id=old_id).delete()
+    else:
+        StampRewardRule.objects.using(alias).filter(restaurant_id=old_id).update(
             restaurant_id=new_id
         )
 
-    old_ar = (
-        AffiliateRestaurant.objects.using(alias)
-        .filter(restaurant_id=old_id)
-        .first()
-    )
-    if old_ar:
+    if MerchantPin.objects.using(alias).filter(restaurant_id=new_id).exists():
+        MerchantPin.objects.using(alias).filter(restaurant_id=old_id).delete()
+    else:
+        MerchantPin.objects.using(alias).filter(restaurant_id=old_id).update(
+            restaurant_id=new_id
+        )
+
+    if AffiliateRestaurant.objects.using(alias).filter(restaurant_id=old_id).exists():
         AffiliateRestaurant.objects.using(alias).filter(restaurant_id=old_id).update(
             is_affiliate=False
         )
@@ -325,6 +395,9 @@ def reassign_festival_restaurant_id(
             )
 
     ensure_jungdunbam_festival_data(db_alias=alias)
+
+    from coupons.models import RestaurantCouponBenefit
+
     RestaurantCouponBenefit.objects.using(alias).filter(restaurant_id=old_id).update(
         active=False
     )

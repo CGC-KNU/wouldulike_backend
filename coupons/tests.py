@@ -47,6 +47,7 @@ from coupons.festival_jungdunbam import (
     STAMP_DISPLAY_REWARD_TITLE_LEGACY,
     STAMP_DISABLED_NOTES,
     ensure_stamp_disabled_rule_for_jungdunbam,
+    reassign_festival_restaurant_id,
 )
 from coupons.api.serializers import CouponSerializer
 from coupons.models import RestaurantCouponBenefit
@@ -1090,6 +1091,66 @@ class JungdunbamFestivalWedTests(TestCase):
         self.assertIn("오늘 하루만 운영되는 페이지", data["notes"])
         self.assertEqual(len(data["promotions"]), 1)
         self.assertEqual(data["promotions"][0]["title"], "음료수 1개")
+
+    def test_reassign_skips_duplicate_benefit_at_target(self):
+        from coupons.festival_jungdunbam import COUPON_TYPE_CODE
+
+        old_id, new_id = 998, 999
+        ct, _ = CouponType.objects.get_or_create(
+            code=COUPON_TYPE_CODE,
+            defaults={"title": "축제", "valid_days": 0, "per_user_limit": 1},
+        )
+        other_ct = CouponType.objects.create(
+            code="REASSIGN_TEST_OTHER",
+            title="other",
+            valid_days": 0,
+            per_user_limit": 1,
+        )
+        RestaurantCouponBenefit.objects.create(
+            coupon_type=ct,
+            restaurant_id=new_id,
+            sort_order=0,
+            title="신규 ID 혜택",
+            benefit_json={},
+            active=True,
+        )
+        RestaurantCouponBenefit.objects.create(
+            coupon_type=ct,
+            restaurant_id=old_id,
+            sort_order=0,
+            title="구 ID 중복",
+            benefit_json={},
+            active=True,
+        )
+        RestaurantCouponBenefit.objects.create(
+            coupon_type=other_ct,
+            restaurant_id=old_id,
+            sort_order=0,
+            title="이전 대상",
+            benefit_json={},
+            active=True,
+        )
+
+        reassign_festival_restaurant_id(
+            db_alias="default", old_id=old_id, new_id=new_id
+        )
+
+        self.assertFalse(
+            RestaurantCouponBenefit.objects.filter(
+                restaurant_id=old_id, coupon_type=ct, sort_order=0
+            ).exists()
+        )
+        self.assertEqual(
+            RestaurantCouponBenefit.objects.get(
+                restaurant_id=new_id, coupon_type=ct, sort_order=0
+            ).title,
+            "신규 ID 혜택",
+        )
+        self.assertTrue(
+            RestaurantCouponBenefit.objects.filter(
+                restaurant_id=new_id, coupon_type=other_ct
+            ).exists()
+        )
 
     def test_stamp_rewards_empty_even_with_legacy_rule_in_db(self):
         StampRewardRule.objects.create(
