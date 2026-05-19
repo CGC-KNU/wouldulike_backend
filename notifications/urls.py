@@ -28,7 +28,7 @@ urlpatterns = [
         trigger_weekly_wed,
         name="notifications-cron-weekly-wed",
     ),
-    # 쿠폰 만료 D-3 알림 스케줄 적재 (매일 1회 호출 권장)
+    # 쿠폰 만료 D-2 알림 스케줄 적재 (매일 1회 호출 권장)
     path(
         "internal/cron/coupon-expiry-d3/",
         trigger_coupon_expiry_d3,

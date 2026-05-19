@@ -2,7 +2,7 @@ from django.db import models
 
 
 class Notification(models.Model):
-    # 중복 생성/발송 방지용 키 (예: "weekly_mon:2026-05-09", "coupon_expiry_d3:2026-05-12")
+    # 중복 생성/발송 방지용 키 (예: "weekly_mon:2026-05-09", "coupon_expiry_d2:2026-05-12")
     # - NULL은 허용하되, 값이 있는 경우에는 유일해야 함
     dedupe_key = models.CharField(max_length=120, null=True, blank=True, unique=True)
     content = models.TextField()

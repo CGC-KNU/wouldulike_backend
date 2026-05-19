@@ -26,6 +26,8 @@ class AffiliateRestaurant(models.Model):
     main_ingredients = ArrayField(models.CharField(max_length=20), null=True, blank=True, default=list)
     pin_secret = models.CharField(max_length=128, null=True, blank=True)
     pin_updated_at = models.DateTimeField(null=True, blank=True)
+    # 신규가입·친구초대·스탬프 혜택 집계 (sync_restaurant_coupon_benefits_summary 로 갱신)
+    coupon_benefits_summary = models.JSONField(null=True, blank=True)
 
     class Meta:
         db_table = "restaurants_affiliate"

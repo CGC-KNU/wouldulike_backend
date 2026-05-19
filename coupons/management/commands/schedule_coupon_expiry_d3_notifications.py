@@ -21,7 +21,7 @@ def _kst_day_range_to_utc(target_kst_date):
 
 
 class Command(BaseCommand):
-    help = "쿠폰 만료 D-3 사용자에게 보낼 예약 알림(Notification)을 생성/갱신합니다. (idempotent)"
+    help = "쿠폰 만료 D-2 사용자에게 보낼 예약 알림(Notification)을 생성/갱신합니다. (idempotent)"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -39,7 +39,7 @@ class Command(BaseCommand):
         parser.add_argument(
             "--message",
             type=str,
-            default="[아직 안 쓴 쿠폰이 있어요!]\n3일 후 만료될 수 있어요 ⏰\n쿠폰함에서 혜택을 확인하고, 오늘 점심에 바로 써보는 건 어때요?",
+            default="[아직 안 쓴 쿠폰이 있어요!]\n2일 후 만료될 수 있어요 ⏰\n쿠폰함에서 혜택을 확인하고, 오늘 점심에 바로 써보는 건 어때요?",
             help="전송할 알림 메시지",
         )
 
@@ -50,11 +50,11 @@ class Command(BaseCommand):
 
         now = timezone.now()
         now_kst = now.astimezone(KST)
-        target_expiry_kst_date = (now_kst.date() + timedelta(days=3))
+        target_expiry_kst_date = (now_kst.date() + timedelta(days=2))
 
         start_utc, end_utc = _kst_day_range_to_utc(target_expiry_kst_date)
 
-        # 만료일이 D-3(해당 KST 날짜)에 해당하는 ISSUED 쿠폰 보유 사용자
+        # 만료일이 D-2(해당 KST 날짜)에 해당하는 ISSUED 쿠폰 보유 사용자
         kakao_ids = list(
             Coupon.objects.filter(
                 status="ISSUED",
@@ -67,7 +67,7 @@ class Command(BaseCommand):
         )
 
         if not kakao_ids:
-            self.stdout.write("No target users for D-3 expiry notification.")
+            self.stdout.write("No target users for D-2 expiry notification.")
             return
 
         # 예약 시각 (KST 기준 send_hour_kst:send_minute_kst)
@@ -80,7 +80,7 @@ class Command(BaseCommand):
             now if scheduled_kst <= now_kst else scheduled_kst.astimezone(timezone.utc)
         )
 
-        dedupe_key = f"coupon_expiry_d3:{target_expiry_kst_date.isoformat()}"
+        dedupe_key = f"coupon_expiry_d2:{target_expiry_kst_date.isoformat()}"
 
         notification, created = Notification.objects.get_or_create(
             dedupe_key=dedupe_key,
@@ -94,14 +94,14 @@ class Command(BaseCommand):
 
         if created:
             self.stdout.write(
-                f"Created D-3 expiry notification id={notification.id} "
+                f"Created D-2 expiry notification id={notification.id} "
                 f"(targets={len(kakao_ids)}, dedupe_key={dedupe_key})"
             )
             return
 
         if notification.sent:
             self.stdout.write(
-                f"Skipped: D-3 expiry notification already sent "
+                f"Skipped: D-2 expiry notification already sent "
                 f"(id={notification.id}, dedupe_key={dedupe_key})"
             )
             return
@@ -125,7 +125,7 @@ class Command(BaseCommand):
             notification.save(update_fields=fields_to_update)
 
         self.stdout.write(
-            f"Updated D-3 expiry notification id={notification.id} "
+            f"Updated D-2 expiry notification id={notification.id} "
             f"(targets={len(notification.target_kakao_ids or [])}, dedupe_key={dedupe_key})"
         )
 

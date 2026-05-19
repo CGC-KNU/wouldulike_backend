@@ -149,7 +149,7 @@ def trigger_weekly_wed(request):
 @require_http_methods(["GET", "POST"])
 def trigger_coupon_expiry_d3(request):
     """
-    쿠폰 만료 D-3 알림 스케줄 적재.
+    쿠폰 만료 D-2 알림 스케줄 적재.
     - Cloud Scheduler가 매일 1회 호출하는 것을 권장
     - X-CRON-TOKEN 헤더 필수
     """
