@@ -6,26 +6,35 @@ PUB_JUJEOM_SUBTITLE = "[주점 이벤트 🍻]"
 AFFILIATE_CATEGORY_JUJEOM = "주점"
 
 
-def _pub_jujeom_target_restaurant_ids(AffiliateRestaurant):
-    """수요일 술집 기준 + category='주점' 제휴 식당 합집합."""
+def _pub_jujeom_target_restaurant_ids(connection):
+    """수요일 술집 기준 + category='주점' 제휴 식당 합집합 (raw SQL — migration state 모델에 필드 없음)."""
+    if connection.vendor == "sqlite":
+        return set()
     target = set()
-    for row in AffiliateRestaurant.objects.filter(is_affiliate=True).values(
-        "restaurant_id", "pub_option", "category"
-    ):
-        rid = row["restaurant_id"]
-        cat = (row.get("category") or "").strip()
-        pub = (row.get("pub_option") or "").strip()
-        is_pub = pub == "네" or pub.startswith("네,") or cat == "술집"
-        if cat == AFFILIATE_CATEGORY_JUJEOM or is_pub:
-            target.add(rid)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT restaurant_id, category, pub_option
+            FROM restaurants_affiliate
+            WHERE is_affiliate = TRUE
+            """
+        )
+        for rid, cat, pub in cursor.fetchall():
+            cat = (cat or "").strip()
+            pub = (pub or "").strip()
+            is_pub = pub == "네" or pub.startswith("네,") or cat == "술집"
+            if cat == AFFILIATE_CATEGORY_JUJEOM or is_pub:
+                target.add(int(rid))
     return target
 
 
 def add_pub_jujeom_event(apps, schema_editor):
+    if schema_editor.connection.vendor == "sqlite":
+        return
+
     Campaign = apps.get_model("coupons", "Campaign")
     CouponType = apps.get_model("coupons", "CouponType")
     RestaurantCouponBenefit = apps.get_model("coupons", "RestaurantCouponBenefit")
-    AffiliateRestaurant = apps.get_model("restaurants", "AffiliateRestaurant")
 
     # 2026-05-01 00:00:00 ~ 2026-05-31 23:59:59 (KST)
     start_at = datetime(2026, 4, 30, 15, 0, 0, tzinfo=timezone.utc)
@@ -66,7 +75,7 @@ def add_pub_jujeom_event(apps, schema_editor):
     except CouponType.DoesNotExist:
         return
 
-    target_ids = _pub_jujeom_target_restaurant_ids(AffiliateRestaurant)
+    target_ids = _pub_jujeom_target_restaurant_ids(schema_editor.connection)
     if not target_ids:
         return
 

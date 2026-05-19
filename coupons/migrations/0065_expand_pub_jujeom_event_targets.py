@@ -6,24 +6,33 @@ from django.db import migrations
 PUB_JUJEOM_SUBTITLE = "[주점 이벤트 🍻]"
 
 
-def _target_ids(AffiliateRestaurant):
+def _target_ids(connection):
+    if connection.vendor == "sqlite":
+        return set()
     target = set()
-    for row in AffiliateRestaurant.objects.filter(is_affiliate=True).values(
-        "restaurant_id", "pub_option", "category"
-    ):
-        rid = row["restaurant_id"]
-        cat = (row.get("category") or "").strip()
-        pub = (row.get("pub_option") or "").strip()
-        is_pub = pub == "네" or pub.startswith("네,") or cat == "술집"
-        if cat == "주점" or is_pub:
-            target.add(rid)
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT restaurant_id, category, pub_option
+            FROM restaurants_affiliate
+            WHERE is_affiliate = TRUE
+            """
+        )
+        for rid, cat, pub in cursor.fetchall():
+            cat = (cat or "").strip()
+            pub = (pub or "").strip()
+            is_pub = pub == "네" or pub.startswith("네,") or cat == "술집"
+            if cat == "주점" or is_pub:
+                target.add(int(rid))
     return target
 
 
 def expand_pub_jujeom_benefits(apps, schema_editor):
+    if schema_editor.connection.vendor == "sqlite":
+        return
+
     CouponType = apps.get_model("coupons", "CouponType")
     RestaurantCouponBenefit = apps.get_model("coupons", "RestaurantCouponBenefit")
-    AffiliateRestaurant = apps.get_model("restaurants", "AffiliateRestaurant")
 
     try:
         source_type = CouponType.objects.get(code="GAEHWALIKE")
@@ -31,7 +40,7 @@ def expand_pub_jujeom_benefits(apps, schema_editor):
     except CouponType.DoesNotExist:
         return
 
-    target_ids = _target_ids(AffiliateRestaurant)
+    target_ids = _target_ids(schema_editor.connection)
     if not target_ids:
         return
 
