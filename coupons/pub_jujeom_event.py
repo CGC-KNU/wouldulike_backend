@@ -5,7 +5,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from coupons.festival_jungdunbam import resolve_cloudsql_alias
+from coupons.festival_jungdunbam import (
+    RESTAURANT_ID as JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+    resolve_cloudsql_alias,
+)
 
 PUB_JUJEOM_EVENT_COUPON_TYPE_CODE = "PUB_JUJEOM_EVENT"
 PUB_JUJEOM_EVENT_CAMPAIGN_CODE = "PUB_JUJEOM_EVENT_CODES"
@@ -40,6 +43,7 @@ def pub_jujeom_target_restaurant_ids(*, db_alias: str) -> set[int]:
         is_pub = pub == "네" or pub.startswith("네,") or cat == "술집"
         if cat == AFFILIATE_CATEGORY_JUJEOM or is_pub:
             target.add(rid)
+    target.discard(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
     return target
 
 
@@ -96,6 +100,8 @@ def ensure_pub_jujeom_event_data(*, db_alias: str | None = None) -> str:
         active=True,
     )
     for benefit in source_benefits:
+        if benefit.restaurant_id == JUNGDUNBAM_FESTIVAL_RESTAURANT_ID:
+            continue
         RestaurantCouponBenefit.objects.using(alias).update_or_create(
             coupon_type=pub_type,
             restaurant_id=benefit.restaurant_id,
@@ -108,5 +114,10 @@ def ensure_pub_jujeom_event_data(*, db_alias: str | None = None) -> str:
                 "active": benefit.active,
             },
         )
+
+    RestaurantCouponBenefit.objects.using(alias).filter(
+        coupon_type=pub_type,
+        restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+    ).update(active=False)
 
     return alias

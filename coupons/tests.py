@@ -34,6 +34,8 @@ from coupons.service import (
     issue_app_open_coupon,
     get_stamp_status,
     get_stamp_rewards_for_restaurant,
+    _get_jujeom_restaurant_ids,
+    _get_pub_restaurant_ids,
     JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
     JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE,
     JUNGDUNBAM_FESTIVAL_WED_CAMPAIGN_CODE,
@@ -749,6 +751,34 @@ class PubJujeomEventCouponTests(TestCase):
             )
         return user, ct, camp
 
+    def test_junyoung_excludes_jungdunbam_festival_stall(self):
+        user, ct, _ = self._seed_jujeom_pool(4)
+        AffiliateRestaurant.objects.update_or_create(
+            restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+            defaults={
+                "name": "우주라이크 X 정든밤",
+                "is_affiliate": True,
+                "category": AFFILIATE_CATEGORY_JUJEOM,
+            },
+        )
+        RestaurantCouponBenefit.objects.create(
+            coupon_type=ct,
+            restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+            sort_order=0,
+            title="치킨무 공짜",
+            subtitle="",
+            benefit_json={},
+            active=True,
+        )
+
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):
+            result = claim_pub_jujeom_event_coupon(user, "junyoung")
+
+        self.assertNotIn(
+            JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+            {c.restaurant_id for c in result["coupons"]},
+        )
+
     def test_junyoung_excludes_non_pub_non_jujeom(self):
         user, ct, _ = self._seed_jujeom_pool(6)
         excluded_rid = 990100
@@ -936,7 +966,31 @@ class JungdunbamFestivalWedTests(TestCase):
         )
 
     def test_excluded_from_all_standard_coupons(self):
+        from coupons.festival_jungdunbam import LEGACY_FESTIVAL_RESTAURANT_ID
+
         self.assertIn(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID, RESTAURANTS_EXCLUDED_FROM_ALL)
+        self.assertIn(LEGACY_FESTIVAL_RESTAURANT_ID, RESTAURANTS_EXCLUDED_FROM_ALL)
+        self.assertEqual(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID, 299)
+
+    def test_festival_stall_excluded_from_pub_and_jujeom_pools(self):
+        AffiliateRestaurant.objects.update_or_create(
+            restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+            defaults={
+                "name": "우주라이크 X 정든밤",
+                "is_affiliate": True,
+                "category": AFFILIATE_CATEGORY_JUJEOM,
+                "pub_option": "네",
+            },
+        )
+        rid_list = [JUNGDUNBAM_FESTIVAL_RESTAURANT_ID, 99]
+        self.assertNotIn(
+            JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+            _get_jujeom_restaurant_ids(db_alias="default"),
+        )
+        self.assertNotIn(
+            JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+            _get_pub_restaurant_ids(rid_list, db_alias="default"),
+        )
 
     def test_issues_until_may20_midnight_not_after(self):
         from datetime import datetime

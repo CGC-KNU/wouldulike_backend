@@ -1,5 +1,5 @@
 """
-우주라이크 X 정든밤 축제 주막(298) 데이터를 CloudSQL(restaurants_affiliate)에 반영.
+우주라이크 X 정든밤 축제 주막(restaurant_id=299) 데이터를 CloudSQL에 반영.
 마이그레이션·관리 명령에서 공통 사용.
 """
 from __future__ import annotations
@@ -10,7 +10,9 @@ from django.db import connections
 from django.utils import timezone
 
 
-RESTAURANT_ID = 298
+RESTAURANT_ID = 299
+# 이전에 사용하던 ID(삭제·교체 전 식당과 겹칠 수 있음) — 발급·풀에서 계속 제외
+LEGACY_FESTIVAL_RESTAURANT_ID = 298
 MERCHANT_PIN = "0629"
 RESTAURANT_NAME = "우주라이크 X 정든밤"
 DESCRIPTION = (
@@ -31,7 +33,14 @@ STAMP_BENEFIT_DISPLAY_PLAIN = {
     "mode": "plain",
     "text": STAMP_DISPLAY_NO_REWARD_MESSAGE,
 }
-STAMP_DISABLED_RESTAURANT_IDS = frozenset({RESTAURANT_ID})
+STAMP_DISABLED_RESTAURANT_IDS = frozenset(
+    {RESTAURANT_ID, LEGACY_FESTIVAL_RESTAURANT_ID}
+)
+
+
+def festival_restaurant_ids_excluded_from_pub_pools() -> frozenset[int]:
+    """수요일 APP_OPEN_WED·주점 이벤트 등 술집/주점 풀에서 제외 (축제 전용 발급만)."""
+    return STAMP_DISABLED_RESTAURANT_IDS
 # 앱 제휴 목록 노출
 IS_AFFILIATE_IN_APP = True
 CATEGORY = "주점"
@@ -61,6 +70,7 @@ COUPON_TYPES_TO_EXCLUDE = [
     "APP_OPEN_WED",
     "DATE_EVENT_SPECIAL",
     "MIDTERM_EVENT_SPECIAL",
+    "PUB_JUJEOM_EVENT",
     "STAMP_REWARD_2",
     "STAMP_REWARD_3",
     "STAMP_REWARD_5",
@@ -235,6 +245,98 @@ def build_stamp_disabled_api_payload(
     if stamp_benefit_display:
         payload["stamp_benefit_display"] = stamp_benefit_display
     return payload
+
+
+def reassign_festival_restaurant_id(
+    *,
+    db_alias: str,
+    old_id: int = LEGACY_FESTIVAL_RESTAURANT_ID,
+    new_id: int = RESTAURANT_ID,
+) -> None:
+    """축제 주막 restaurant_id 를 old_id → new_id 로 이전하고 구 ID 는 제휴 해제."""
+    if old_id == new_id:
+        ensure_jungdunbam_festival_data(db_alias=db_alias)
+        return
+
+    from coupons.models import (
+        Coupon,
+        CouponRestaurantExclusion,
+        MerchantPin,
+        RestaurantCouponBenefit,
+        StampEvent,
+        StampRewardRule,
+        StampWallet,
+    )
+    from restaurants.models import AffiliateRestaurant
+
+    alias = db_alias
+    for model in (
+        Coupon,
+        RestaurantCouponBenefit,
+        CouponRestaurantExclusion,
+        MerchantPin,
+        StampWallet,
+        StampEvent,
+        StampRewardRule,
+    ):
+        model.objects.using(alias).filter(restaurant_id=old_id).update(
+            restaurant_id=new_id
+        )
+
+    old_ar = (
+        AffiliateRestaurant.objects.using(alias)
+        .filter(restaurant_id=old_id)
+        .first()
+    )
+    if old_ar:
+        AffiliateRestaurant.objects.using(alias).filter(restaurant_id=old_id).update(
+            is_affiliate=False
+        )
+
+    conn = connections[alias]
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT 1 FROM restaurants_affiliate WHERE restaurant_id = %s",
+            [new_id],
+        )
+        new_exists = cursor.fetchone() is not None
+        cursor.execute(
+            "SELECT 1 FROM restaurants_affiliate WHERE restaurant_id = %s",
+            [old_id],
+        )
+        old_exists = cursor.fetchone() is not None
+        if old_exists and not new_exists:
+            cursor.execute(
+                """
+                UPDATE restaurants_affiliate
+                SET restaurant_id = %s
+                WHERE restaurant_id = %s
+                """,
+                [new_id, old_id],
+            )
+        elif old_exists and new_exists:
+            cursor.execute(
+                """
+                UPDATE restaurants_affiliate
+                SET is_affiliate = FALSE
+                WHERE restaurant_id = %s
+                """,
+                [old_id],
+            )
+
+    ensure_jungdunbam_festival_data(db_alias=alias)
+    RestaurantCouponBenefit.objects.using(alias).filter(restaurant_id=old_id).update(
+        active=False
+    )
+
+
+def deactivate_non_festival_coupon_benefits(*, db_alias: str) -> None:
+    """축제 주막: 음료 쿠폰 benefit 만 남기고 나머지 식당 benefit 비활성화."""
+    from coupons.models import RestaurantCouponBenefit
+
+    RestaurantCouponBenefit.objects.using(db_alias).filter(
+        restaurant_id=RESTAURANT_ID,
+    ).exclude(coupon_type__code=COUPON_TYPE_CODE).update(active=False)
 
 
 def ensure_stamp_disabled_rule_for_jungdunbam(*, db_alias: str) -> None:
@@ -429,5 +531,6 @@ def ensure_jungdunbam_festival_data(*, db_alias: str | None = None) -> str:
         )
 
     ensure_stamp_disabled_rule_for_jungdunbam(db_alias=alias)
+    deactivate_non_festival_coupon_benefits(db_alias=alias)
 
     return alias

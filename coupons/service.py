@@ -13,6 +13,11 @@ from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from restaurants.models import AffiliateRestaurant
 
+from coupons.festival_jungdunbam import (
+    LEGACY_FESTIVAL_RESTAURANT_ID,
+    RESTAURANT_ID as _JUNGDUNBAM_FESTIVAL_RID,
+)
+
 from .models import (
     Campaign,
     CouponType,
@@ -89,7 +94,7 @@ MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE = os.getenv(
 )
 # 경북대 80주년 축제 주막(우주라이크 X 정든밤): 5/20 23:59(KST)까지 앱 접속 시 음료 쿠폰 1장 (APP_OPEN_WED 와 별도)
 JUNGDUNBAM_FESTIVAL_RESTAURANT_ID = int(
-    os.getenv("JUNGDUNBAM_FESTIVAL_RESTAURANT_ID", "298")
+    os.getenv("JUNGDUNBAM_FESTIVAL_RESTAURANT_ID", str(_JUNGDUNBAM_FESTIVAL_RID))
 )
 JUNGDUNBAM_FESTIVAL_WED_ENABLED = os.getenv("JUNGDUNBAM_FESTIVAL_WED_ENABLED", "1") in (
     "1",
@@ -262,8 +267,13 @@ MAX_COUPONS_PER_RESTAURANT = 200
 # 30: 고니식탁, 147: 포차1번지먹새통, 65: 팀스 쿠치나 (쿠폰 발급 제외, 제휴는 유지)
 # 148(Better), 284(와비사비)는 제휴 아님 → AffiliateRestaurant에 없음
 # RESTAURANTS_EXCLUDED_FROM_ALL: 모든 쿠폰 발급에서 제외 (팀스 쿠치나 등)
-# 298: 우주라이크 X 정든밤 축제 주막 — JUNGDUNBAM_FESTIVAL_WED 전용 발급만 허용
-RESTAURANTS_EXCLUDED_FROM_ALL: set[int] = {65, 298}
+# 299: 우주라이크 X 정든밤 축제 주막 — JUNGDUNBAM_FESTIVAL_WED 전용 발급만 허용
+# 298: 구 축제 ID(삭제·교체 전) — 신규 발급 차단 유지
+RESTAURANTS_EXCLUDED_FROM_ALL: set[int] = {
+    65,
+    JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+    LEGACY_FESTIVAL_RESTAURANT_ID,
+}
 # RESTAURANTS_EXCLUDED_FROM_NON_STAMP: 스탬프 적립 보상 쿠폰 제외, 그 외 모든 쿠폰 발급에서 제외 (고니식탁 등)
 RESTAURANTS_EXCLUDED_FROM_NON_STAMP: set[int] = {30}
 COUPON_TYPE_EXCLUDED_RESTAURANTS: dict[str, set[int]] = {
@@ -322,8 +332,15 @@ def _is_pub_restaurant(restaurant_id: int, *, db_alias: str | None = None) -> bo
 def _get_pub_restaurant_ids(
     restaurant_ids: list[int], *, db_alias: str | None = None
 ) -> list[int]:
-    """restaurant_ids 중 술집만 반환."""
-    return [rid for rid in restaurant_ids if _is_pub_restaurant(rid, db_alias=db_alias)]
+    """restaurant_ids 중 술집만 반환 (축제 주막 등 전용 발급 식당 제외)."""
+    from coupons.festival_jungdunbam import festival_restaurant_ids_excluded_from_pub_pools
+
+    skip = festival_restaurant_ids_excluded_from_pub_pools()
+    return [
+        rid
+        for rid in restaurant_ids
+        if rid not in skip and _is_pub_restaurant(rid, db_alias=db_alias)
+    ]
 
 
 def _get_non_pub_restaurant_ids(
@@ -360,6 +377,10 @@ def _get_jujeom_restaurant_ids(*, db_alias: str | None = None) -> set[int]:
         is_pub = pub == "네" or pub.startswith("네,") or cat == "술집"
         if cat == AFFILIATE_CATEGORY_JUJEOM or is_pub:
             target.add(rid)
+
+    from coupons.festival_jungdunbam import festival_restaurant_ids_excluded_from_pub_pools
+
+    target -= festival_restaurant_ids_excluded_from_pub_pools()
     return target
 
 
