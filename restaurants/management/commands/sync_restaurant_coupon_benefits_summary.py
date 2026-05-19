@@ -11,8 +11,14 @@ restaurants_affiliate.coupon_benefits_summary 컬럼을 채웁니다.
 import json
 
 from django.core.management.base import BaseCommand, CommandError
-from django.db import connections, router
+from django.db import connections
 
+from restaurants.affiliate_db import (
+    AFFILIATE_TABLE,
+    SUMMARY_COLUMN,
+    ensure_affiliate_summary_column,
+    resolve_affiliate_db_alias,
+)
 from restaurants.benefits_summary import (
     build_coupon_benefits_summary,
     format_coupon_benefits_summary_text,
@@ -55,6 +61,12 @@ class Command(BaseCommand):
             default=None,
             help="출력·처리 건수 제한 (검수용)",
         )
+        parser.add_argument(
+            "--database",
+            type=str,
+            default=None,
+            help="restaurants_affiliate DB alias (기본: 라우터 기준, 보통 cloudsql)",
+        )
 
     def handle(self, *args, **options):
         restaurant_ids = options.get("restaurant_ids") or []
@@ -68,27 +80,23 @@ class Command(BaseCommand):
                 "--restaurant-id 또는 --all-affiliates 중 하나는 필요합니다."
             )
 
-        alias = router.db_for_read(AffiliateRestaurant)
+        alias = resolve_affiliate_db_alias(options.get("database"))
         conn = connections[alias]
 
         with conn.cursor() as cursor:
             table_names = conn.introspection.table_names(cursor)
-            if "restaurants_affiliate" not in table_names:
+            if AFFILIATE_TABLE not in table_names:
                 raise CommandError(
-                    f"DB({alias})에 restaurants_affiliate 테이블이 없습니다. "
-                    "CloudSQL에서 restaurants.0006 마이그레이션 후 실행하세요."
+                    f"DB({alias})에 {AFFILIATE_TABLE} 테이블이 없습니다. "
+                    f"python manage.py migrate restaurants --database={alias} 를 실행하세요."
                 )
-            columns = {
-                col.name
-                for col in conn.introspection.get_table_description(
-                    cursor, "restaurants_affiliate"
-                )
-            }
-            if "coupon_benefits_summary" not in columns:
-                raise CommandError(
-                    "coupon_benefits_summary 컬럼이 없습니다. "
-                    "python manage.py migrate restaurants 를 먼저 실행하세요."
-                )
+
+        if not ensure_affiliate_summary_column(conn):
+            raise CommandError(
+                f"DB({alias})에 {SUMMARY_COLUMN} 컬럼이 없습니다. "
+                f"python manage.py migrate restaurants --database={alias} 를 실행하세요. "
+                "(restaurants 앱은 cloudsql 에 마이그레이션되어야 합니다.)"
+            )
 
         if all_affiliates:
             qs = AffiliateRestaurant.objects.using(alias).filter(is_affiliate=True)

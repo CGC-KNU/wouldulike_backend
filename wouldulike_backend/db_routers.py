@@ -65,7 +65,7 @@ class TypeDescriptionRouter:
 
         if app_label in {"type_description", "food_by_type"}:
             return db in {"cloudsql", "rds"}
-        if app_label in {"coupons", "trends"}:
+        if app_label in {"coupons", "trends", "restaurants"}:
             return db == "cloudsql"
         if app_label == "campus_restaurants":
             return False
