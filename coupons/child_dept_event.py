@@ -44,6 +44,7 @@ CHILD_DEPT_DEFAULT_NICKNAMES: tuple[str, ...] = (
     "아료니",
     "죵재",
     "딸기잼잼",
+    "딸기잼",
 )
 
 

@@ -6,6 +6,7 @@
   python manage.py issue_child_dept_coupon_pack --dry-run
   python manage.py issue_child_dept_coupon_pack --no-input
   python manage.py issue_child_dept_coupon_pack --excel "/path/to/신청폼.xlsx" --no-input
+  python manage.py issue_child_dept_coupon_pack --only-provided --nickname 딸기잼 --no-input
 """
 from __future__ import annotations
 
@@ -58,9 +59,16 @@ class Command(BaseCommand):
             action="store_true",
             help="ensure_child_dept_event_data 생략",
         )
+        parser.add_argument(
+            "--only-provided",
+            action="store_true",
+            help="기본 18명 목록 없이 --nickname/--excel 로 준 닉네임만 발급",
+        )
 
     def handle(self, *args, **options):
-        nick_lists: list[list[str]] = [list(CHILD_DEPT_DEFAULT_NICKNAMES)]
+        nick_lists: list[list[str]] = []
+        if not options["only_provided"]:
+            nick_lists.append(list(CHILD_DEPT_DEFAULT_NICKNAMES))
         if options.get("nickname"):
             nick_lists.append(options["nickname"])
 
