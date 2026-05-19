@@ -18,9 +18,13 @@ DESCRIPTION = (
     "5/20 23:59(KST)까지 앱 접속 시 음료수 1개 쿠폰 (기존 수요일 쿠폰과 별도)"
 )
 STAMP_DISABLED_NOTES = (
-    "이 주막은 스탬프 적립·보상이 없습니다.\n"
+    "이 주막은 스탬프 적립, 보상이 없습니다.\n"
     "오늘 하루만 운영되는 페이지입니다."
 )
+# 앱 스탬프 카드 표시용 (실제 적립·쿠폰 발급 없음)
+FESTIVAL_STAMP_CYCLE_TARGET = 10
+FESTIVAL_STAMP_DISPLAY_THRESHOLDS = (5, 10)
+STAMP_DISPLAY_NO_REWARD_MESSAGE = "이 주막은 스탬프 적립, 보상이 없습니다."
 STAMP_DISABLED_RESTAURANT_IDS = frozenset({RESTAURANT_ID})
 # 앱 제휴 목록 노출
 IS_AFFILIATE_IN_APP = True
@@ -135,15 +139,34 @@ def get_festival_promotions_for_app() -> list[dict]:
     ]
 
 
+def get_festival_display_stamp_rewards() -> list[dict]:
+    """스탬프 카드 UI용 5·10개 구간 — 실제 보상·적립 없음(display_only)."""
+    return [
+        {
+            "stamps": stamps,
+            "title": STAMP_DISPLAY_NO_REWARD_MESSAGE,
+            "subtitle": "",
+            "notes": "",
+            "benefit": {},
+            "display_only": True,
+        }
+        for stamps in FESTIVAL_STAMP_DISPLAY_THRESHOLDS
+    ]
+
+
 def build_jungdunbam_stamp_rule_config() -> dict:
     """StampRewardRule.config_json — 프론트·API가 DB에서 읽는 스탬프 설정."""
     return {
         "stamp_enabled": False,
         "stamp_disabled": True,
         "legacy_stamp_defaults": False,
-        "show_stamp_card": False,
-        "thresholds": [],
-        "cycle_target": None,
+        "show_stamp_card": True,
+        "cycle_target": FESTIVAL_STAMP_CYCLE_TARGET,
+        "thresholds": [
+            {"stamps": stamps, "display_only": True}
+            for stamps in FESTIVAL_STAMP_DISPLAY_THRESHOLDS
+        ],
+        "display_rewards": get_festival_display_stamp_rewards(),
         "notes": STAMP_DISABLED_NOTES,
         "promotions": get_festival_promotions_for_app(),
     }
@@ -167,20 +190,27 @@ def build_stamp_disabled_api_payload(
     """
     스탬프 미사용 식당용 API 페이로드 (DB config_json 과 동일 필드).
 
-    target/current 를 null 로 두어 프론트의 `target || 10` 레거시 폴백을 막는다.
+    display_rewards 가 있으면 5·10 등 구간을 보여주되 적립은 stamp_enabled=false 로 막는다.
     """
     cfg = rule_config if rule_config is not None else build_jungdunbam_stamp_rule_config()
     promotions = cfg.get("promotions")
     if promotions is None:
         promotions = get_festival_promotions_for_app()
+    display_rewards = cfg.get("display_rewards")
+    if display_rewards is None and cfg.get("show_stamp_card"):
+        display_rewards = get_festival_display_stamp_rewards()
+    display_rewards = display_rewards or []
+    cycle_target = cfg.get("cycle_target")
+    show_card = bool(cfg.get("show_stamp_card", False))
+    use_stamp_card = show_card and bool(display_rewards)
     return {
-        "current": None,
-        "target": cfg.get("cycle_target"),
-        "rewards": [],
+        "current": 0 if use_stamp_card else None,
+        "target": cycle_target if use_stamp_card else cfg.get("cycle_target"),
+        "rewards": display_rewards,
         "notes": (cfg.get("notes") or STAMP_DISABLED_NOTES).strip(),
         "stamp_enabled": False,
         "legacy_stamp_defaults": bool(cfg.get("legacy_stamp_defaults", False)),
-        "show_stamp_card": bool(cfg.get("show_stamp_card", False)),
+        "show_stamp_card": show_card,
         "promotions": promotions,
         "updated_at": updated_at,
     }

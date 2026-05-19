@@ -41,6 +41,7 @@ from coupons.service import (
 )
 from coupons.models import StampRewardRule
 from coupons.festival_jungdunbam import (
+    STAMP_DISPLAY_NO_REWARD_MESSAGE,
     STAMP_DISABLED_NOTES,
     ensure_stamp_disabled_rule_for_jungdunbam,
 )
@@ -987,7 +988,7 @@ class JungdunbamFestivalWedTests(TestCase):
         self.assertEqual(len(second), 1)
         self.assertEqual(first[0].id, second[0].id)
 
-    def test_stamp_disabled_shows_festival_promotion_not_rewards(self):
+    def test_stamp_disabled_shows_display_rewards_and_festival_promotion(self):
         StampRewardRule.objects.create(
             restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
             rule_type="THRESHOLD",
@@ -1005,16 +1006,26 @@ class JungdunbamFestivalWedTests(TestCase):
         rule = StampRewardRule.objects.get(restaurant_id=JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
         self.assertFalse(rule.config_json["stamp_enabled"])
         self.assertEqual(rule.config_json["notes"], STAMP_DISABLED_NOTES)
-        self.assertEqual(rule.config_json["thresholds"], [])
+        self.assertTrue(rule.config_json["show_stamp_card"])
+        self.assertEqual(rule.config_json["cycle_target"], 10)
+        self.assertEqual(
+            [t["stamps"] for t in rule.config_json["thresholds"]],
+            [5, 10],
+        )
 
         data = get_stamp_status(self.user, JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
         self.assertFalse(data["stamp_enabled"])
         self.assertFalse(data["legacy_stamp_defaults"])
-        self.assertFalse(data["show_stamp_card"])
-        self.assertEqual(data["rewards"], [])
-        self.assertIsNone(data["target"])
-        self.assertIsNone(data["current"])
-        self.assertIn("스탬프 적립·보상이 없습니다", data["notes"])
+        self.assertTrue(data["show_stamp_card"])
+        self.assertEqual(data["target"], 10)
+        self.assertEqual(data["current"], 0)
+        self.assertEqual(len(data["rewards"]), 2)
+        self.assertEqual(data["rewards"][0]["stamps"], 5)
+        self.assertEqual(data["rewards"][1]["stamps"], 10)
+        for reward in data["rewards"]:
+            self.assertEqual(reward["title"], STAMP_DISPLAY_NO_REWARD_MESSAGE)
+            self.assertTrue(reward.get("display_only"))
+        self.assertIn("스탬프 적립, 보상이 없습니다", data["notes"])
         self.assertIn("오늘 하루만 운영되는 페이지", data["notes"])
         self.assertEqual(len(data["promotions"]), 1)
         self.assertEqual(data["promotions"][0]["title"], "음료수 1개")

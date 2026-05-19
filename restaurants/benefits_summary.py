@@ -86,12 +86,15 @@ def _stamp_section(restaurant_id: int) -> dict:
     if _is_stamp_disabled_restaurant(restaurant_id):
         rule = _get_stamp_reward_rule(restaurant_id)
         cfg = rule.config_json if rule else {}
+        if not isinstance(cfg, dict):
+            cfg = {}
+        display_rewards = cfg.get("display_rewards") or []
         return {
             "enabled": False,
             "rule_type": rule.rule_type if rule else None,
-            "notes": (cfg.get("notes") or "") if isinstance(cfg, dict) else "",
-            "cycle_target": cfg.get("cycle_target") if isinstance(cfg, dict) else None,
-            "rewards": [],
+            "notes": cfg.get("notes") or "",
+            "cycle_target": cfg.get("cycle_target"),
+            "rewards": display_rewards,
         }
 
     rule = _get_stamp_reward_rule(restaurant_id)
@@ -168,6 +171,11 @@ def format_coupon_benefits_summary_text(summary: dict) -> str:
     if not stamp.get("enabled"):
         note = (stamp.get("notes") or "").strip()
         lines.append("[스탬프] 미사용" + (f" — {note}" if note else ""))
+        for reward in stamp.get("rewards") or []:
+            if "stamps" in reward:
+                lines.append(
+                    f"[스탬프 표시 {reward['stamps']}개] {reward.get('title') or ''}".strip()
+                )
     else:
         stamp_notes = (stamp.get("notes") or "").strip()
         if stamp_notes:
