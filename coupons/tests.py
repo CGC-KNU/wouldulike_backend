@@ -855,6 +855,75 @@ class PubJujeomEventCouponTests(TestCase):
         self.assertEqual(r5["total_issued"], 5)
         self.assertEqual(len({c.restaurant_id for c in r3["coupons"]}), 3)
 
+    def test_yunji_issues_five_on_first_claim_when_pool_had_four_before_ensure(self):
+        user = self.user_model.objects.create_user(kakao_id=96101, password="pass")
+        ct, _ = CouponType.objects.get_or_create(
+            code="PUB_JUJEOM_EVENT",
+            defaults={
+                "title": PUB_JUJEOM_EVENT_SUBTITLE,
+                "benefit_json": {},
+                "valid_days": 0,
+                "per_user_limit": 1,
+            },
+        )
+        Campaign.objects.get_or_create(
+            code="PUB_JUJEOM_EVENT_CODES",
+            defaults={"name": "주점 이벤트", "type": "FLASH", "active": True},
+        )
+        base_rid = 991000
+        for i in range(4):
+            rid = base_rid + i
+            AffiliateRestaurant.objects.update_or_create(
+                restaurant_id=rid,
+                defaults={
+                    "name": f"주점{i}",
+                    "is_affiliate": True,
+                    "category": "술집",
+                    "pub_option": "네",
+                },
+            )
+            RestaurantCouponBenefit.objects.create(
+                coupon_type=ct,
+                restaurant_id=rid,
+                sort_order=0,
+                title=f"혜택{i}",
+                subtitle="",
+                benefit_json={},
+                active=True,
+            )
+
+        with patch(
+            "coupons.pub_jujeom_event.ensure_pub_jujeom_event_data",
+        ) as mock_ensure:
+            def _add_fifth(*, db_alias=None):
+                rid = base_rid + 4
+                AffiliateRestaurant.objects.update_or_create(
+                    restaurant_id=rid,
+                    defaults={
+                        "name": "주점4",
+                        "is_affiliate": True,
+                        "category": "술집",
+                        "pub_option": "네",
+                    },
+                )
+                RestaurantCouponBenefit.objects.create(
+                    coupon_type=ct,
+                    restaurant_id=rid,
+                    sort_order=0,
+                    title="혜택4",
+                    subtitle="",
+                    benefit_json={},
+                    active=True,
+                )
+
+            mock_ensure.side_effect = _add_fifth
+            with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):
+                result = claim_pub_jujeom_event_coupon(user, "YUNJI")
+
+        self.assertEqual(result["total_issued"], 5)
+        self.assertFalse(result.get("topped_up"))
+        mock_ensure.assert_called_once()
+
     def test_yunji_top_up_when_pool_was_smaller_on_first_claim(self):
         user, ct, camp = self._seed_jujeom_pool(4)
         with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):

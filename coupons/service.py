@@ -2345,6 +2345,48 @@ PUB_JUJEOM_EVENT_CODE_COUNTS: dict[str, int] = {
     "JEONGHWAN": 3,
     "YUNJI": 5,
 }
+PUB_JUJEOM_MAX_TIER_COUNT = max(PUB_JUJEOM_EVENT_CODE_COUNTS.values())
+
+
+def _list_pub_jujeom_issue_benefits(
+    coupon_type: CouponType,
+    *,
+    jujeom_ids: set[int],
+    excluded_ids: set[int],
+    db_alias: str,
+    min_restaurants: int = 0,
+) -> list[RestaurantCouponBenefit]:
+    """
+    주점·술집 발급 풀: 식당당 benefit 1개.
+    min_restaurants 미만이면 ensure_pub_jujeom_event_data 로 풀을 채운 뒤 재조회.
+    """
+    from coupons.pub_jujeom_event import ensure_pub_jujeom_event_data
+
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+
+    def _fetch_unique() -> list[RestaurantCouponBenefit]:
+        rows = list(
+            RestaurantCouponBenefit.objects.using(benefit_alias)
+            .filter(
+                coupon_type=coupon_type,
+                active=True,
+                restaurant_id__in=jujeom_ids,
+            )
+            .exclude(restaurant_id__in=excluded_ids)
+            .order_by("restaurant_id", "sort_order")
+        )
+        by_rid: dict[int, RestaurantCouponBenefit] = {}
+        for row in rows:
+            rid = int(row.restaurant_id)
+            if rid not in by_rid:
+                by_rid[rid] = row
+        return list(by_rid.values())
+
+    pool = _fetch_unique()
+    if min_restaurants > 0 and len(pool) < min_restaurants:
+        ensure_pub_jujeom_event_data(db_alias=db_alias)
+        pool = _fetch_unique()
+    return pool
 
 # 중간고사 캠페인: 날짜별 쿠폰코드 / 25분 챌린지 코드
 MIDTERM_DAILY_CAMPAIGN_CODE = "MIDTERM_EVENT_DAILY_CODES"
@@ -2750,7 +2792,8 @@ def claim_pub_jujeom_event_coupon(user: User, coupon_code: str):
     """
     술집·주점 제휴 식당 benefit 풀에서 랜덤 발급 (수요일 APP_OPEN_WED 술집 기준 + category='주점').
     - JUNYOUNG: 1종 / JEONGHWAN: 3종 / YUNJI: 5종 (대소문자 무관)
-    - 코드별 사용자 1회 (동일 코드 재입력 시 기발급 반환)
+    - 코드별 사용자 1회 (동일 코드 재입력 시 기발급; 풀 부족 시에만 부족분 보충)
+    - 발급 전 풀이 부족하면 ensure 로 식당별 benefit 자동 보강 (YUNJI 첫 입력 5장)
     - 기간: ~2026-05-31 23:59:59 KST
     """
     code = (coupon_code or "").strip().upper()
@@ -2778,16 +2821,12 @@ def claim_pub_jujeom_event_coupon(user: User, coupon_code: str):
         raise ValidationError("event not configured")
 
     excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
-    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
-    benefits = list(
-        RestaurantCouponBenefit.objects.using(benefit_alias)
-        .filter(
-            coupon_type=ct,
-            active=True,
-            restaurant_id__in=jujeom_ids,
-        )
-        .exclude(restaurant_id__in=excluded_ids)
-        .order_by("restaurant_id", "sort_order")
+    benefits = _list_pub_jujeom_issue_benefits(
+        ct,
+        jujeom_ids=jujeom_ids,
+        excluded_ids=excluded_ids,
+        db_alias=alias,
+        min_restaurants=count,
     )
     if not benefits:
         raise ValidationError("event not configured")
@@ -2887,12 +2926,13 @@ def issue_pub_jujeom_pool_tiers_for_user(
         raise ValidationError("event not configured")
 
     excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
-    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
-    benefits = list(
-        RestaurantCouponBenefit.objects.using(benefit_alias)
-        .filter(coupon_type=ct, active=True, restaurant_id__in=jujeom_ids)
-        .exclude(restaurant_id__in=excluded_ids)
-        .order_by("restaurant_id", "sort_order")
+    max_tier = max(int(v) for v in tier_counts.values()) if tier_counts else 0
+    benefits = _list_pub_jujeom_issue_benefits(
+        ct,
+        jujeom_ids=jujeom_ids,
+        excluded_ids=excluded_ids,
+        db_alias=alias,
+        min_restaurants=max_tier,
     )
     if not benefits:
         raise ValidationError("event not configured")
