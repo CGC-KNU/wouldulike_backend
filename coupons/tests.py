@@ -42,6 +42,7 @@ from coupons.service import (
 from coupons.models import StampRewardRule
 from coupons.festival_jungdunbam import (
     STAMP_DISPLAY_NO_REWARD_MESSAGE,
+    STAMP_DISPLAY_REWARD_TITLE_LEGACY,
     STAMP_DISABLED_NOTES,
     ensure_stamp_disabled_rule_for_jungdunbam,
 )
@@ -1022,8 +1023,14 @@ class JungdunbamFestivalWedTests(TestCase):
         self.assertEqual(len(data["rewards"]), 2)
         self.assertEqual(data["rewards"][0]["stamps"], 5)
         self.assertEqual(data["rewards"][1]["stamps"], 10)
+        self.assertEqual(
+            data["stamp_benefit_display"],
+            {"mode": "plain", "text": STAMP_DISPLAY_NO_REWARD_MESSAGE},
+        )
         for reward in data["rewards"]:
-            self.assertEqual(reward["title"], STAMP_DISPLAY_NO_REWARD_MESSAGE)
+            self.assertEqual(reward["title"], STAMP_DISPLAY_REWARD_TITLE_LEGACY)
+            self.assertEqual(reward["label"], STAMP_DISPLAY_NO_REWARD_MESSAGE)
+            self.assertEqual(reward.get("render_mode"), "plain")
             self.assertTrue(reward.get("display_only"))
         self.assertIn("스탬프 적립, 보상이 없습니다", data["notes"])
         self.assertIn("오늘 하루만 운영되는 페이지", data["notes"])

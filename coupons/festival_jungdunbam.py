@@ -25,6 +25,12 @@ STAMP_DISABLED_NOTES = (
 FESTIVAL_STAMP_CYCLE_TARGET = 10
 FESTIVAL_STAMP_DISPLAY_THRESHOLDS = (5, 10)
 STAMP_DISPLAY_NO_REWARD_MESSAGE = "이 주막은 스탬프 적립, 보상이 없습니다."
+# 레거시 앱: `스탬프 N개 적립 시 {title} 제공` 템플릿용 (괄호로 문장만 전달)
+STAMP_DISPLAY_REWARD_TITLE_LEGACY = f"({STAMP_DISPLAY_NO_REWARD_MESSAGE})"
+STAMP_BENEFIT_DISPLAY_PLAIN = {
+    "mode": "plain",
+    "text": STAMP_DISPLAY_NO_REWARD_MESSAGE,
+}
 STAMP_DISABLED_RESTAURANT_IDS = frozenset({RESTAURANT_ID})
 # 앱 제휴 목록 노출
 IS_AFFILIATE_IN_APP = True
@@ -140,15 +146,23 @@ def get_festival_promotions_for_app() -> list[dict]:
 
 
 def get_festival_display_stamp_rewards() -> list[dict]:
-    """스탬프 카드 UI용 5·10개 구간 — 실제 보상·적립 없음(display_only)."""
+    """
+    스탬프 카드 UI용 5·10개 구간 — 실제 보상·적립 없음(display_only).
+
+    - label / reward_label: 앱이 plain 모드일 때 그대로 표시
+    - title: 레거시 `스탬프 N개 적립 시 {title} 제공` 템플릿용 (괄호 문구)
+    """
     return [
         {
             "stamps": stamps,
-            "title": STAMP_DISPLAY_NO_REWARD_MESSAGE,
+            "title": STAMP_DISPLAY_REWARD_TITLE_LEGACY,
+            "label": STAMP_DISPLAY_NO_REWARD_MESSAGE,
+            "reward_label": STAMP_DISPLAY_NO_REWARD_MESSAGE,
             "subtitle": "",
             "notes": "",
             "benefit": {},
             "display_only": True,
+            "render_mode": "plain",
         }
         for stamps in FESTIVAL_STAMP_DISPLAY_THRESHOLDS
     ]
@@ -167,6 +181,7 @@ def build_jungdunbam_stamp_rule_config() -> dict:
             for stamps in FESTIVAL_STAMP_DISPLAY_THRESHOLDS
         ],
         "display_rewards": get_festival_display_stamp_rewards(),
+        "stamp_benefit_display": dict(STAMP_BENEFIT_DISPLAY_PLAIN),
         "notes": STAMP_DISABLED_NOTES,
         "promotions": get_festival_promotions_for_app(),
     }
@@ -203,7 +218,10 @@ def build_stamp_disabled_api_payload(
     cycle_target = cfg.get("cycle_target")
     show_card = bool(cfg.get("show_stamp_card", False))
     use_stamp_card = show_card and bool(display_rewards)
-    return {
+    stamp_benefit_display = cfg.get("stamp_benefit_display")
+    if stamp_benefit_display is None and use_stamp_card:
+        stamp_benefit_display = dict(STAMP_BENEFIT_DISPLAY_PLAIN)
+    payload = {
         "current": 0 if use_stamp_card else None,
         "target": cycle_target if use_stamp_card else cfg.get("cycle_target"),
         "rewards": display_rewards,
@@ -214,6 +232,9 @@ def build_stamp_disabled_api_payload(
         "promotions": promotions,
         "updated_at": updated_at,
     }
+    if stamp_benefit_display:
+        payload["stamp_benefit_display"] = stamp_benefit_display
+    return payload
 
 
 def ensure_stamp_disabled_rule_for_jungdunbam(*, db_alias: str) -> None:
