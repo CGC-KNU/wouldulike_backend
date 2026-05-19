@@ -855,6 +855,36 @@ class PubJujeomEventCouponTests(TestCase):
         self.assertEqual(r5["total_issued"], 5)
         self.assertEqual(len({c.restaurant_id for c in r3["coupons"]}), 3)
 
+    def test_yunji_top_up_when_pool_was_smaller_on_first_claim(self):
+        user, ct, camp = self._seed_jujeom_pool(4)
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):
+            first = claim_pub_jujeom_event_coupon(user, "YUNJI")
+        self.assertEqual(first["total_issued"], 4)
+        self.assertEqual(first["requested_count"], 5)
+
+        RestaurantCouponBenefit.objects.create(
+            coupon_type=ct,
+            restaurant_id=990010,
+            sort_order=0,
+            title="추가주점",
+            subtitle="",
+            benefit_json={},
+            active=True,
+        )
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):
+            second = claim_pub_jujeom_event_coupon(user, "YUNJI")
+        self.assertTrue(second.get("topped_up"))
+        self.assertEqual(second["total_issued"], 5)
+        self.assertEqual(
+            Coupon.objects.filter(
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                issue_key__startswith=f"PUB_JUJEOM:{user.id}:YUNJI:",
+            ).count(),
+            5,
+        )
+
     def test_same_code_idempotent(self):
         user, _, _ = self._seed_jujeom_pool(5)
         with patch("coupons.service.random.sample", side_effect=lambda seq, k: seq[:k]):

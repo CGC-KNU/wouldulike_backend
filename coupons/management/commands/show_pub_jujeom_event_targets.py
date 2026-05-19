@@ -87,4 +87,21 @@ class Command(BaseCommand):
         for rid in benefit_ids:
             row = name_map.get(rid) or {}
             self.stdout.write(f"  {rid}: {row.get('name', '?')}")
+        missing_benefits = sorted(set(target_ids) - set(benefit_ids) - excluded)
+        if missing_benefits:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"\n⚠ 대상 식당 중 benefit 없음: {len(missing_benefits)}개 "
+                    "(ensure_pub_jujeom_event 실행 필요)"
+                )
+            )
+            for rid in missing_benefits:
+                row = name_map.get(rid) or {}
+                self.stdout.write(f"  {rid}: {row.get('name', '?')}")
+        if len(benefit_ids) < 5:
+            self.stdout.write(
+                self.style.WARNING(
+                    f"\n⚠ YUNJI(5종)는 풀 {len(benefit_ids)}개면 최대 {len(benefit_ids)}장만 발급됩니다."
+                )
+            )
         self.stdout.write("")

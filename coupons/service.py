@@ -2772,18 +2772,6 @@ def claim_pub_jujeom_event_coupon(user: User, coupon_code: str):
         raise ValidationError("event not configured")
 
     issue_key_prefix = f"PUB_JUJEOM:{user.id}:{code}:"
-    existing_qs = Coupon.objects.using(alias).filter(
-        user=user,
-        coupon_type=ct,
-        campaign=camp,
-        issue_key__startswith=issue_key_prefix,
-    )
-    if existing_qs.exists():
-        return {
-            "coupons": list(existing_qs.order_by("issued_at", "id")),
-            "total_issued": existing_qs.count(),
-            "already_issued": True,
-        }
 
     jujeom_ids = _get_jujeom_restaurant_ids(db_alias=alias)
     if not jujeom_ids:
@@ -2804,10 +2792,30 @@ def claim_pub_jujeom_event_coupon(user: User, coupon_code: str):
     if not benefits:
         raise ValidationError("event not configured")
 
-    sample_size = min(count, len(benefits))
-    selected_benefits = random.sample(benefits, sample_size)
+    existing_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key__startswith=issue_key_prefix,
+    )
+    existing_coupons = list(existing_qs.order_by("issued_at", "id"))
+    used_restaurant_ids = {c.restaurant_id for c in existing_coupons}
 
-    issued_coupons: list[Coupon] = []
+    if len(existing_coupons) >= count:
+        return {
+            "coupons": existing_coupons,
+            "total_issued": len(existing_coupons),
+            "already_issued": True,
+            "requested_count": count,
+            "pool_size": len(benefits),
+        }
+
+    remaining_benefits = [b for b in benefits if b.restaurant_id not in used_restaurant_ids]
+    need = count - len(existing_coupons)
+    sample_size = min(need, len(remaining_benefits))
+    selected_benefits = random.sample(remaining_benefits, sample_size) if sample_size else []
+
+    issued_coupons: list[Coupon] = list(existing_coupons)
     for benefit in selected_benefits:
         restaurant_id = benefit.restaurant_id
         sort_order = getattr(benefit, "sort_order", 0)
@@ -2833,10 +2841,23 @@ def claim_pub_jujeom_event_coupon(user: User, coupon_code: str):
         )
         issued_coupons.append(coupon)
 
+    if sample_size < need:
+        logger.warning(
+            "pub_jujeom %s: user=%s requested=%s issued=%s pool=%s",
+            code,
+            user.id,
+            count,
+            len(issued_coupons),
+            len(benefits),
+        )
+
     return {
         "coupons": issued_coupons,
         "total_issued": len(issued_coupons),
-        "already_issued": False,
+        "already_issued": bool(existing_coupons) and sample_size == 0,
+        "topped_up": bool(existing_coupons) and sample_size > 0,
+        "requested_count": count,
+        "pool_size": len(benefits),
     }
 
 

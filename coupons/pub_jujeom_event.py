@@ -128,23 +128,49 @@ def ensure_pub_jujeom_event_data(*, db_alias: str | None = None) -> str:
     if source_type is None:
         return alias
 
-    source_benefits = RestaurantCouponBenefit.objects.using(alias).filter(
-        coupon_type=source_type,
-        restaurant_id__in=target_ids,
-        active=True,
+    source_benefits = list(
+        RestaurantCouponBenefit.objects.using(alias).filter(
+            coupon_type=source_type,
+            restaurant_id__in=target_ids,
+            active=True,
+        )
     )
-    for benefit in source_benefits:
+    by_rid = {b.restaurant_id: b for b in source_benefits}
+    template = source_benefits[0] if source_benefits else None
+
+    for rid in target_ids:
+        if rid == JUNGDUNBAM_FESTIVAL_RESTAURANT_ID:
+            continue
+        src = by_rid.get(rid)
+        if src:
+            defaults = {
+                "title": src.title,
+                "subtitle": PUB_JUJEOM_SUBTITLE,
+                "benefit_json": src.benefit_json,
+                "notes": getattr(src, "notes", "") or "",
+                "active": True,
+            }
+        elif template:
+            defaults = {
+                "title": template.title,
+                "subtitle": PUB_JUJEOM_SUBTITLE,
+                "benefit_json": template.benefit_json,
+                "notes": getattr(template, "notes", "") or "",
+                "active": True,
+            }
+        else:
+            defaults = {
+                "title": "주점·술집 이벤트 쿠폰",
+                "subtitle": PUB_JUJEOM_SUBTITLE,
+                "benefit_json": {"type": "fixed", "value": 3000},
+                "notes": "",
+                "active": True,
+            }
         RestaurantCouponBenefit.objects.using(alias).update_or_create(
             coupon_type=pub_type,
-            restaurant_id=benefit.restaurant_id,
-            sort_order=getattr(benefit, "sort_order", 0),
-            defaults={
-                "title": benefit.title,
-                "subtitle": PUB_JUJEOM_SUBTITLE,
-                "benefit_json": benefit.benefit_json,
-                "notes": getattr(benefit, "notes", "") or "",
-                "active": benefit.active,
-            },
+            restaurant_id=rid,
+            sort_order=0,
+            defaults=defaults,
         )
 
     RestaurantCouponBenefit.objects.using(alias).filter(
