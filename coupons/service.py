@@ -194,11 +194,6 @@ def _resolve_coupon_expiry_for_issue(
     if coupon_type.code == PUB_JUJEOM_EVENT_COUPON_TYPE_CODE:
         return PUB_JUJEOM_EVENT_COUPON_EXPIRES_AT
 
-    from coupons.child_dept_event import CHILD_DEPT_COUPON_TYPE_CODE
-
-    if coupon_type.code == CHILD_DEPT_COUPON_TYPE_CODE:
-        return PUB_JUJEOM_EVENT_COUPON_EXPIRES_AT
-
     if coupon_type.code == JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE:
         from coupons.festival_jungdunbam import festival_coupon_expires_at_kst
 
@@ -2652,19 +2647,19 @@ def claim_midterm_studylike_coupon(user: User, coupon_code: str):
 
 
 @transaction.atomic
-def claim_gaehwalike_coupon(user: User, coupon_code: str):
+def issue_gaehwalike_pack_for_user(
+    user: User,
+    *,
+    subtitle: str | None = None,
+    issue_key_prefix: str | None = None,
+    check_expiry: bool = True,
+) -> dict:
     """
-    쿠폰 코드를 입력받아 성년의날 GAEHWALIKE 쿠폰을 랜덤 발급합니다.
-    - 코드: GAEHWALIKE (대소문자 무관)
-    - 기간: ~2026-05-31 23:59:59 KST
-    - 구성: GAEHWALIKE benefit 풀 중 10종 무작위 발급 (중복 없음)
-    - 사용자당 1회만 발급
+    성년의날 GAEHWALIKE benefit 풀에서 랜덤 N종 발급 (기본 10종).
+    subtitle 을 넘기면 benefit_snapshot 에만 반영 (아동학부 일괄 발급 등).
     """
-    if (coupon_code or "").strip().upper() != GAEHWALIKE_COUPON_CODE:
-        raise ValidationError("invalid coupon code")
-
-    now = timezone.now()
-    if now > GAEHWALIKE_EVENT_COUPON_EXPIRES_AT:
+    display_subtitle = subtitle or GAEHWALIKE_SUBTITLE
+    if check_expiry and timezone.now() > GAEHWALIKE_EVENT_COUPON_EXPIRES_AT:
         raise ValidationError("expired")
 
     alias = router.db_for_write(Coupon)
@@ -2674,12 +2669,12 @@ def claim_gaehwalike_coupon(user: User, coupon_code: str):
     except (CouponType.DoesNotExist, Campaign.DoesNotExist):
         raise ValidationError("event not configured")
 
-    issue_key_prefix = f"GAEHWALIKE:{user.id}:"
+    prefix = issue_key_prefix or f"GAEHWALIKE:{user.id}:"
     existing_qs = Coupon.objects.using(alias).filter(
         user=user,
         coupon_type=ct,
         campaign=camp,
-        issue_key__startswith=issue_key_prefix,
+        issue_key__startswith=prefix,
     )
     if existing_qs.exists():
         return {
@@ -2706,14 +2701,14 @@ def claim_gaehwalike_coupon(user: User, coupon_code: str):
     for benefit in selected_benefits:
         restaurant_id = benefit.restaurant_id
         sort_order = getattr(benefit, "sort_order", 0)
-        issue_key = f"{issue_key_prefix}{restaurant_id}:{sort_order}"
+        issue_key = f"{prefix}{restaurant_id}:{sort_order}"
 
         benefit_snapshot = _build_benefit_snapshot(ct, restaurant_id, benefit=benefit, db_alias=alias)
         if benefit_snapshot:
             benefit_snapshot = {
                 **benefit_snapshot,
-                "coupon_type_title": GAEHWALIKE_SUBTITLE,
-                "subtitle": GAEHWALIKE_SUBTITLE,
+                "coupon_type_title": display_subtitle,
+                "subtitle": display_subtitle,
             }
 
         coupon = Coupon.objects.using(alias).create(
@@ -2733,6 +2728,21 @@ def claim_gaehwalike_coupon(user: User, coupon_code: str):
         "total_issued": len(issued_coupons),
         "already_issued": False,
     }
+
+
+@transaction.atomic
+def claim_gaehwalike_coupon(user: User, coupon_code: str):
+    """
+    쿠폰 코드를 입력받아 성년의날 GAEHWALIKE 쿠폰을 랜덤 발급합니다.
+    - 코드: GAEHWALIKE (대소문자 무관)
+    - 기간: ~2026-05-31 23:59:59 KST
+    - 구성: GAEHWALIKE benefit 풀 중 10종 무작위 발급 (중복 없음)
+    - 사용자당 1회만 발급
+    """
+    if (coupon_code or "").strip().upper() != GAEHWALIKE_COUPON_CODE:
+        raise ValidationError("invalid coupon code")
+
+    return issue_gaehwalike_pack_for_user(user, subtitle=GAEHWALIKE_SUBTITLE)
 
 
 @transaction.atomic
@@ -2932,22 +2942,34 @@ def issue_pub_jujeom_pool_tiers_for_user(
 
 
 @transaction.atomic
-def issue_child_dept_coupon_pack_for_user(user: User) -> dict:
-    """아동학부 쿠폰팩: JUNYOUNG 1 + JEONGHWAN 3 + YUNJI 5 (술집·주점 풀, subtitle 고정)."""
-    from coupons.child_dept_event import (
-        CHILD_DEPT_CAMPAIGN_CODE,
-        CHILD_DEPT_COUPON_TYPE_CODE,
-        CHILD_DEPT_PACK_TIER_COUNTS,
-        CHILD_DEPT_SUBTITLE,
-    )
+def revoke_child_dept_coupon_pack_for_user(user: User, *, include_redeemed: bool = False) -> int:
+    """잘못 발급된 CHILD_DEPT_COUPON_PACK 쿠폰 삭제. 반환: 삭제 건수."""
+    from coupons.child_dept_event import CHILD_DEPT_COUPON_TYPE_CODE
 
-    return issue_pub_jujeom_pool_tiers_for_user(
+    alias = router.db_for_write(Coupon)
+    qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type__code=CHILD_DEPT_COUPON_TYPE_CODE,
+        issue_key__startswith=f"CHILD_DEPT_PACK:{user.id}:",
+    )
+    if not include_redeemed:
+        qs = qs.filter(status="ISSUED")
+    deleted, _ = qs.delete()
+    return deleted
+
+
+@transaction.atomic
+def issue_child_dept_coupon_pack_for_user(user: User) -> dict:
+    """
+    아동학부 쿠폰팩: 성년의날(GAEHWALIKE) 풀에서 10종 랜덤, subtitle [아동학부 쿠폰팩 🐣].
+    (주점·술집 1+3+5종 아님)
+    """
+    from coupons.child_dept_event import CHILD_DEPT_SUBTITLE
+
+    return issue_gaehwalike_pack_for_user(
         user,
-        coupon_type_code=CHILD_DEPT_COUPON_TYPE_CODE,
-        campaign_code=CHILD_DEPT_CAMPAIGN_CODE,
         subtitle=CHILD_DEPT_SUBTITLE,
-        tier_counts=CHILD_DEPT_PACK_TIER_COUNTS,
-        issue_key_namespace="CHILD_DEPT_PACK",
+        issue_key_prefix=f"GAEHWALIKE:{user.id}:",
     )
 
 

@@ -1,11 +1,10 @@
 """
-아동학부 쿠폰팩 일괄 발급 (술집·주점 풀 1+3+5종, subtitle [아동학부 쿠폰팩 🐣]).
+아동학부 쿠폰팩 일괄 발급 — 성년의날(GAEHWALIKE) 풀 10종, subtitle [아동학부 쿠폰팩 🐣].
 
 사용 예:
-  python manage.py ensure_child_dept_event
+  python manage.py revert_child_dept_coupon_pack --no-input   # 구(주점) 발급 복구
   python manage.py issue_child_dept_coupon_pack --dry-run
   python manage.py issue_child_dept_coupon_pack --no-input
-  python manage.py issue_child_dept_coupon_pack --excel "/path/to/신청폼.xlsx" --no-input
   python manage.py issue_child_dept_coupon_pack --only-provided --nickname 딸기잼 --no-input
 """
 from __future__ import annotations
@@ -17,53 +16,23 @@ from django.db import router
 from coupons.child_dept_event import (
     CHILD_DEPT_DEFAULT_NICKNAMES,
     CHILD_DEPT_SUBTITLE,
-    ensure_child_dept_event_data,
     load_nicknames_from_excel,
     merge_nickname_lists,
 )
-from coupons.child_dept_event import CHILD_DEPT_PACK_TIER_COUNTS
-from coupons.festival_jungdunbam import resolve_cloudsql_alias
-from coupons.service import issue_child_dept_coupon_pack_for_user
+from coupons.service import GAEHWALIKE_COUPON_COUNT, issue_child_dept_coupon_pack_for_user
 
 User = get_user_model()
 
 
 class Command(BaseCommand):
-    help = "아동학부 신청 닉네임(+추가 닉네임)에게 쿠폰팩 9장(1+3+5) 발급"
+    help = "아동학부 신청 닉네임에게 GAEHWALIKE 풀 쿠폰팩(10종) 발급"
 
     def add_arguments(self, parser):
-        parser.add_argument(
-            "--excel",
-            type=str,
-            default=None,
-            help="신청폼 xlsx 경로 (미지정 시 기본 닉네임 목록만 사용)",
-        )
-        parser.add_argument(
-            "--nickname",
-            action="append",
-            default=[],
-            help="추가 닉네임 (여러 번 지정 가능)",
-        )
-        parser.add_argument(
-            "--dry-run",
-            action="store_true",
-            help="발급 없이 대상만 출력",
-        )
-        parser.add_argument(
-            "--no-input",
-            action="store_true",
-            help="확인 없이 실행",
-        )
-        parser.add_argument(
-            "--skip-ensure",
-            action="store_true",
-            help="ensure_child_dept_event_data 생략",
-        )
-        parser.add_argument(
-            "--only-provided",
-            action="store_true",
-            help="기본 18명 목록 없이 --nickname/--excel 로 준 닉네임만 발급",
-        )
+        parser.add_argument("--excel", type=str, default=None)
+        parser.add_argument("--nickname", action="append", default=[])
+        parser.add_argument("--dry-run", action="store_true")
+        parser.add_argument("--no-input", action="store_true")
+        parser.add_argument("--only-provided", action="store_true")
 
     def handle(self, *args, **options):
         nick_lists: list[list[str]] = []
@@ -71,13 +40,11 @@ class Command(BaseCommand):
             nick_lists.append(list(CHILD_DEPT_DEFAULT_NICKNAMES))
         if options.get("nickname"):
             nick_lists.append(options["nickname"])
-
-        excel_path = options.get("excel")
-        if excel_path:
+        if options.get("excel"):
             try:
-                nick_lists.append(load_nicknames_from_excel(excel_path))
+                nick_lists.append(load_nicknames_from_excel(options["excel"]))
             except FileNotFoundError:
-                raise CommandError(f"엑셀 파일 없음: {excel_path}")
+                raise CommandError(f"엑셀 파일 없음: {options['excel']}")
             except Exception as exc:
                 raise CommandError(f"엑셀 읽기 실패: {exc}") from exc
 
@@ -85,14 +52,9 @@ class Command(BaseCommand):
         if not nicknames:
             raise CommandError("발급 대상 닉네임이 없습니다.")
 
-        if not options["skip_ensure"]:
-            db = ensure_child_dept_event_data(db_alias=resolve_cloudsql_alias())
-            self.stdout.write(self.style.SUCCESS(f"이벤트 데이터 반영 (db={db})"))
-
-        per_user = sum(CHILD_DEPT_PACK_TIER_COUNTS.values())
         self.stdout.write(
             f"\n쿠폰팩: {CHILD_DEPT_SUBTITLE}\n"
-            f"티어: {CHILD_DEPT_PACK_TIER_COUNTS} → 사용자당 최대 {per_user}장\n"
+            f"풀: GAEHWALIKE (성년의날 제휴 전체) / 사용자당 {GAEHWALIKE_COUPON_COUNT}장\n"
             f"대상 닉네임 {len(nicknames)}명:\n"
         )
         for nick in nicknames:
@@ -135,7 +97,8 @@ class Command(BaseCommand):
 
         if not options["no_input"]:
             confirm = input(
-                f"\n{len(resolved)}명에게 쿠폰팩(최대 {per_user}장/인) 발급합니다. 계속? (yes/no): "
+                f"\n{len(resolved)}명에게 GAEHWALIKE 풀 쿠폰 "
+                f"{GAEHWALIKE_COUPON_COUNT}장씩 발급합니다. 계속? (yes/no): "
             )
             if confirm.strip().lower() != "yes":
                 self.stdout.write("취소")
@@ -151,12 +114,11 @@ class Command(BaseCommand):
                 continue
             issued_users += 1
             total_coupons += result["total_issued"]
+            flag = " (기발급)" if result.get("already_issued") else ""
             self.stdout.write(
-                f"  OK {nick} (user_id={user.id}): {result['total_issued']}장"
+                f"  OK {nick} (user_id={user.id}): {result['total_issued']}장{flag}"
             )
 
         self.stdout.write(
-            self.style.SUCCESS(
-                f"\n완료: {issued_users}명 / 쿠폰 {total_coupons}장"
-            )
+            self.style.SUCCESS(f"\n완료: {issued_users}명 / 쿠폰 {total_coupons}장")
         )
