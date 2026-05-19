@@ -87,7 +87,7 @@ MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE = os.getenv(
     "MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE",
     "MIDTERM_EVENT_APP_OPEN",
 )
-# 경북대 80주년 축제 주막(우주라이크 X 정든밤): 수요일 앱 접속 시 음료 쿠폰 1장 (APP_OPEN_WED 와 별도)
+# 경북대 80주년 축제 주막(우주라이크 X 정든밤): 5/20 23:59(KST)까지 앱 접속 시 음료 쿠폰 1장 (APP_OPEN_WED 와 별도)
 JUNGDUNBAM_FESTIVAL_RESTAURANT_ID = int(
     os.getenv("JUNGDUNBAM_FESTIVAL_RESTAURANT_ID", "298")
 )
@@ -190,16 +190,9 @@ def _resolve_coupon_expiry_for_issue(
         return PUB_JUJEOM_EVENT_COUPON_EXPIRES_AT
 
     if coupon_type.code == JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE:
-        try:
-            from zoneinfo import ZoneInfo
-        except ImportError:
-            from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+        from coupons.festival_jungdunbam import festival_coupon_expires_at_kst
 
-        from coupons.festival_jungdunbam import wednesday_expires_at_kst
-
-        base = issued_at or timezone.now()
-        kst = base.astimezone(ZoneInfo("Asia/Seoul"))
-        return wednesday_expires_at_kst(kst)
+        return festival_coupon_expires_at_kst()
 
     if (
         coupon_type.code in APP_OPEN_FIXED_EXPIRY_COUPON_CODES
@@ -998,25 +991,22 @@ def _issue_app_open_mon_wed(user: User, *, db_alias: str | None = None):
 
 def _issue_jungdunbam_festival_wed(user: User, *, db_alias: str | None = None) -> list:
     """
-    수요일(KST) 앱 접속 시 축제 주막(우주라이크 X 정든밤) 음료 쿠폰 1장 발급.
-    - 발급: 수요일 당일 1회(issue_key=날짜)
-    - 만료: 발급 수요일 KST 23:59:59
+    축제 주막(우주라이크 X 정든밤) 앱 접속 시 음료 쿠폰 1장 발급.
+    - 발급: 5/20 23:59(KST)까지, 사용자당 1회
+    - 만료: 5/20 23:59:59 KST
     APP_OPEN_WED(술집 랜덤 1장)과 별도이며, RESTAURANTS_EXCLUDED_FROM_ALL 우회해 고정 식당에 발급.
     """
     if not JUNGDUNBAM_FESTIVAL_WED_ENABLED:
         return []
 
-    try:
-        from zoneinfo import ZoneInfo
-    except ImportError:
-        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
-
-    from coupons.festival_jungdunbam import is_wednesday_kst, wednesday_expires_at_kst
+    from coupons.festival_jungdunbam import (
+        festival_coupon_expires_at_kst,
+        is_festival_app_open_issue_period,
+    )
 
     alias = db_alias or router.db_for_write(Coupon)
     now = timezone.now()
-    kst = now.astimezone(ZoneInfo("Asia/Seoul"))
-    if not is_wednesday_kst(now):
+    if not is_festival_app_open_issue_period(now):
         return []
 
     ct_code = JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE
@@ -1039,12 +1029,8 @@ def _issue_jungdunbam_festival_wed(user: User, *, db_alias: str | None = None) -
     if camp.end_at and now > camp.end_at:
         return []
 
-    date_str = kst.strftime("%Y%m%d")
-    issue_key = f"JUNGDUNBAM_WED:{user.id}:{date_str}"
-    expires_at = _cap_expires_at_by_campaign(
-        wednesday_expires_at_kst(kst),
-        camp,
-    )
+    issue_key = f"JUNGDUNBAM_APP:{user.id}"
+    expires_at = _cap_expires_at_by_campaign(festival_coupon_expires_at_kst(), camp)
 
     existing = (
         Coupon.objects.using(alias)

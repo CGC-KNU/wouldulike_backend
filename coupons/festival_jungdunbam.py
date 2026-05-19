@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import datetime
 
 from django.db import connections
 from django.utils import timezone
@@ -15,7 +15,7 @@ MERCHANT_PIN = "0629"
 RESTAURANT_NAME = "우주라이크 X 정든밤"
 DESCRIPTION = (
     "경북대 80주년 축제 주막 · 스탬프 없음 · "
-    "매주 수요일 앱 접속 시 음료수 1개 쿠폰 (기존 수요일 쿠폰과 별도)"
+    "5/20 23:59(KST)까지 앱 접속 시 음료수 1개 쿠폰 (기존 수요일 쿠폰과 별도)"
 )
 STAMP_DISABLED_NOTES = (
     "이 주막은 스탬프 적립·보상이 없습니다.\n"
@@ -34,7 +34,9 @@ BENEFIT_TITLE = "음료수 1개"
 BENEFIT_SUBTITLE = "[경북대 80주년 축제 🎉]"
 
 FESTIVAL_START_KST = datetime(2026, 5, 1, 0, 0, 0)
-FESTIVAL_END_KST = datetime(2026, 5, 31, 23, 59, 59)
+# 앱 접속 발급·쿠폰 만료 공통 마감 (KST)
+FESTIVAL_APP_OPEN_END_KST = datetime(2026, 5, 20, 23, 59, 59)
+FESTIVAL_END_KST = FESTIVAL_APP_OPEN_END_KST
 
 COUPON_TYPES_TO_EXCLUDE = [
     "WELCOME_3000",
@@ -58,19 +60,32 @@ COUPON_TYPES_TO_EXCLUDE = [
 ]
 
 
-def wednesday_expires_at_kst(kst: datetime) -> datetime:
-    """발급일(수요일) KST 23:59:59 — 당일 자정까지 사용."""
-    return datetime.combine(kst.date(), time(23, 59, 59), tzinfo=kst.tzinfo)
+def festival_coupon_expires_at_kst() -> datetime:
+    """축제 주막 쿠폰 만료: 5/20 23:59:59 KST."""
+    return _kst_aware(FESTIVAL_APP_OPEN_END_KST)
 
 
-def is_wednesday_kst(now=None) -> bool:
+def is_festival_app_open_issue_period(now=None) -> bool:
+    """5/20 23:59(KST)까지 앱 접속 시 발급 가능."""
     try:
         from zoneinfo import ZoneInfo
     except ImportError:
         from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
 
     kst = (now or timezone.now()).astimezone(ZoneInfo("Asia/Seoul"))
-    return kst.weekday() == 2
+    start = _kst_aware(FESTIVAL_START_KST)
+    end = _kst_aware(FESTIVAL_APP_OPEN_END_KST)
+    return start <= kst <= end
+
+
+def wednesday_expires_at_kst(kst: datetime) -> datetime:
+    """하위 호환 — 만료는 항상 축제 마감일."""
+    return festival_coupon_expires_at_kst()
+
+
+def is_wednesday_kst(now=None) -> bool:
+    """deprecated: 발급 요일 제한 없음."""
+    return is_festival_app_open_issue_period(now)
 
 
 def _kst_aware(dt: datetime):
@@ -114,7 +129,7 @@ def get_festival_promotions_for_app() -> list[dict]:
         {
             "title": BENEFIT_TITLE,
             "subtitle": BENEFIT_SUBTITLE,
-            "description": "매주 수요일 앱 접속 시 쿠폰함에 자동 발급",
+            "description": "5월 20일 23:59(KST)까지 앱 접속 시 쿠폰함에 자동 발급",
             "coupon_type_code": COUPON_TYPE_CODE,
         }
     ]
@@ -260,7 +275,7 @@ def upsert_affiliate_row(*, alias: str, pin: str, now) -> None:
 
 def ensure_jungdunbam_festival_data(*, db_alias: str | None = None) -> str:
     """
-    제휴 식당·PIN·수요일 쿠폰·exclusion 을 idempotent 하게 반영.
+    제휴 식당·PIN·앱 접속 쿠폰(5/20 마감)·exclusion 을 idempotent 하게 반영.
     반환: 사용한 DB alias.
     """
     from coupons.models import (
@@ -310,7 +325,7 @@ def ensure_jungdunbam_festival_data(*, db_alias: str | None = None) -> str:
     CouponType.objects.using(alias).update_or_create(
         code=COUPON_TYPE_CODE,
         defaults={
-            "title": "수요일 축제 주막 쿠폰",
+            "title": "축제 주막 앱 접속 쿠폰",
             "valid_days": 0,
             "per_user_limit": 1,
             "benefit_json": {"type": "fixed", "value": 0},
@@ -319,7 +334,7 @@ def ensure_jungdunbam_festival_data(*, db_alias: str | None = None) -> str:
     Campaign.objects.using(alias).update_or_create(
         code=CAMPAIGN_CODE,
         defaults={
-            "name": "우주라이크 X 정든밤 축제 (수요일)",
+            "name": "우주라이크 X 정든밤 축제 (앱 접속)",
             "type": "FLASH",
             "active": True,
             "start_at": start_at,

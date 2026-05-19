@@ -890,7 +890,7 @@ class MidtermDailyCodeCouponTests(TestCase):
 
 
 class JungdunbamFestivalWedTests(TestCase):
-    """축제 주막 수요일 전용 앱 접속 쿠폰."""
+    """축제 주막 앱 접속 쿠폰 (5/20 23:59 KST 마감)."""
 
     @classmethod
     def setUpTestData(cls):
@@ -936,14 +936,14 @@ class JungdunbamFestivalWedTests(TestCase):
     def test_excluded_from_all_standard_coupons(self):
         self.assertIn(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID, RESTAURANTS_EXCLUDED_FROM_ALL)
 
-    def test_issues_on_wednesday_only(self):
+    def test_issues_until_may20_midnight_not_after(self):
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
-        wed_kst = datetime(2026, 5, 20, 10, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
-        wed_utc = wed_kst.astimezone(ZoneInfo("UTC"))
+        mon_kst = datetime(2026, 5, 19, 10, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        mon_utc = mon_kst.astimezone(ZoneInfo("UTC"))
 
-        with patch("coupons.service.timezone.now", return_value=wed_utc):
+        with patch("coupons.service.timezone.now", return_value=mon_utc):
             issued = _issue_jungdunbam_festival_wed(self.user)
         self.assertEqual(len(issued), 1)
         self.assertEqual(issued[0].restaurant_id, JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
@@ -953,17 +953,19 @@ class JungdunbamFestivalWedTests(TestCase):
             "음료수 1개",
         )
         exp_kst = issued[0].expires_at.astimezone(ZoneInfo("Asia/Seoul"))
-        self.assertEqual(exp_kst.date(), wed_kst.date())
+        self.assertEqual(exp_kst.year, 2026)
+        self.assertEqual(exp_kst.month, 5)
+        self.assertEqual(exp_kst.day, 20)
         self.assertEqual(exp_kst.hour, 23)
         self.assertEqual(exp_kst.minute, 59)
         self.assertEqual(exp_kst.second, 59)
 
-        thu_kst = datetime(2026, 5, 21, 10, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
-        thu_utc = thu_kst.astimezone(ZoneInfo("UTC"))
-        with patch("coupons.service.timezone.now", return_value=thu_utc):
+        after_kst = datetime(2026, 5, 21, 0, 0, 1, tzinfo=ZoneInfo("Asia/Seoul"))
+        after_utc = after_kst.astimezone(ZoneInfo("UTC"))
+        with patch("coupons.service.timezone.now", return_value=after_utc):
             self.assertEqual(_issue_jungdunbam_festival_wed(self.user), [])
 
-    def test_issue_app_open_coupon_on_wednesday(self):
+    def test_issue_app_open_coupon_during_festival_period(self):
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
@@ -973,12 +975,12 @@ class JungdunbamFestivalWedTests(TestCase):
         self.assertEqual(len(issued), 1)
         self.assertEqual(issued[0].coupon_type.code, JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE)
 
-    def test_idempotent_same_wednesday(self):
+    def test_idempotent_single_coupon_per_user(self):
         from datetime import datetime
         from zoneinfo import ZoneInfo
 
-        wed_utc = datetime(2026, 5, 20, 1, 0, 0, tzinfo=ZoneInfo("UTC"))
-        with patch("coupons.service.timezone.now", return_value=wed_utc):
+        t_utc = datetime(2026, 5, 18, 3, 0, 0, tzinfo=ZoneInfo("UTC"))
+        with patch("coupons.service.timezone.now", return_value=t_utc):
             first = _issue_jungdunbam_festival_wed(self.user)
             second = _issue_jungdunbam_festival_wed(self.user)
         self.assertEqual(len(first), 1)
