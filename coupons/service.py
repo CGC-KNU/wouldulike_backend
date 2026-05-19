@@ -194,6 +194,11 @@ def _resolve_coupon_expiry_for_issue(
     if coupon_type.code == PUB_JUJEOM_EVENT_COUPON_TYPE_CODE:
         return PUB_JUJEOM_EVENT_COUPON_EXPIRES_AT
 
+    from coupons.child_dept_event import CHILD_DEPT_COUPON_TYPE_CODE
+
+    if coupon_type.code == CHILD_DEPT_COUPON_TYPE_CODE:
+        return PUB_JUJEOM_EVENT_COUPON_EXPIRES_AT
+
     if coupon_type.code == JUNGDUNBAM_FESTIVAL_WED_COUPON_TYPE_CODE:
         from coupons.festival_jungdunbam import festival_coupon_expires_at_kst
 
@@ -2823,6 +2828,127 @@ def claim_pub_jujeom_event_coupon(user: User, coupon_code: str):
         "total_issued": len(issued_coupons),
         "already_issued": False,
     }
+
+
+@transaction.atomic
+def issue_pub_jujeom_pool_tiers_for_user(
+    user: User,
+    *,
+    coupon_type_code: str,
+    campaign_code: str,
+    subtitle: str,
+    tier_counts: dict[str, int],
+    issue_key_namespace: str,
+) -> dict:
+    """
+    술집·주점 benefit 풀에서 tier_counts 만큼 랜덤 발급 (티어별 멱등).
+    반환: {coupons, total_issued, tiers: {tier: {total_issued, already_issued}}}
+    """
+    alias = router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=coupon_type_code)
+        camp = Campaign.objects.using(alias).get(code=campaign_code, active=True)
+    except (CouponType.DoesNotExist, Campaign.DoesNotExist):
+        raise ValidationError("event not configured")
+
+    jujeom_ids = _get_jujeom_restaurant_ids(db_alias=alias)
+    if not jujeom_ids:
+        raise ValidationError("event not configured")
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True, restaurant_id__in=jujeom_ids)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("event not configured")
+
+    all_coupons: list[Coupon] = []
+    tier_summary: dict[str, dict] = {}
+
+    for tier_code, count in tier_counts.items():
+        issue_key_prefix = f"{issue_key_namespace}:{user.id}:{tier_code}:"
+        existing_qs = Coupon.objects.using(alias).filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key__startswith=issue_key_prefix,
+        )
+        if existing_qs.exists():
+            tier_coupons = list(existing_qs.order_by("issued_at", "id"))
+            tier_summary[tier_code] = {
+                "total_issued": existing_qs.count(),
+                "already_issued": True,
+                "coupons": tier_coupons,
+            }
+            all_coupons.extend(tier_coupons)
+            continue
+
+        sample_size = min(int(count), len(benefits))
+        selected_benefits = random.sample(benefits, sample_size)
+        tier_coupons = []
+        for benefit in selected_benefits:
+            restaurant_id = benefit.restaurant_id
+            sort_order = getattr(benefit, "sort_order", 0)
+            issue_key = f"{issue_key_prefix}{restaurant_id}:{sort_order}"
+
+            benefit_snapshot = _build_benefit_snapshot(
+                ct, restaurant_id, benefit=benefit, db_alias=alias
+            )
+            if benefit_snapshot:
+                benefit_snapshot = {
+                    **benefit_snapshot,
+                    "coupon_type_title": subtitle,
+                    "subtitle": subtitle,
+                }
+
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=_resolve_expires_at_for_issue(ct, campaign=camp),
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            tier_coupons.append(coupon)
+
+        tier_summary[tier_code] = {
+            "total_issued": len(tier_coupons),
+            "already_issued": False,
+            "coupons": tier_coupons,
+        }
+        all_coupons.extend(tier_coupons)
+
+    return {
+        "coupons": all_coupons,
+        "total_issued": len(all_coupons),
+        "tiers": tier_summary,
+    }
+
+
+@transaction.atomic
+def issue_child_dept_coupon_pack_for_user(user: User) -> dict:
+    """아동학부 쿠폰팩: JUNYOUNG 1 + JEONGHWAN 3 + YUNJI 5 (술집·주점 풀, subtitle 고정)."""
+    from coupons.child_dept_event import (
+        CHILD_DEPT_CAMPAIGN_CODE,
+        CHILD_DEPT_COUPON_TYPE_CODE,
+        CHILD_DEPT_PACK_TIER_COUNTS,
+        CHILD_DEPT_SUBTITLE,
+    )
+
+    return issue_pub_jujeom_pool_tiers_for_user(
+        user,
+        coupon_type_code=CHILD_DEPT_COUPON_TYPE_CODE,
+        campaign_code=CHILD_DEPT_CAMPAIGN_CODE,
+        subtitle=CHILD_DEPT_SUBTITLE,
+        tier_counts=CHILD_DEPT_PACK_TIER_COUNTS,
+        issue_key_namespace="CHILD_DEPT_PACK",
+    )
 
 
 @transaction.atomic
