@@ -15,7 +15,7 @@ def apply(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("coupons", "0072_jungdunbam_festival_restaurant_id_299"),
+        ("coupons", "0074_merge_child_dept_and_jungdunbam"),
     ]
 
     operations = [
