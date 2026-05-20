@@ -4592,6 +4592,22 @@ def get_all_stamp_statuses(
         except DatabaseError:
             accessible_ids = []
 
+    from restaurants.affiliate_order import (
+        fetch_affiliate_row,
+        prioritize_restaurant_id_list,
+    )
+
+    if (
+        limit_to_restaurant_ids is None
+        and JUNGDUNBAM_FESTIVAL_RESTAURANT_ID not in accessible_ids
+        and fetch_affiliate_row(
+            JUNGDUNBAM_FESTIVAL_RESTAURANT_ID, db_alias=restaurant_alias
+        )
+    ):
+        accessible_ids.append(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
+
+    accessible_ids = prioritize_restaurant_id_list(accessible_ids)
+
     wallet_qs = StampWallet.objects.using(STAMP_DB_ALIAS).filter(user=user)
     if limit_to_restaurant_ids is not None:
         wallet_qs = wallet_qs.filter(restaurant_id__in=limit_to_restaurant_ids)
@@ -4698,7 +4714,9 @@ def get_all_stamp_statuses(
         wallet = wallet_map[restaurant_id]
         results.append(_row(restaurant_id, wallet))
 
-    return results
+    order_ids = prioritize_restaurant_id_list([r["restaurant_id"] for r in results])
+    by_rid = {r["restaurant_id"]: r for r in results}
+    return [by_rid[rid] for rid in order_ids]
 
 
 def get_active_affiliate_restaurant_ids_for_user(user: User) -> list[int]:

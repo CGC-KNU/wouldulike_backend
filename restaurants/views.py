@@ -12,15 +12,17 @@ import logging
 
 from coupons.festival_jungdunbam import RESTAURANT_ID as JUNGDUNBAM_FESTIVAL_RESTAURANT_ID
 from coupons.service import get_active_affiliate_restaurant_ids_for_user
+from restaurants.affiliate_order import (
+    ensure_priority_affiliate_rows_included,
+    order_rows_priority_first,
+    shuffle_rows_priority_first,
+)
 
 logger = logging.getLogger(__name__)
-
-# 식당 넘기기(제휴 캐러셀) 등에서 항상 맨 앞에 둘 식당
-_PRIORITY_FIRST_RESTAURANT_IDS: tuple[int, ...] = (JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,)
 User = get_user_model()
 
 # 진행 식당 수가 적을 때 전체 제휴 목록을 돌려주는 분기에서 동일 쿼리 반복을 줄이기 위한 캐시
-_AFFILIATE_ALL_ROWS_CACHE_KEY = "restaurants:active_affiliate_all_rows_v1"
+_AFFILIATE_ALL_ROWS_CACHE_KEY = "restaurants:active_affiliate_all_rows_v2"
 _AFFILIATE_ALL_ROWS_CACHE_TTL = 120
 
 
@@ -83,34 +85,6 @@ def _serialize_affiliate_restaurant(row):
         'url': url,
         's3_image_urls': list(s3_image_urls) if s3_image_urls else [],
     }
-
-
-def _order_restaurant_rows_priority_first(
-    rows,
-    *,
-    priority_ids: tuple[int, ...] = _PRIORITY_FIRST_RESTAURANT_IDS,
-) -> list:
-    """우선 식당을 맨 앞에 두고 나머지는 기존 순서 유지."""
-    rows = list(rows)
-    priority_set = set(priority_ids)
-    by_id = {row[0]: row for row in rows}
-    priority_rows = [by_id[rid] for rid in priority_ids if rid in by_id]
-    rest = [row for row in rows if row[0] not in priority_set]
-    return priority_rows + rest
-
-
-def _shuffle_restaurant_rows_with_priority(
-    rows,
-    *,
-    priority_ids: tuple[int, ...] = _PRIORITY_FIRST_RESTAURANT_IDS,
-) -> list:
-    """우선 식당을 맨 앞에 두고 나머지는 무작위 순서 (제휴 식당 넘기기 캐러셀)."""
-    ordered = _order_restaurant_rows_priority_first(rows, priority_ids=priority_ids)
-    priority_set = set(priority_ids)
-    priority_rows = [row for row in ordered if row[0] in priority_set]
-    rest = [row for row in ordered if row[0] not in priority_set]
-    random.shuffle(rest)
-    return priority_rows + rest
 
 
 def _serialize_general_restaurant(row):
@@ -372,6 +346,7 @@ def get_restaurant_tab_list(request):
 
     try:
         affiliate_restaurants = []
+        affiliate_rows = []
         general_restaurants = []
         total_general_count = 0
 
@@ -397,7 +372,9 @@ def get_restaurant_tab_list(request):
                     params,
                 )
                 affiliate_rows = cursor.fetchall()
-                affiliate_rows = _order_restaurant_rows_priority_first(affiliate_rows)
+                affiliate_rows = order_rows_priority_first(
+                    ensure_priority_affiliate_rows_included(affiliate_rows)
+                )
                 affiliate_restaurants = [
                     _serialize_affiliate_restaurant(row) for row in affiliate_rows
                 ]
@@ -442,9 +419,17 @@ def get_restaurant_tab_list(request):
         has_more = offset + len(general_restaurants) < total_general_count
         next_offset = offset + len(general_restaurants) if has_more else None
 
+        carousel_rows = (
+            shuffle_rows_priority_first(affiliate_rows) if include_affiliates else []
+        )
+
         return JsonResponse(
             {
+                'priority_restaurant_id': JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
                 'affiliate_restaurants': affiliate_restaurants,
+                'carousel_restaurants': [
+                    _serialize_affiliate_restaurant(row) for row in carousel_rows
+                ],
                 'general_restaurants': general_restaurants,
                 'general_pagination': {
                     'limit': limit,
@@ -490,7 +475,7 @@ def get_affiliate_restaurants(request):
             )
             rows = cursor.fetchall()
 
-        rows = _order_restaurant_rows_priority_first(rows)
+        rows = order_rows_priority_first(ensure_priority_affiliate_rows_included(rows))
         restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
 
         # 제휴식당 리스트 로그로 간단히 확인
@@ -577,10 +562,14 @@ def get_active_affiliate_restaurants(request):
                 cursor.execute(query, restaurant_ids)
                 rows = cursor.fetchall()
 
-        rows = _shuffle_restaurant_rows_with_priority(rows)
+        rows = shuffle_rows_priority_first(rows)
         restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
         return JsonResponse(
-            {'source': source, 'restaurants': restaurants},
+            {
+                'source': source,
+                'priority_restaurant_id': JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+                'restaurants': restaurants,
+            },
             status=200,
             json_dumps_params={'ensure_ascii': False},
         )
