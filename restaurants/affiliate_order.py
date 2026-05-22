@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Iterable
 
 from django.db import connections
 
@@ -115,3 +116,23 @@ def prioritize_restaurant_id_list(
     demoted = [i for i in demote_ids if i in id_list and i not in set(priority_ids)]
     rest = [i for i in id_list if i not in set(priority_ids) and i not in demote_ids]
     return priority + rest + demoted
+
+
+def ensure_festival_in_carousel_ids(
+    restaurant_ids: Iterable[int] | None,
+    *,
+    priority_ids: tuple[int, ...] = PRIORITY_FIRST_RESTAURANT_IDS,
+    demote_ids: frozenset[int] = DEMOTE_RESTAURANT_IDS,
+    db_alias: str = "cloudsql",
+) -> list[int]:
+    """
+    식당 넘기기(전체·적립 중)용 ID 목록.
+    축제 주막(299)을 DB에 있으면 항상 포함하고 맨 앞에 둔다.
+    """
+    id_set = set(restaurant_ids or [])
+    for rid in priority_ids:
+        if fetch_affiliate_row(rid, db_alias=db_alias):
+            id_set.add(rid)
+    return prioritize_restaurant_id_list(
+        id_set, priority_ids=priority_ids, demote_ids=demote_ids
+    )

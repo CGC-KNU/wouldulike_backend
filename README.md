@@ -232,7 +232,8 @@ OPERATIONS_ADMIN_RESET_PASSWORDS=0
 - `POST /api/coupons/stamps/add/` - 스탬프 적립 (`count`: 1~4, 기본값 1)
 - `GET /api/coupons/stamps/my/` - 내 스탬프 현황 조회
 - `GET /api/coupons/stamps/my/all/` - 모든 레스토랑 스탬프 현황 조회
-  - 쿼리(선택): `in_progress_only=1` — 스탬프가 1개 이상 쌓인 식당만 집계(전체 제휴 목록 스캔 생략, 응답·지연 감소)
+  - 쿼리(선택): `in_progress_only=1` — 스탬프가 1개 이상 쌓인 식당만(적립 중 넘기기). 미지정 시 전체 제휴
+  - 전체·적립 중 모두 `results[0].restaurant_id` = 299(축제 주막) 우선, `priority_restaurant_id` 동일
 
 ### 게스트 (`/guests/`)
 - `POST /guests/update/fcm_token/` - 게스트 FCM 토큰 업데이트
@@ -242,10 +243,12 @@ OPERATIONS_ADMIN_RESET_PASSWORDS=0
 - `GET /restaurants/tab-restaurants/` - 탭용 식당 목록(제휴+일반) 조회
   - 쿼리: `q`(식당명 검색), `limit`(일반식당 페이지 크기, 기본 20), `offset`(일반식당 시작 위치, 기본 0), `include_affiliates`(제휴식당 포함 여부, 기본 true)
   - 응답 필드: `affiliate_restaurants`, `general_restaurants`, `general_pagination`(`has_more`, `next_offset` 포함)
-- `GET /restaurants/affiliate-restaurants/active/` - 진행 중 제휴식당/전체 제휴식당 조회
+- `GET /restaurants/affiliate-restaurants/active/` - 식당 넘기기(제휴 캐러셀) 조회
   - 인증: `Authorization: Bearer <access_token>`
-  - 동작: 진행 중 식당이 0~2개면 전체 제휴식당, 그 외엔 진행 중 식당만 반환
-  - 응답 필드: `source` (`active` | `all`), `restaurants` (기존 제휴식당 응답과 동일)
+  - 쿼리(선택): `carousel=all` 전체 제휴식당 | `carousel=in_progress` 적립·쿠폰 진행 중 식당만
+  - 미지정 시: 진행 중 식당이 0~2개면 전체(`source=all`), 그 외 진행 중만(`source=active`)
+  - 응답: `restaurants[0]` 및 `priority_restaurant_id` = 우주라이크 X 정든밤(299) 우선
+- `GET /restaurants/affiliate-restaurants/` - 전체 제휴식당(넘기기용, 299 맨 앞·나머지 shuffle)
 
 ### 트렌드 (`/trends/`)
 - 트렌드 정보 조회 API

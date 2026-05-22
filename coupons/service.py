@@ -4577,40 +4577,33 @@ def get_all_stamp_statuses(
         적립 진행 중(stamps>0) 식당만 필요할 때 `in_progress_only` API와 함께 사용하면 부하·페이로드가 크게 줄어듦.
     """
     restaurant_alias = router.db_for_read(AffiliateRestaurant)
+    from restaurants.affiliate_order import ensure_festival_in_carousel_ids
+
     if limit_to_restaurant_ids is not None:
-        if not limit_to_restaurant_ids:
+        accessible_ids = ensure_festival_in_carousel_ids(
+            limit_to_restaurant_ids, db_alias=restaurant_alias
+        )
+        if not accessible_ids:
             return []
-        accessible_ids = sorted(limit_to_restaurant_ids)
     else:
         try:
-            accessible_ids = list(
+            base_ids = list(
                 AffiliateRestaurant.objects.using(restaurant_alias)
                 .filter(is_affiliate=True)
                 .order_by("restaurant_id")
                 .values_list("restaurant_id", flat=True)
             )
         except DatabaseError:
-            accessible_ids = []
-
-    from restaurants.affiliate_order import (
-        fetch_affiliate_row,
-        prioritize_restaurant_id_list,
-    )
-
-    if (
-        limit_to_restaurant_ids is None
-        and JUNGDUNBAM_FESTIVAL_RESTAURANT_ID not in accessible_ids
-        and fetch_affiliate_row(
-            JUNGDUNBAM_FESTIVAL_RESTAURANT_ID, db_alias=restaurant_alias
+            base_ids = []
+        accessible_ids = ensure_festival_in_carousel_ids(
+            base_ids, db_alias=restaurant_alias
         )
-    ):
-        accessible_ids.append(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID)
-
-    accessible_ids = prioritize_restaurant_id_list(accessible_ids)
+        if not accessible_ids:
+            return []
 
     wallet_qs = StampWallet.objects.using(STAMP_DB_ALIAS).filter(user=user)
     if limit_to_restaurant_ids is not None:
-        wallet_qs = wallet_qs.filter(restaurant_id__in=limit_to_restaurant_ids)
+        wallet_qs = wallet_qs.filter(restaurant_id__in=accessible_ids)
     wallet_map = {wallet.restaurant_id: wallet for wallet in wallet_qs}
 
     all_rids = set(accessible_ids) | set(wallet_map.keys())
@@ -4713,6 +4706,8 @@ def get_all_stamp_statuses(
     for restaurant_id in extra_ids:
         wallet = wallet_map[restaurant_id]
         results.append(_row(restaurant_id, wallet))
+
+    from restaurants.affiliate_order import prioritize_restaurant_id_list
 
     order_ids = prioritize_restaurant_id_list([r["restaurant_id"] for r in results])
     by_rid = {r["restaurant_id"]: r for r in results}

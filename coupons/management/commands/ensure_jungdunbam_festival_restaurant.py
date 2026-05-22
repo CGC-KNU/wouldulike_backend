@@ -12,8 +12,8 @@ from coupons.festival_jungdunbam import (
 class Command(BaseCommand):
     help = (
         "우주라이크 X 정든밤 축제 주막(restaurant_id=299) 데이터를 CloudSQL에 반영 "
-        "(is_affiliate=TRUE). "
-        "반영합니다. 배포 후 앱에 안 보일 때 수동 실행용."
+        "(is_affiliate=FALSE, 제휴 목록 비노출). "
+        "배포 후 DB 동기화·수동 실행용."
     )
 
     def add_arguments(self, parser):

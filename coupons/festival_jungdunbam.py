@@ -41,8 +41,8 @@ STAMP_DISABLED_RESTAURANT_IDS = frozenset(
 def festival_restaurant_ids_excluded_from_pub_pools() -> frozenset[int]:
     """수요일 APP_OPEN_WED·주점 이벤트 등 술집/주점 풀에서 제외 (축제 전용 발급만)."""
     return STAMP_DISABLED_RESTAURANT_IDS
-# 앱 제휴 목록 노출
-IS_AFFILIATE_IN_APP = True
+# 앱 제휴 식당 탭·넘기기 목록 비노출 (쿠폰·PIN·상세는 restaurant_id로 유지)
+IS_AFFILIATE_IN_APP = False
 CATEGORY = "주점"
 ZONE = "주막"
 ADDRESS = "경북대학교 대구캠퍼스 80주년 축제 주막"

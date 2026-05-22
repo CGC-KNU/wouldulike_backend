@@ -414,17 +414,28 @@ class MyAllStampStatusView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        from coupons.festival_jungdunbam import RESTAURANT_ID as JUNGDUNBAM_FESTIVAL_RESTAURANT_ID
+
         raw = (request.query_params.get("in_progress_only") or "").strip().lower()
-        if raw in ("1", "true", "yes"):
+        in_progress = raw in ("1", "true", "yes")
+        if in_progress:
             ids = set(
                 StampWallet.objects.using(STAMP_DB_ALIAS)
                 .filter(user=request.user, stamps__gt=0)
                 .values_list("restaurant_id", flat=True)
             )
-            data = get_all_stamp_statuses(request.user, limit_to_restaurant_ids=ids) if ids else []
+            data = get_all_stamp_statuses(
+                request.user, limit_to_restaurant_ids=ids
+            )
         else:
             data = get_all_stamp_statuses(request.user)
-        return Response({"results": data})
+        return Response(
+            {
+                "priority_restaurant_id": JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+                "carousel_scope": "in_progress" if in_progress else "all",
+                "results": data,
+            }
+        )
 
 
 class ClaimFinalExamCouponView(APIView):

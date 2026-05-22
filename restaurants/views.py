@@ -22,8 +22,74 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 # 진행 식당 수가 적을 때 전체 제휴 목록을 돌려주는 분기에서 동일 쿼리 반복을 줄이기 위한 캐시
-_AFFILIATE_ALL_ROWS_CACHE_KEY = "restaurants:active_affiliate_all_rows_v2"
+_AFFILIATE_ALL_ROWS_CACHE_KEY = "restaurants:active_affiliate_all_rows_v4"
 _AFFILIATE_ALL_ROWS_CACHE_TTL = 120
+
+_AFFILIATE_ROW_SELECT = """
+    SELECT
+        restaurant_id,
+        name,
+        description,
+        address,
+        category,
+        zone,
+        phone_number,
+        url,
+        s3_image_urls
+    FROM restaurants_affiliate
+    WHERE is_affiliate = TRUE
+"""
+
+
+def _load_all_affiliate_rows() -> list:
+    rows = cache.get(_AFFILIATE_ALL_ROWS_CACHE_KEY)
+    if rows is None:
+        with connections["cloudsql"].cursor() as cursor:
+            cursor.execute(_AFFILIATE_ROW_SELECT)
+            rows = cursor.fetchall()
+        cache.set(
+            _AFFILIATE_ALL_ROWS_CACHE_KEY,
+            rows,
+            _AFFILIATE_ALL_ROWS_CACHE_TTL,
+        )
+    return list(rows)
+
+
+def _load_affiliate_rows_for_ids(restaurant_ids: list[int]) -> list:
+    if not restaurant_ids:
+        return []
+    with connections["cloudsql"].cursor() as cursor:
+        placeholders = ", ".join(["%s"] * len(restaurant_ids))
+        cursor.execute(
+            f"""
+            SELECT
+                restaurant_id,
+                name,
+                description,
+                address,
+                category,
+                zone,
+                phone_number,
+                url,
+                s3_image_urls
+            FROM restaurants_affiliate
+            WHERE restaurant_id IN ({placeholders})
+              AND is_affiliate = TRUE
+            ORDER BY restaurant_id
+            """,
+            restaurant_ids,
+        )
+        return cursor.fetchall()
+
+
+def _parse_carousel_scope(request) -> str | None:
+    """식당 넘기기 범위: all(전체) | in_progress(적립 중). 미지정 시 None(기존 분기)."""
+    raw = (request.GET.get("carousel") or request.GET.get("scope") or "").strip().lower()
+    if raw in ("all", "전체", "whole", "full"):
+        return "all"
+    if raw in ("in_progress", "active", "progress", "적립", "진행"):
+        return "in_progress"
+    return None
 
 
 def _normalize_restaurant_name(name):
@@ -426,6 +492,7 @@ def get_restaurant_tab_list(request):
         return JsonResponse(
             {
                 'priority_restaurant_id': JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+                'carousel_scope': 'all',
                 'affiliate_restaurants': affiliate_restaurants,
                 'carousel_restaurants': [
                     _serialize_affiliate_restaurant(row) for row in carousel_rows
@@ -475,7 +542,7 @@ def get_affiliate_restaurants(request):
             )
             rows = cursor.fetchall()
 
-        rows = order_rows_priority_first(ensure_priority_affiliate_rows_included(rows))
+        rows = shuffle_rows_priority_first(rows)
         restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
 
         # 제휴식당 리스트 로그로 간단히 확인
@@ -490,7 +557,11 @@ def get_affiliate_restaurants(request):
             logger.exception("Failed to log affiliate restaurants response")
 
         return JsonResponse(
-            {'restaurants': restaurants},
+            {
+                'priority_restaurant_id': JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
+                'carousel_scope': 'all',
+                'restaurants': restaurants,
+            },
             status=200,
             json_dumps_params={'ensure_ascii': False},
         )
@@ -510,63 +581,27 @@ def get_active_affiliate_restaurants(request):
         return error_response
 
     try:
+        carousel_scope = _parse_carousel_scope(request)
         restaurant_ids = get_active_affiliate_restaurant_ids_for_user(user)
-        if len(restaurant_ids) <= 2:
+        if carousel_scope == "all":
             source = "all"
-            rows = cache.get(_AFFILIATE_ALL_ROWS_CACHE_KEY)
-            if rows is None:
-                with connections["cloudsql"].cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT
-                            restaurant_id,
-                            name,
-                            description,
-                            address,
-                            category,
-                            zone,
-                            phone_number,
-                            url,
-                            s3_image_urls
-                        FROM restaurants_affiliate
-                        WHERE is_affiliate = TRUE
-                        """
-                    )
-                    rows = cursor.fetchall()
-                cache.set(
-                    _AFFILIATE_ALL_ROWS_CACHE_KEY,
-                    rows,
-                    _AFFILIATE_ALL_ROWS_CACHE_TTL,
-                )
-            rows = list(rows)
+            rows = _load_all_affiliate_rows()
+        elif carousel_scope == "in_progress":
+            source = "active"
+            rows = _load_affiliate_rows_for_ids(restaurant_ids)
+        elif len(restaurant_ids) <= 2:
+            source = "all"
+            rows = _load_all_affiliate_rows()
         else:
             source = "active"
-            with connections["cloudsql"].cursor() as cursor:
-                placeholders = ", ".join(["%s"] * len(restaurant_ids))
-                query = f"""
-                    SELECT
-                        restaurant_id,
-                        name,
-                        description,
-                        address,
-                        category,
-                        zone,
-                        phone_number,
-                        url,
-                        s3_image_urls
-                    FROM restaurants_affiliate
-                    WHERE restaurant_id IN ({placeholders})
-                      AND is_affiliate = TRUE
-                    ORDER BY restaurant_id
-                """
-                cursor.execute(query, restaurant_ids)
-                rows = cursor.fetchall()
+            rows = _load_affiliate_rows_for_ids(restaurant_ids)
 
         rows = shuffle_rows_priority_first(rows)
         restaurants = [_serialize_affiliate_restaurant(row) for row in rows]
         return JsonResponse(
             {
                 'source': source,
+                'carousel_scope': carousel_scope or source,
                 'priority_restaurant_id': JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
                 'restaurants': restaurants,
             },
