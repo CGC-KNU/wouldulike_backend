@@ -44,6 +44,10 @@ GLOBAL_COUPON_EXPIRY = datetime(2026, 7, 31, 23, 59, 59, tzinfo=timezone.utc)
 DATE_EVENT_COUPON_EXPIRES_AT = datetime(2026, 4, 12, 14, 59, 59, tzinfo=timezone.utc)
 # 중간고사 기획전 쿠폰 만료일 (2026-04-24 23:59:59 KST = 2026-04-24 14:59:59 UTC)
 MIDTERM_EVENT_COUPON_EXPIRES_AT = datetime(2026, 4, 24, 14, 59, 59, tzinfo=timezone.utc)
+# 여름맞이 기획전 (2026-06-07 23:59:59 KST = 2026-06-07 14:59:59 UTC)
+SUMMER_EVENT_COUPON_EXPIRES_AT = datetime(2026, 6, 7, 14, 59, 59, tzinfo=timezone.utc)
+# 월드컵 기획전 (2026-06-21 23:59:59 KST = 2026-06-21 14:59:59 UTC)
+WORLD_CUP_EVENT_COUPON_EXPIRES_AT = datetime(2026, 6, 21, 14, 59, 59, tzinfo=timezone.utc)
 # 성년의날 GAEHWALIKE 쿠폰 만료일 (2026-05-31 23:59:59 KST = 2026-05-31 14:59:59 UTC)
 GAEHWALIKE_EVENT_COUPON_EXPIRES_AT = datetime(2026, 5, 31, 14, 59, 59, tzinfo=timezone.utc)
 # 주점 이벤트 쿠폰 만료일 (GAEHWALIKE 와 동일 기간)
@@ -185,6 +189,12 @@ def _resolve_coupon_expiry_for_issue(
     # 중간고사 기획전 쿠폰은 운영 정책상 이벤트 종료일(4/24)로 고정 만료
     if coupon_type.code == "MIDTERM_EVENT_SPECIAL":
         return MIDTERM_EVENT_COUPON_EXPIRES_AT
+
+    if coupon_type.code == "SUMMER_EVENT_SPECIAL":
+        return SUMMER_EVENT_COUPON_EXPIRES_AT
+
+    if coupon_type.code == "WORLD_CUP_EVENT_SPECIAL":
+        return WORLD_CUP_EVENT_COUPON_EXPIRES_AT
 
     # 성년의날 GAEHWALIKE 쿠폰은 이벤트 종료일(5/31)로 고정 만료
     if coupon_type.code == "GAEHWALIKE":
