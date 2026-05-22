@@ -96,6 +96,23 @@ MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE = os.getenv(
     "MIDTERM_EVENT_APP_OPEN_CAMPAIGN_CODE",
     "MIDTERM_EVENT_APP_OPEN",
 )
+# 여름맞이 기획전 앱접속: 기간 내 KST 기준 매일 1장 랜덤 (SUMMER_EVENT_SPECIAL + SUMMER_EVENT_APP_OPEN)
+SUMMER_EVENT_APP_OPEN_ENABLED = os.getenv("SUMMER_EVENT_APP_OPEN_ENABLED", "1") in (
+    "1",
+    "true",
+    "True",
+)
+SUMMER_EVENT_APP_OPEN_COUPON_TYPE_CODE = os.getenv(
+    "SUMMER_EVENT_APP_OPEN_COUPON_TYPE_CODE",
+    "SUMMER_EVENT_SPECIAL",
+)
+SUMMER_EVENT_APP_OPEN_CAMPAIGN_CODE = os.getenv(
+    "SUMMER_EVENT_APP_OPEN_CAMPAIGN_CODE",
+    "SUMMER_EVENT_APP_OPEN",
+)
+SUMMER_EVENT_SUBTITLE = "[여름맞이 기획전 쿠폰 ☀️]"
+SUMMERLIKE_COUPON_CODE = "SUMMERLIKE"
+SUMMERLIKE_CAMPAIGN_CODE = "SUMMERLIKE_EVENT"
 # 경북대 80주년 축제 주막(우주라이크 X 정든밤): 5/20 23:59(KST)까지 앱 접속 시 음료 쿠폰 1장 (APP_OPEN_WED 와 별도)
 JUNGDUNBAM_FESTIVAL_RESTAURANT_ID = int(
     os.getenv("JUNGDUNBAM_FESTIVAL_RESTAURANT_ID", str(_JUNGDUNBAM_FESTIVAL_RID))
@@ -1524,6 +1541,245 @@ def _issue_midterm_event_app_open(user: User, *, db_alias: str | None = None) ->
     return issued
 
 
+def _kst_now():
+    try:
+        from zoneinfo import ZoneInfo
+    except ImportError:
+        from backports.zoneinfo import ZoneInfo  # type: ignore[no-redef]
+
+    return timezone.now().astimezone(ZoneInfo("Asia/Seoul"))
+
+
+def _issue_summer_event_app_open(user: User, *, db_alias: str | None = None) -> list:
+    """
+    여름맞이 기획전 앱 접속 쿠폰.
+    - SUMMER_EVENT_SPECIAL benefit 풀에서 매일(KST) 1장 랜덤 발급
+    - 같은 날 재접속 시 당일분만 멱등, 다음날 접속 시 새로 1장 발급
+    - 만료: 캠페인 종료일(SUMMER_EVENT_APP_OPEN end_at)
+    """
+    alias = db_alias or router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=SUMMER_EVENT_APP_OPEN_COUPON_TYPE_CODE)
+        camp = Campaign.objects.using(alias).get(
+            code=SUMMER_EVENT_APP_OPEN_CAMPAIGN_CODE,
+            active=True,
+        )
+    except CouponType.DoesNotExist:
+        logger.info(
+            "summer-event app-open not issued: coupon type missing (code=%s)",
+            SUMMER_EVENT_APP_OPEN_COUPON_TYPE_CODE,
+        )
+        return []
+    except Campaign.DoesNotExist:
+        logger.info(
+            "summer-event app-open not issued: campaign missing/inactive (code=%s)",
+            SUMMER_EVENT_APP_OPEN_CAMPAIGN_CODE,
+        )
+        return []
+
+    now = timezone.now()
+    if camp.start_at and now < camp.start_at:
+        return []
+    if camp.end_at and now > camp.end_at:
+        return []
+
+    kst = _kst_now()
+    date_str = kst.strftime("%Y%m%d")
+    issue_key = f"SUMMER_EVENT_APP_OPEN:{user.id}:{date_str}"
+
+    existing = (
+        Coupon.objects.using(alias)
+        .filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key=issue_key,
+        )
+        .first()
+    )
+    if existing:
+        return [existing]
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        logger.info(
+            "summer-event app-open not issued: no active benefits (code=%s)",
+            SUMMER_EVENT_APP_OPEN_COUPON_TYPE_CODE,
+        )
+        return []
+
+    benefit = random.choice(benefits)
+    restaurant_id = benefit.restaurant_id
+
+    benefit_snapshot = _build_benefit_snapshot(
+        ct,
+        restaurant_id,
+        benefit=benefit,
+        db_alias=alias,
+    )
+    if benefit_snapshot:
+        benefit_snapshot = {
+            **benefit_snapshot,
+            "coupon_type_title": SUMMER_EVENT_SUBTITLE,
+            "subtitle": SUMMER_EVENT_SUBTITLE,
+        }
+
+    expires_at = _resolve_expires_at_for_issue(ct, campaign=camp)
+
+    try:
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=expires_at,
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        return [coupon]
+    except IntegrityError:
+        dup = (
+            Coupon.objects.using(alias)
+            .filter(
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                issue_key=issue_key,
+            )
+            .first()
+        )
+        return [dup] if dup else []
+
+
+@transaction.atomic
+def issue_summerlike_pack_for_user(user: User) -> dict:
+    """
+    SUMMERLIKE 코드 입력 시 SUMMER_EVENT_SPECIAL 풀 전체(활성 benefit) 발급.
+    - 기간: SUMMERLIKE_EVENT 캠페인 start_at~end_at
+    - 사용자당 1회 (issue_key prefix 멱등)
+    - 만료: 캠페인 종료일
+    """
+    alias = router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=SUMMER_EVENT_APP_OPEN_COUPON_TYPE_CODE)
+        camp = Campaign.objects.using(alias).get(code=SUMMERLIKE_CAMPAIGN_CODE, active=True)
+    except (CouponType.DoesNotExist, Campaign.DoesNotExist):
+        raise ValidationError("event not configured")
+
+    now = timezone.now()
+    if camp.start_at and now < camp.start_at:
+        raise ValidationError("expired")
+    if camp.end_at and now > camp.end_at:
+        raise ValidationError("expired")
+
+    issue_key_prefix = f"SUMMERLIKE:{user.id}:"
+    existing_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key__startswith=issue_key_prefix,
+    )
+    if existing_qs.exists():
+        return {
+            "coupons": list(existing_qs.order_by("issued_at", "id")),
+            "total_issued": existing_qs.count(),
+            "already_issued": True,
+        }
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("event not configured")
+
+    expires_at = _resolve_expires_at_for_issue(ct, campaign=camp)
+    issued_coupons: list[Coupon] = []
+    for benefit in benefits:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{issue_key_prefix}{restaurant_id}:{sort_order}"
+
+        existing = (
+            Coupon.objects.using(alias)
+            .filter(
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                issue_key=issue_key,
+            )
+            .first()
+        )
+        if existing:
+            issued_coupons.append(existing)
+            continue
+
+        benefit_snapshot = _build_benefit_snapshot(
+            ct, restaurant_id, benefit=benefit, db_alias=alias
+        )
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": SUMMER_EVENT_SUBTITLE,
+                "subtitle": SUMMER_EVENT_SUBTITLE,
+            }
+        try:
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=expires_at,
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued_coupons.append(coupon)
+        except IntegrityError:
+            dup = (
+                Coupon.objects.using(alias)
+                .filter(
+                    user=user,
+                    coupon_type=ct,
+                    campaign=camp,
+                    issue_key=issue_key,
+                )
+                .first()
+            )
+            if dup:
+                issued_coupons.append(dup)
+
+    return {
+        "coupons": issued_coupons,
+        "total_issued": len(issued_coupons),
+        "already_issued": False,
+    }
+
+
+@transaction.atomic
+def claim_summerlike_coupon(user: User, coupon_code: str) -> dict:
+    """
+    쿠폰 코드 SUMMERLIKE 입력 시 여름맞이 기획전 풀 전체 발급.
+    - 기간: 2026-05-22 ~ 2026-06-07 (KST, 캠페인 end_at 기준)
+    - 사용자당 1회
+    """
+    if (coupon_code or "").strip().upper() != SUMMERLIKE_COUPON_CODE:
+        raise ValidationError("invalid coupon code")
+    return issue_summerlike_pack_for_user(user)
+
+
 def issue_app_open_coupon(user: User, *, include_standard: bool = True):
     """
     앱 접속(로그인/토큰 갱신/쿠폰함 등) 시점에 발급되는 쿠폰.
@@ -1543,6 +1799,9 @@ def issue_app_open_coupon(user: User, *, include_standard: bool = True):
 
     if MIDTERM_EVENT_APP_OPEN_ENABLED:
         issued.extend(_issue_midterm_event_app_open(user, db_alias=alias))
+
+    if SUMMER_EVENT_APP_OPEN_ENABLED:
+        issued.extend(_issue_summer_event_app_open(user, db_alias=alias))
 
     if APP_OPEN_LEGACY_ENABLED:
         issued.extend(_issue_app_open_legacy(user, db_alias=alias))
@@ -3167,6 +3426,7 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
     # ---------------------------------------------------------------------
     # 중간고사 캠페인 쿠폰코드(추천코드 입력 UI 재사용)
     # - STUDYLIKE: 기획전 랜덤 3종
+    # - SUMMERLIKE: 여름맞이 풀 전체 발급
     # - GAEHWALIKE: 성년의날 랜덤 10종
     # - JUNYOUNG/JEONGHWAN/YUNJI: 술집·주점 제휴 풀 랜덤 1·3·5종
     # - 날짜별/챌린지 코드: CSV 기반 코드 → 발급 (claim_midterm_daily_code_coupon)
@@ -3188,6 +3448,25 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                 referee=referee,
                 code_used=ref_code,
                 campaign_code=MIDTERM_STUDYLIKE_CAMPAIGN_CODE,
+                status="QUALIFIED",
+                qualified_at=timezone.now(),
+            )
+        return referral, result["coupons"]
+
+    if ref_code == SUMMERLIKE_COUPON_CODE:
+        result = claim_summerlike_coupon(referee, ref_code)
+        if result.get("already_issued"):
+            raise ValidationError(
+                "이미 SUMMERLIKE 쿠폰을 발급받았습니다.",
+                code="summerlike_already_issued",
+            )
+        with transaction.atomic(using=db_alias):
+            base_qs = Referral.objects.using(db_alias)
+            referral = base_qs.create(
+                referrer=referee,
+                referee=referee,
+                code_used=ref_code,
+                campaign_code=SUMMERLIKE_CAMPAIGN_CODE,
                 status="QUALIFIED",
                 qualified_at=timezone.now(),
             )
