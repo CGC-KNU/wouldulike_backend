@@ -6,7 +6,7 @@ from django.utils import timezone
 
 
 SUMMER_INSTAGRAM_URL = (
-    "https://www.instagram.com/p/DYoS3QfkS9A/?igsh=MTUycmJodnZwMXJiNQ=="
+    "https://www.instagram.com/p/DYt5yYakbTX/?igsh=M3djaGRsdDNlcnZ0"
 )
 SUMMER_BANNER_IMAGE_URL = (
     "https://wouldulike-default-bucket-lunching.s3.ap-northeast-2.amazonaws.com/"
