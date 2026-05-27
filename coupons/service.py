@@ -113,6 +113,56 @@ SUMMER_EVENT_APP_OPEN_CAMPAIGN_CODE = os.getenv(
 SUMMER_EVENT_SUBTITLE = "[여름맞이 기획전 쿠폰 🍉]"
 SUMMERLIKE_COUPON_CODE = "SUMMERLIKE"
 SUMMERLIKE_CAMPAIGN_CODE = "SUMMERLIKE_EVENT"
+
+# 여름맞이 미니게임 랜덤 쿠폰코드 (사진 속 SF1/SF3/SF5)
+# - SF1: 1종, SF3: 3종, SF5: 5종
+# - 06-09부터 Day1로 반복된다는 안내가 있어, 우선 "사진 속 코드"만 허용한다.
+SUMMER_SF_RANDOM_CAMPAIGN_CODE = "SUMMER_SF_RANDOM_EVENT"
+SUMMER_SF_CODE_COUNTS: dict[str, int] = {
+    # Day 1~14
+    "SF1-A4M9": 1,
+    "SF1-B7N2": 1,
+    "SF1-C1P6": 1,
+    "SF1-D5Q3": 1,
+    "SF1-E8R7": 1,
+    "SF1-F2S4": 1,
+    "SF1-G6T8": 1,
+    "SF1-H3U1": 1,
+    "SF1-I9V5": 1,
+    "SF1-J4W2": 1,
+    "SF1-K7X6": 1,
+    "SF1-L1Y3": 1,
+    "SF1-M5Z8": 1,
+    "SF1-N2A4": 1,
+    "SF3-P8B3": 3,
+    "SF3-Q2C7": 3,
+    "SF3-R6D1": 3,
+    "SF3-S9E4": 3,
+    "SF3-T3F8": 3,
+    "SF3-U7G2": 3,
+    "SF3-V1H6": 3,
+    "SF3-W4I9": 3,
+    "SF3-X8J3": 3,
+    "SF3-Y2K7": 3,
+    "SF3-Z6L1": 3,
+    "SF3-A9M4": 3,
+    "SF3-B3N8": 3,
+    "SF3-C7P2": 3,
+    "SF5-D1Q6": 5,
+    "SF5-E4R9": 5,
+    "SF5-F8S3": 5,
+    "SF5-G2T7": 5,
+    "SF5-H6U1": 5,
+    "SF5-I9V4": 5,
+    "SF5-J3W8": 5,
+    "SF5-K7X2": 5,
+    "SF5-L1Y6": 5,
+    "SF5-M4Z9": 5,
+    "SF5-N8A3": 5,
+    "SF5-O2B7": 5,
+    "SF5-P6C1": 5,
+    "SF5-Q9D4": 5,
+}
 # 경북대 80주년 축제 주막(우주라이크 X 정든밤): 5/20 23:59(KST)까지 앱 접속 시 음료 쿠폰 1장 (APP_OPEN_WED 와 별도)
 JUNGDUNBAM_FESTIVAL_RESTAURANT_ID = int(
     os.getenv("JUNGDUNBAM_FESTIVAL_RESTAURANT_ID", str(_JUNGDUNBAM_FESTIVAL_RID))
@@ -1778,6 +1828,126 @@ def claim_summerlike_coupon(user: User, coupon_code: str) -> dict:
     if (coupon_code or "").strip().upper() != SUMMERLIKE_COUPON_CODE:
         raise ValidationError("invalid coupon code")
     return issue_summerlike_pack_for_user(user)
+
+
+@transaction.atomic
+def claim_summer_sf_random_coupon(user: User, coupon_code: str) -> dict:
+    """
+    사진 속 SF1/SF3/SF5 쿠폰 코드 입력 시, 여름맞이 혜택 풀에서 랜덤으로 N장 발급.
+    - 쿠폰타입: SUMMER_EVENT_SPECIAL(기본값) = SUMMER_EVENT_APP_OPEN_COUPON_TYPE_CODE
+    - 캠페인: SUMMER_SF_RANDOM_EVENT (없으면 자동 생성)
+    - 사용자당 "코드 1개당 1회" (issue_key prefix 멱등)
+    - 기간은 신경쓰지 않음 (캠페인 start/end 검사 생략)
+    """
+    code = (coupon_code or "").strip().upper()
+    if code not in SUMMER_SF_CODE_COUNTS:
+        raise ValidationError("invalid coupon code")
+
+    alias = router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=SUMMER_EVENT_APP_OPEN_COUPON_TYPE_CODE)
+    except CouponType.DoesNotExist:
+        raise ValidationError("event not configured")
+
+    camp, _ = Campaign.objects.using(alias).update_or_create(
+        code=SUMMER_SF_RANDOM_CAMPAIGN_CODE,
+        defaults={
+            "name": "여름맞이 미니게임 랜덤 쿠폰",
+            "type": "FLASH",
+            "active": True,
+            "start_at": None,
+            "end_at": None,
+            "rules_json": {
+                "trigger": "COUPON_CODE",
+                "codes": sorted(SUMMER_SF_CODE_COUNTS.keys()),
+                "mode": "RANDOM_PACK",
+            },
+        },
+    )
+
+    issue_key_prefix = f"SUMMER_SF:{user.id}:{code}:"
+    existing_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key__startswith=issue_key_prefix,
+    )
+    if existing_qs.exists():
+        coupons = list(existing_qs.order_by("issued_at", "id"))
+        return {
+            "coupons": coupons,
+            "total_issued": len(coupons),
+            "already_issued": True,
+        }
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("event not configured")
+
+    want = SUMMER_SF_CODE_COUNTS[code]
+    pick_n = min(want, len(benefits))
+    picked = random.sample(benefits, k=pick_n)
+
+    # 요청사항: 만료일은 여름맞이 기획전 종료 시각까지로 고정
+    expires_at = SUMMER_EVENT_COUPON_EXPIRES_AT
+    issued: list[Coupon] = []
+    for benefit in picked:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{issue_key_prefix}{restaurant_id}:{sort_order}"
+
+        benefit_snapshot = _build_benefit_snapshot(
+            ct,
+            restaurant_id,
+            benefit=benefit,
+            db_alias=alias,
+        )
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": SUMMER_EVENT_SUBTITLE,
+                "subtitle": SUMMER_EVENT_SUBTITLE,
+            }
+
+        try:
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=expires_at,
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued.append(coupon)
+        except IntegrityError:
+            dup = (
+                Coupon.objects.using(alias)
+                .filter(
+                    user=user,
+                    coupon_type=ct,
+                    campaign=camp,
+                    issue_key=issue_key,
+                )
+                .first()
+            )
+            if dup:
+                issued.append(dup)
+
+    issued.sort(key=lambda c: (c.issued_at, c.id))
+    return {
+        "coupons": issued,
+        "total_issued": len(issued),
+        "already_issued": False,
+    }
 
 
 def issue_app_open_coupon(user: User, *, include_standard: bool = True):
@@ -3467,6 +3637,25 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                 referee=referee,
                 code_used=ref_code,
                 campaign_code=SUMMERLIKE_CAMPAIGN_CODE,
+                status="QUALIFIED",
+                qualified_at=timezone.now(),
+            )
+        return referral, result["coupons"]
+
+    if ref_code in SUMMER_SF_CODE_COUNTS:
+        result = claim_summer_sf_random_coupon(referee, ref_code)
+        if result.get("already_issued"):
+            raise ValidationError(
+                f"이미 {ref_code} 쿠폰을 발급받았습니다.",
+                code="summer_sf_already_issued",
+            )
+        with transaction.atomic(using=db_alias):
+            base_qs = Referral.objects.using(db_alias)
+            referral = base_qs.create(
+                referrer=referee,
+                referee=referee,
+                code_used=ref_code,
+                campaign_code=SUMMER_SF_RANDOM_CAMPAIGN_CODE,
                 status="QUALIFIED",
                 qualified_at=timezone.now(),
             )
