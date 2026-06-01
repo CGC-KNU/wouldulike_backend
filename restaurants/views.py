@@ -574,6 +574,39 @@ def get_affiliate_restaurants(request):
 
 
 @require_http_methods(["GET"])
+def get_affiliate_restaurant_id_name_list(request):
+    """Return affiliate restaurants as (restaurant_id, name) pairs."""
+    try:
+        with connections["cloudsql"].cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT restaurant_id, name
+                FROM restaurants_affiliate
+                WHERE is_affiliate = TRUE
+                ORDER BY restaurant_id
+                """
+            )
+            rows = cursor.fetchall()
+
+        restaurants = [
+            {"restaurant_id": restaurant_id, "name": _normalize_restaurant_name(name)}
+            for (restaurant_id, name) in rows
+        ]
+
+        return JsonResponse(
+            {"restaurants": restaurants},
+            status=200,
+            json_dumps_params={"ensure_ascii": False},
+        )
+    except Exception as exc:
+        logger.exception("Failed to fetch affiliate restaurant id-name list")
+        return JsonResponse(
+            {"error_code": "UNKNOWN_ERROR", "message": f"Unexpected error: {str(exc)}"},
+            status=500,
+        )
+
+
+@require_http_methods(["GET"])
 def get_active_affiliate_restaurants(request):
     """Return affiliate restaurants where user has active coupon or stamp progress."""
     user, error_response = _get_user_from_bearer_token(request)

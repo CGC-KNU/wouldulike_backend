@@ -11,7 +11,7 @@ from django.utils import timezone
 
 
 RESTAURANT_ID = 299
-# 이전에 사용하던 ID(삭제·교체 전 식당과 겹칠 수 있음) — 발급·풀에서 계속 제외
+# 축제 주막이 잠시 쓰던 ID(현재 슈퍼크리스피 경북대점). reassign 시에만 사용.
 LEGACY_FESTIVAL_RESTAURANT_ID = 298
 MERCHANT_PIN = "0629"
 RESTAURANT_NAME = "우주라이크 X 정든밤"
@@ -33,9 +33,7 @@ STAMP_BENEFIT_DISPLAY_PLAIN = {
     "mode": "plain",
     "text": STAMP_DISPLAY_NO_REWARD_MESSAGE,
 }
-STAMP_DISABLED_RESTAURANT_IDS = frozenset(
-    {RESTAURANT_ID, LEGACY_FESTIVAL_RESTAURANT_ID}
-)
+STAMP_DISABLED_RESTAURANT_IDS = frozenset({RESTAURANT_ID})
 
 
 def festival_restaurant_ids_excluded_from_pub_pools() -> frozenset[int]:

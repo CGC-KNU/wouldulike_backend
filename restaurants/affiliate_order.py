@@ -6,15 +6,12 @@ from collections.abc import Iterable
 
 from django.db import connections
 
-from coupons.festival_jungdunbam import (
-    LEGACY_FESTIVAL_RESTAURANT_ID,
-    RESTAURANT_ID as JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
-)
+from coupons.festival_jungdunbam import RESTAURANT_ID as JUNGDUNBAM_FESTIVAL_RESTAURANT_ID
 
-# 맨 앞에 둘 식당 (현재 299)
+# 맨 앞에 둘 식당 (현재 299 축제 주막, is_affiliate=False 여도 캐러셀에 포함될 수 있음)
 PRIORITY_FIRST_RESTAURANT_IDS: tuple[int, ...] = (JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,)
-# 구 축제 ID(298)는 맨 뒤로 (DB에 제휴로 남아 있을 때)
-DEMOTE_RESTAURANT_IDS: frozenset[int] = frozenset({LEGACY_FESTIVAL_RESTAURANT_ID})
+# 298 슈퍼크리스피는 일반 제휴와 동일하게 셔플 대상
+DEMOTE_RESTAURANT_IDS: frozenset[int] = frozenset()
 
 _AFFILIATE_ROW_SQL = """
     SELECT

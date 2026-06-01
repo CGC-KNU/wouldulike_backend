@@ -1069,8 +1069,9 @@ class JungdunbamFestivalWedTests(TestCase):
         from coupons.festival_jungdunbam import LEGACY_FESTIVAL_RESTAURANT_ID
 
         self.assertIn(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID, RESTAURANTS_EXCLUDED_FROM_ALL)
-        self.assertIn(LEGACY_FESTIVAL_RESTAURANT_ID, RESTAURANTS_EXCLUDED_FROM_ALL)
+        self.assertNotIn(LEGACY_FESTIVAL_RESTAURANT_ID, RESTAURANTS_EXCLUDED_FROM_ALL)
         self.assertEqual(JUNGDUNBAM_FESTIVAL_RESTAURANT_ID, 299)
+        self.assertEqual(LEGACY_FESTIVAL_RESTAURANT_ID, 298)
 
     def test_festival_stall_excluded_from_pub_and_jujeom_pools(self):
         AffiliateRestaurant.objects.update_or_create(

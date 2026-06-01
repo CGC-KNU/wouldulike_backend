@@ -13,10 +13,7 @@ from django.core.exceptions import ValidationError
 from django.contrib.auth import get_user_model
 from restaurants.models import AffiliateRestaurant
 
-from coupons.festival_jungdunbam import (
-    LEGACY_FESTIVAL_RESTAURANT_ID,
-    RESTAURANT_ID as _JUNGDUNBAM_FESTIVAL_RID,
-)
+from coupons.festival_jungdunbam import RESTAURANT_ID as _JUNGDUNBAM_FESTIVAL_RID
 
 from .models import (
     Campaign,
@@ -345,11 +342,10 @@ MAX_COUPONS_PER_RESTAURANT = 200
 # 148(Better), 284(와비사비)는 제휴 아님 → AffiliateRestaurant에 없음
 # RESTAURANTS_EXCLUDED_FROM_ALL: 모든 쿠폰 발급에서 제외 (팀스 쿠치나 등)
 # 299: 우주라이크 X 정든밤 축제 주막 — JUNGDUNBAM_FESTIVAL_WED 전용 발급만 허용
-# 298: 구 축제 ID(삭제·교체 전) — 신규 발급 차단 유지
+# 298: 슈퍼크리스피 경북대점 (일반 제휴) — 제외 목록에 넣지 않음
 RESTAURANTS_EXCLUDED_FROM_ALL: set[int] = {
     65,
     JUNGDUNBAM_FESTIVAL_RESTAURANT_ID,
-    LEGACY_FESTIVAL_RESTAURANT_ID,
 }
 # RESTAURANTS_EXCLUDED_FROM_NON_STAMP: 스탬프 적립 보상 쿠폰 제외, 그 외 모든 쿠폰 발급에서 제외 (고니식탁 등)
 RESTAURANTS_EXCLUDED_FROM_NON_STAMP: set[int] = {30}

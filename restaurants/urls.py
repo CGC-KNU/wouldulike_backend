@@ -4,6 +4,7 @@ from .views import (
     get_nearby_restaurants,
     get_restaurant_tab_list,
     get_affiliate_restaurants,
+    get_affiliate_restaurant_id_name_list,
     get_active_affiliate_restaurants,
     get_affiliate_restaurant_detail,
 )
@@ -13,6 +14,7 @@ urlpatterns = [
     path('get-nearby-restaurants/', get_nearby_restaurants, name='get_nearby_restaurants'),
     path('tab-restaurants/', get_restaurant_tab_list, name='get_restaurant_tab_list'),
     path('affiliate-restaurants/', get_affiliate_restaurants, name='get_affiliate_restaurants'),
+    path('affiliate-restaurants/id-name/', get_affiliate_restaurant_id_name_list, name='get_affiliate_restaurant_id_name_list'),
     path('affiliate-restaurants/active/', get_active_affiliate_restaurants, name='get_active_affiliate_restaurants'),
     path('affiliate-restaurants/detail/', get_affiliate_restaurant_detail, name='get_affiliate_restaurant_detail'),
 ]
