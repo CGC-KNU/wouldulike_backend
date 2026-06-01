@@ -168,8 +168,8 @@ cloudsql_db_port=5432
 DJANGO_USE_LOCAL_SQLITE=0
 DJANGO_DISABLE_EXTERNAL_DBS=0
 
-# 슈퍼크리스피(298) 매장 PIN — Koyeb 등 배포 환경에만 설정 (저장소에 넣지 않음)
-# SUPER_CRISPY_RESTAURANT_PIN=your_four_digit_pin
+# 슈퍼크리스피(298) 매장 PIN — Koyeb 등 배포 환경에만 설정 (저장소에 넣지 않음, 계약서와 동일 값)
+# SUPER_CRISPY_RESTAURANT_PIN=0000
 ```
 
 ### Redis
