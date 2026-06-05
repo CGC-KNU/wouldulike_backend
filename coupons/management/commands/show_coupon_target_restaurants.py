@@ -24,7 +24,6 @@ NAME_TO_ID = {
     "포차1번지먹새통": 147,
     "스톡홀름샐러드": 143,
     "스톡홀롬샐러드": 143,
-    "벨로": 19,
     "닭동가리": 146,
     "마름모식당": 62,
     "주비두루": 144,
@@ -65,14 +64,14 @@ COUPON_TYPES_TO_SHOW = [
 
 
 def _get_csv_based_lists():
-    """CSV 기준 제휴 19개 (Better·와비사비 제외), 쿠폰 발급 17개 (고니·포차 제외) 반환."""
+    """CSV 기준 제휴 18개 (Better·와비사비 제외), 쿠폰 발급 16개 (고니·포차 제외) 반환."""
     all_ids = sorted(set(NAME_TO_ID.values()))
     # Better(148), 와비사비(284) = 제휴 아님
     non_affiliate = {148, 284}
-    affiliate_ids = [rid for rid in all_ids if rid not in non_affiliate]  # 19개
+    affiliate_ids = [rid for rid in all_ids if rid not in non_affiliate]  # 18개
     # 고니식탁(30), 포차1번지먹새통(147) = 쿠폰 발급 제외
     coupon_excluded = {30, 147}
-    coupon_ids = [rid for rid in affiliate_ids if rid not in coupon_excluded]  # 17개
+    coupon_ids = [rid for rid in affiliate_ids if rid not in coupon_excluded]  # 16개
     return affiliate_ids, non_affiliate | coupon_excluded, coupon_ids
 
 

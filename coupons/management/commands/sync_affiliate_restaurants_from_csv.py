@@ -1,9 +1,9 @@
 """
 CSV 기준으로 제휴식당을 동기화합니다.
 
-- 제휴식당 19개: Better(148), 와비사비(284) 제외 (실제 제휴 아님)
-- 쿠폰 발급 17개: 19개 중 포차1번지먹새통(147), 고니식탁(30) 제외
-- 19개 제외한 나머지: is_affiliate=FALSE (일반식당으로 취급)
+- 제휴식당 18개: Better(148), 와비사비(284) 제외 (실제 제휴 아님)
+- 쿠폰 발급 16개: 18개 중 포차1번지먹새통(147), 고니식탁(30) 제외
+- 18개 제외한 나머지: is_affiliate=FALSE (일반식당으로 취급)
 """
 from django.core.management.base import BaseCommand
 from django.db import connections, router, transaction
@@ -11,9 +11,8 @@ from django.db import connections, router, transaction
 from restaurants.models import AffiliateRestaurant
 from coupons.models import CouponRestaurantExclusion
 
-# CSV 기준 (NAME_TO_ID) - Better, 와비사비 제외 → 19개 제휴
+# CSV 기준 (NAME_TO_ID) - Better, 와비사비 제외 → 18개 제휴
 AFFILIATE_IDS = [
-    19,   # 벨로
     30,   # 고니식탁 (쿠폰 제외)
     33,   # 구구포차
     41,   # 부리또익스프레스
@@ -35,7 +34,6 @@ AFFILIATE_IDS = [
 ]
 
 AFFILIATE_NAMES = {
-    19: "벨로",
     30: "고니식탁",
     33: "구구포차",
     41: "부리또익스프레스",
@@ -58,7 +56,7 @@ AFFILIATE_NAMES = {
 
 
 class Command(BaseCommand):
-    help = "CSV 기준 제휴식당 19개로 동기화 (나머지 제휴 해제)"
+    help = "CSV 기준 제휴식당 18개로 동기화 (나머지 제휴 해제)"
 
     def add_arguments(self, parser):
         parser.add_argument("--dry-run", action="store_true", help="실제 변경 없이 미리보기")
@@ -87,7 +85,7 @@ class Command(BaseCommand):
         to_unlink = all_in_table - to_affiliate
         to_add = to_affiliate - all_in_table
 
-        self.stdout.write(f"\n제휴식당 19개: {sorted(AFFILIATE_IDS)}")
+        self.stdout.write(f"\n제휴식당 18개: {sorted(AFFILIATE_IDS)}")
         self.stdout.write(f"현재 is_affiliate=True: {len(current)}개")
         self.stdout.write(f"제휴로 설정할 식당: {len(to_affiliate)}개")
         if to_add:
@@ -117,7 +115,7 @@ class Command(BaseCommand):
                     )
                     self.stdout.write(f"  ✓ 추가: {rid} {name}")
 
-            # 2) 18개 제휴로 설정
+            # 2) 18개 제휴로 설정 (AFFILIATE_IDS)
             if not dry_run:
                 with connections[alias].cursor() as cursor:
                     placeholders = ", ".join(["%s"] * len(AFFILIATE_IDS))
