@@ -23,7 +23,11 @@ from coupons.service import (
     MIDTERM_EVENT_COUPON_EXPIRES_AT,
     claim_midterm_daily_code_coupon,
     claim_gaehwalike_coupon,
+    claim_world_cup_daily_code_coupon,
     claim_pub_jujeom_event_coupon,
+    WORLD_CUP_EVENT_COUPON_EXPIRES_AT,
+    WORLD_CUP_SUBTITLE,
+    WORLD_CUP_DAILY_CODE_CAMPAIGN_CODE,
     MIDTERM_DAILY_CODE_START_AT,
     GAEHWALIKE_EVENT_COUPON_EXPIRES_AT,
     GAEHWALIKE_SUBTITLE,
@@ -706,6 +710,105 @@ class GaehwalikeCouponTests(TestCase):
         self.assertIn("expired", str(ctx.exception))
 
 
+class WorldCupDailyCodeCouponTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def _seed_world_cup_pool(self, n: int = 9):
+        user = self.user_model.objects.create_user(kakao_id=97000 + n, password="pass")
+        ct, _ = CouponType.objects.get_or_create(
+            code="WORLD_CUP_EVENT_SPECIAL",
+            defaults={
+                "title": WORLD_CUP_SUBTITLE,
+                "benefit_json": {},
+                "valid_days": 0,
+                "per_user_limit": 1,
+            },
+        )
+        base_rid = 970000
+        for i in range(n):
+            RestaurantCouponBenefit.objects.create(
+                coupon_type=ct,
+                restaurant_id=base_rid + i,
+                sort_order=0,
+                title=f"월드컵혜택{i}",
+                subtitle=WORLD_CUP_SUBTITLE,
+                benefit_json={},
+                active=True,
+            )
+        return user, ct
+
+    def test_world_cup_daily_code_issues_three_random_coupons_from_pool(self):
+        user, ct = self._seed_world_cup_pool(n=9)
+        benefits = list(
+            RestaurantCouponBenefit.objects.filter(coupon_type=ct, active=True).order_by(
+                "restaurant_id", "sort_order"
+            )
+        )
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: benefits[:k]):
+            result = claim_world_cup_daily_code_coupon(user, "qfjxkra")
+
+        self.assertFalse(result["already_issued"])
+        self.assertEqual(result["total_issued"], 3)
+        self.assertEqual(len(result["coupons"]), 3)
+        self.assertEqual(len({c.restaurant_id for c in result["coupons"]}), 3)
+        camp = Campaign.objects.get(code=WORLD_CUP_DAILY_CODE_CAMPAIGN_CODE)
+        for c in result["coupons"]:
+            self.assertEqual(c.coupon_type_id, ct.id)
+            self.assertEqual(c.campaign_id, camp.id)
+            self.assertEqual(c.expires_at, WORLD_CUP_EVENT_COUPON_EXPIRES_AT)
+            self.assertEqual((c.benefit_snapshot or {}).get("subtitle"), WORLD_CUP_SUBTITLE)
+
+        result2 = claim_world_cup_daily_code_coupon(user, "QFJXKRA")
+        self.assertTrue(result2["already_issued"])
+        self.assertEqual(result2["total_issued"], 3)
+
+    def test_world_cup_daily_code_different_codes_issue_separately(self):
+        user, ct = self._seed_world_cup_pool(n=6)
+        benefits = list(
+            RestaurantCouponBenefit.objects.filter(coupon_type=ct, active=True).order_by(
+                "restaurant_id", "sort_order"
+            )
+        )
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: benefits[:k]):
+            result1 = claim_world_cup_daily_code_coupon(user, "LMPZVNE")
+            result2 = claim_world_cup_daily_code_coupon(user, "TBGHSDY")
+
+        self.assertEqual(result1["total_issued"], 3)
+        self.assertEqual(result2["total_issued"], 3)
+        self.assertEqual(
+            Coupon.objects.filter(user=user, coupon_type=ct).count(),
+            6,
+        )
+        for c in result1["coupons"] + result2["coupons"]:
+            self.assertEqual((c.benefit_snapshot or {}).get("subtitle"), WORLD_CUP_SUBTITLE)
+
+    def test_world_cup_daily_code_invalid_code(self):
+        user, _ = self._seed_world_cup_pool(n=3)
+        with self.assertRaises(ValidationError) as ctx:
+            claim_world_cup_daily_code_coupon(user, "WRONGCODE")
+        self.assertIn("invalid coupon code", str(ctx.exception).lower())
+
+    def test_world_cup_daily_code_via_accept_referral(self):
+        user, ct = self._seed_world_cup_pool(n=5)
+        benefits = list(
+            RestaurantCouponBenefit.objects.filter(coupon_type=ct, active=True).order_by(
+                "restaurant_id", "sort_order"
+            )
+        )
+        with patch("coupons.service.random.sample", side_effect=lambda seq, k: benefits[:k]):
+            referral, issued = accept_referral(referee=user, ref_code="WRCNQOP")
+
+        self.assertEqual(referral.code_used, "WRCNQOP")
+        self.assertEqual(referral.campaign_code, WORLD_CUP_DAILY_CODE_CAMPAIGN_CODE)
+        self.assertEqual(len(issued), 3)
+
+
 class PubJujeomEventCouponTests(TestCase):
     @classmethod
     def setUpClass(cls):
@@ -1203,8 +1306,8 @@ class JungdunbamFestivalWedTests(TestCase):
         other_ct = CouponType.objects.create(
             code="REASSIGN_TEST_OTHER",
             title="other",
-            valid_days": 0,
-            per_user_limit": 1,
+            valid_days=0,
+            per_user_limit=1,
         )
         RestaurantCouponBenefit.objects.create(
             coupon_type=ct,

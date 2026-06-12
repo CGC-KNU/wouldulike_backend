@@ -111,6 +111,37 @@ SUMMER_EVENT_SUBTITLE = "[여름맞이 기획전 쿠폰 🍉]"
 SUMMERLIKE_COUPON_CODE = "SUMMERLIKE"
 SUMMERLIKE_CAMPAIGN_CODE = "SUMMERLIKE_EVENT"
 
+# 월드컵 기획전 앱접속: 기간 내 KST 기준 매일 3장 랜덤 (WORLD_CUP_EVENT_SPECIAL + WORLD_CUP_EVENT_APP_OPEN)
+WORLD_CUP_EVENT_APP_OPEN_CAMPAIGN_CODE = "WORLD_CUP_EVENT_APP_OPEN"
+WORLD_CUP_EVENT_APP_OPEN_ISSUE_COUNT = 3
+
+# 월드컵 기획전 날짜별 쿠폰코드 — 풀에서 3종 랜덤 발급 (날짜 검증 없음)
+WORLD_CUP_EVENT_COUPON_TYPE_CODE = "WORLD_CUP_EVENT_SPECIAL"
+# 월드컵 기획전: 6/8(시작일) subtitle 고정 — 앱접속·코드입력 모두 동일
+WORLD_CUP_SUBTITLE = "[월드컵 응원 쿠폰 ⚽🔥]"
+WORLD_CUP_DAILY_CODE_CAMPAIGN_CODE = "WORLD_CUP_DAILY_CODE_EVENT"
+WORLD_CUP_DAILY_CODE_ISSUE_COUNT = 3
+WORLD_CUP_DAILY_CODES = frozenset(
+    {
+        "QFJXKRA",
+        "LMPZVNE",
+        "TBGHSDY",
+        "WRCNQOP",
+        "XAZMPLK",
+        "VYTRBHE",
+        "DOKJQWS",
+        "NFCXGTA",
+        "HPVZLUR",
+        "KSEYMBQ",
+        "JRAWPTN",
+        "UZQCFDX",
+        "GMLVYKO",
+        "BTHXENP",
+        "PZDKSJA",
+        "YQNWRLC",
+    }
+)
+
 # 여름맞이 미니게임 랜덤 쿠폰코드 (사진 속 SF1/SF3/SF5)
 # - SF1: 1종, SF3: 3종, SF5: 5종
 # - 06-09부터 Day1로 반복된다는 안내가 있어, 우선 "사진 속 코드"만 허용한다.
@@ -1705,6 +1736,120 @@ def _issue_summer_event_app_open(user: User, *, db_alias: str | None = None) -> 
         return [dup] if dup else []
 
 
+def _issue_world_cup_event_app_open(user: User, *, db_alias: str | None = None) -> list:
+    """
+    월드컵 기획전 앱 접속 쿠폰.
+    - WORLD_CUP_EVENT_SPECIAL benefit 풀에서 매일(KST) 3장 랜덤 발급
+    - 같은 날 재접속 시 당일분만 멱등, 다음날 접속 시 새로 3장 발급
+    - 만료: 캠페인 종료일(WORLD_CUP_EVENT_APP_OPEN end_at)
+    """
+    alias = db_alias or router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=WORLD_CUP_EVENT_COUPON_TYPE_CODE)
+        camp = Campaign.objects.using(alias).get(
+            code=WORLD_CUP_EVENT_APP_OPEN_CAMPAIGN_CODE,
+            active=True,
+        )
+    except CouponType.DoesNotExist:
+        logger.info(
+            "world-cup-event app-open not issued: coupon type missing (code=%s)",
+            WORLD_CUP_EVENT_COUPON_TYPE_CODE,
+        )
+        return []
+    except Campaign.DoesNotExist:
+        logger.info(
+            "world-cup-event app-open not issued: campaign missing/inactive (code=%s)",
+            WORLD_CUP_EVENT_APP_OPEN_CAMPAIGN_CODE,
+        )
+        return []
+
+    now = timezone.now()
+    if camp.start_at and now < camp.start_at:
+        return []
+    if camp.end_at and now > camp.end_at:
+        return []
+
+    kst = _kst_now()
+    date_str = kst.strftime("%Y%m%d")
+    issue_key_prefix = f"WORLD_CUP_EVENT_APP_OPEN:{user.id}:{date_str}:"
+
+    existing_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key__startswith=issue_key_prefix,
+    )
+    if existing_qs.exists():
+        return list(existing_qs.order_by("issued_at", "id"))
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        logger.info(
+            "world-cup-event app-open not issued: no active benefits (code=%s)",
+            WORLD_CUP_EVENT_COUPON_TYPE_CODE,
+        )
+        return []
+
+    pick_n = min(WORLD_CUP_EVENT_APP_OPEN_ISSUE_COUNT, len(benefits))
+    picked = random.sample(benefits, k=pick_n)
+
+    expires_at = _resolve_expires_at_for_issue(ct, campaign=camp)
+    issued: list[Coupon] = []
+    for benefit in picked:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{issue_key_prefix}{restaurant_id}:{sort_order}"
+
+        benefit_snapshot = _build_benefit_snapshot(
+            ct,
+            restaurant_id,
+            benefit=benefit,
+            db_alias=alias,
+        )
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": WORLD_CUP_SUBTITLE,
+                "subtitle": WORLD_CUP_SUBTITLE,
+            }
+
+        try:
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=expires_at,
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued.append(coupon)
+        except IntegrityError:
+            dup = (
+                Coupon.objects.using(alias)
+                .filter(
+                    user=user,
+                    coupon_type=ct,
+                    campaign=camp,
+                    issue_key=issue_key,
+                )
+                .first()
+            )
+            if dup:
+                issued.append(dup)
+
+    issued.sort(key=lambda c: (c.issued_at, c.id))
+    return issued
+
+
 @transaction.atomic
 def issue_summerlike_pack_for_user(user: User) -> dict:
     """
@@ -1946,6 +2091,123 @@ def claim_summer_sf_random_coupon(user: User, coupon_code: str) -> dict:
     }
 
 
+@transaction.atomic
+def claim_world_cup_daily_code_coupon(user: User, coupon_code: str) -> dict:
+    """
+    월드컵 기획전 날짜별 쿠폰코드 입력 시 WORLD_CUP_EVENT_SPECIAL 풀에서 3종 랜덤 발급.
+    - 사용자당 코드 1개당 1회 (issue_key prefix 멱등)
+    - 기간 검증 없음
+    """
+    code = (coupon_code or "").strip().upper()
+    if code not in WORLD_CUP_DAILY_CODES:
+        raise ValidationError("invalid coupon code")
+
+    alias = router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=WORLD_CUP_EVENT_COUPON_TYPE_CODE)
+    except CouponType.DoesNotExist:
+        raise ValidationError("event not configured")
+
+    camp, _ = Campaign.objects.using(alias).update_or_create(
+        code=WORLD_CUP_DAILY_CODE_CAMPAIGN_CODE,
+        defaults={
+            "name": "월드컵 기획전 날짜별 쿠폰코드",
+            "type": "FLASH",
+            "active": True,
+            "start_at": None,
+            "end_at": None,
+            "rules_json": {
+                "trigger": "COUPON_CODE",
+                "codes": sorted(WORLD_CUP_DAILY_CODES),
+                "mode": "RANDOM_PACK",
+                "count": WORLD_CUP_DAILY_CODE_ISSUE_COUNT,
+            },
+        },
+    )
+
+    issue_key_prefix = f"WORLD_CUP_DAILY:{user.id}:{code}:"
+    existing_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key__startswith=issue_key_prefix,
+    )
+    if existing_qs.exists():
+        coupons = list(existing_qs.order_by("issued_at", "id"))
+        return {
+            "coupons": coupons,
+            "total_issued": len(coupons),
+            "already_issued": True,
+        }
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("event not configured")
+
+    pick_n = min(WORLD_CUP_DAILY_CODE_ISSUE_COUNT, len(benefits))
+    picked = random.sample(benefits, k=pick_n)
+
+    expires_at = WORLD_CUP_EVENT_COUPON_EXPIRES_AT
+    issued: list[Coupon] = []
+    for benefit in picked:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{issue_key_prefix}{restaurant_id}:{sort_order}"
+
+        benefit_snapshot = _build_benefit_snapshot(
+            ct,
+            restaurant_id,
+            benefit=benefit,
+            db_alias=alias,
+        )
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": WORLD_CUP_SUBTITLE,
+                "subtitle": WORLD_CUP_SUBTITLE,
+            }
+
+        try:
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=expires_at,
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued.append(coupon)
+        except IntegrityError:
+            dup = (
+                Coupon.objects.using(alias)
+                .filter(
+                    user=user,
+                    coupon_type=ct,
+                    campaign=camp,
+                    issue_key=issue_key,
+                )
+                .first()
+            )
+            if dup:
+                issued.append(dup)
+
+    issued.sort(key=lambda c: (c.issued_at, c.id))
+    return {
+        "coupons": issued,
+        "total_issued": len(issued),
+        "already_issued": False,
+    }
+
+
 def issue_app_open_coupon(user: User, *, include_standard: bool = True):
     """
     앱 접속(로그인/토큰 갱신/쿠폰함 등) 시점에 발급되는 쿠폰.
@@ -1968,6 +2230,8 @@ def issue_app_open_coupon(user: User, *, include_standard: bool = True):
 
     if SUMMER_EVENT_APP_OPEN_ENABLED:
         issued.extend(_issue_summer_event_app_open(user, db_alias=alias))
+
+    issued.extend(_issue_world_cup_event_app_open(user, db_alias=alias))
 
     if APP_OPEN_LEGACY_ENABLED:
         issued.extend(_issue_app_open_legacy(user, db_alias=alias))
@@ -3652,6 +3916,25 @@ def accept_referral(*, referee: User, ref_code: str) -> Referral:
                 referee=referee,
                 code_used=ref_code,
                 campaign_code=SUMMER_SF_RANDOM_CAMPAIGN_CODE,
+                status="QUALIFIED",
+                qualified_at=timezone.now(),
+            )
+        return referral, result["coupons"]
+
+    if ref_code in WORLD_CUP_DAILY_CODES:
+        result = claim_world_cup_daily_code_coupon(referee, ref_code)
+        if result.get("already_issued"):
+            raise ValidationError(
+                f"이미 {ref_code} 쿠폰을 발급받았습니다.",
+                code="world_cup_daily_code_already_issued",
+            )
+        with transaction.atomic(using=db_alias):
+            base_qs = Referral.objects.using(db_alias)
+            referral = base_qs.create(
+                referrer=referee,
+                referee=referee,
+                code_used=ref_code,
+                campaign_code=WORLD_CUP_DAILY_CODE_CAMPAIGN_CODE,
                 status="QUALIFIED",
                 qualified_at=timezone.now(),
             )
