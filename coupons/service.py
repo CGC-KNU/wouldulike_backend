@@ -121,6 +121,8 @@ WORLD_CUP_EVENT_COUPON_TYPE_CODE = "WORLD_CUP_EVENT_SPECIAL"
 WORLD_CUP_SUBTITLE = "[월드컵 응원 쿠폰 ⚽🔥]"
 WORLD_CUP_DAILY_CODE_CAMPAIGN_CODE = "WORLD_CUP_DAILY_CODE_EVENT"
 WORLD_CUP_DAILY_CODE_ISSUE_COUNT = 3
+# 월드컵 제휴 신청폼 닉네임 일괄 — WORLD_CUP_EVENT_SPECIAL 풀 전량
+WORLD_CUP_PARTNER_CAMPAIGN_CODE = "WORLD_CUP_PARTNER_BULK_202606"
 WORLD_CUP_DAILY_CODES = frozenset(
     {
         "QFJXKRA",
@@ -1925,6 +1927,117 @@ def issue_summerlike_pack_for_user(user: User) -> dict:
                 **benefit_snapshot,
                 "coupon_type_title": SUMMER_EVENT_SUBTITLE,
                 "subtitle": SUMMER_EVENT_SUBTITLE,
+            }
+        try:
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=restaurant_id,
+                expires_at=expires_at,
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued_coupons.append(coupon)
+        except IntegrityError:
+            dup = (
+                Coupon.objects.using(alias)
+                .filter(
+                    user=user,
+                    coupon_type=ct,
+                    campaign=camp,
+                    issue_key=issue_key,
+                )
+                .first()
+            )
+            if dup:
+                issued_coupons.append(dup)
+
+    return {
+        "coupons": issued_coupons,
+        "total_issued": len(issued_coupons),
+        "already_issued": False,
+    }
+
+
+@transaction.atomic
+def issue_world_cup_partner_pack_for_user(user: User) -> dict:
+    """
+    월드컵 제휴 신청폼 대상: WORLD_CUP_EVENT_SPECIAL 풀 전체(활성 benefit) 발급.
+    - 사용자당 1회 (issue_key prefix 멱등)
+    - 만료: 월드컵 기획전 종료일
+    """
+    alias = router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=WORLD_CUP_EVENT_COUPON_TYPE_CODE)
+        camp = Campaign.objects.using(alias).get(
+            code=WORLD_CUP_PARTNER_CAMPAIGN_CODE,
+            active=True,
+        )
+    except (CouponType.DoesNotExist, Campaign.DoesNotExist):
+        raise ValidationError("event not configured")
+
+    now = timezone.now()
+    if camp.start_at and now < camp.start_at:
+        raise ValidationError("expired")
+    if camp.end_at and now > camp.end_at:
+        raise ValidationError("expired")
+
+    issue_key_prefix = f"WORLD_CUP_PARTNER:{user.id}:"
+    existing_qs = Coupon.objects.using(alias).filter(
+        user=user,
+        coupon_type=ct,
+        campaign=camp,
+        issue_key__startswith=issue_key_prefix,
+    )
+    if existing_qs.exists():
+        return {
+            "coupons": list(existing_qs.order_by("issued_at", "id")),
+            "total_issued": existing_qs.count(),
+            "already_issued": True,
+        }
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        raise ValidationError("event not configured")
+
+    expires_at = _resolve_expires_at_for_issue(ct, campaign=camp)
+    issued_coupons: list[Coupon] = []
+    for benefit in benefits:
+        restaurant_id = benefit.restaurant_id
+        sort_order = getattr(benefit, "sort_order", 0)
+        issue_key = f"{issue_key_prefix}{restaurant_id}:{sort_order}"
+
+        existing = (
+            Coupon.objects.using(alias)
+            .filter(
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                issue_key=issue_key,
+            )
+            .first()
+        )
+        if existing:
+            issued_coupons.append(existing)
+            continue
+
+        benefit_snapshot = _build_benefit_snapshot(
+            ct, restaurant_id, benefit=benefit, db_alias=alias
+        )
+        if benefit_snapshot:
+            benefit_snapshot = {
+                **benefit_snapshot,
+                "coupon_type_title": WORLD_CUP_SUBTITLE,
+                "subtitle": WORLD_CUP_SUBTITLE,
             }
         try:
             coupon = Coupon.objects.using(alias).create(
