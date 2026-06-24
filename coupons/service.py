@@ -45,6 +45,8 @@ MIDTERM_EVENT_COUPON_EXPIRES_AT = datetime(2026, 4, 24, 14, 59, 59, tzinfo=timez
 SUMMER_EVENT_COUPON_EXPIRES_AT = datetime(2026, 6, 7, 14, 59, 59, tzinfo=timezone.utc)
 # 월드컵 기획전 (2026-06-21 23:59:59 KST = 2026-06-21 14:59:59 UTC)
 WORLD_CUP_EVENT_COUPON_EXPIRES_AT = datetime(2026, 6, 21, 14, 59, 59, tzinfo=timezone.utc)
+# 종강 기획전 (2026-07-07 23:59:59 KST = 2026-07-07 14:59:59 UTC)
+JONGGANG_EVENT_COUPON_EXPIRES_AT = datetime(2026, 7, 7, 14, 59, 59, tzinfo=timezone.utc)
 # 성년의날 GAEHWALIKE 쿠폰 만료일 (2026-05-31 23:59:59 KST = 2026-05-31 14:59:59 UTC)
 GAEHWALIKE_EVENT_COUPON_EXPIRES_AT = datetime(2026, 5, 31, 14, 59, 59, tzinfo=timezone.utc)
 # 주점 이벤트 쿠폰 만료일 (GAEHWALIKE 와 동일 기간)
@@ -114,6 +116,11 @@ SUMMERLIKE_CAMPAIGN_CODE = "SUMMERLIKE_EVENT"
 # 월드컵 기획전 앱접속: 기간 내 KST 기준 매일 3장 랜덤 (WORLD_CUP_EVENT_SPECIAL + WORLD_CUP_EVENT_APP_OPEN)
 WORLD_CUP_EVENT_APP_OPEN_CAMPAIGN_CODE = "WORLD_CUP_EVENT_APP_OPEN"
 WORLD_CUP_EVENT_APP_OPEN_ISSUE_COUNT = 3
+
+# 종강 기획전 앱접속: 기간 내 KST 기준 매일 1장 랜덤 (JONGGANG_EVENT_SPECIAL + JONGGANG_EVENT_APP_OPEN)
+JONGGANG_EVENT_COUPON_TYPE_CODE = "JONGGANG_EVENT_SPECIAL"
+JONGGANG_EVENT_APP_OPEN_CAMPAIGN_CODE = "JONGGANG_EVENT_APP_OPEN"
+JONGGANG_SUBTITLE = "[종강 기획전 쿠폰 🎓]"
 
 # 월드컵 기획전 날짜별 쿠폰코드 — 풀에서 3종 랜덤 발급 (날짜 검증 없음)
 WORLD_CUP_EVENT_COUPON_TYPE_CODE = "WORLD_CUP_EVENT_SPECIAL"
@@ -292,6 +299,9 @@ def _resolve_coupon_expiry_for_issue(
 
     if coupon_type.code == "WORLD_CUP_EVENT_SPECIAL":
         return WORLD_CUP_EVENT_COUPON_EXPIRES_AT
+
+    if coupon_type.code == JONGGANG_EVENT_COUPON_TYPE_CODE:
+        return JONGGANG_EVENT_COUPON_EXPIRES_AT
 
     # 성년의날 GAEHWALIKE 쿠폰은 이벤트 종료일(5/31)로 고정 만료
     if coupon_type.code == "GAEHWALIKE":
@@ -1738,6 +1748,115 @@ def _issue_summer_event_app_open(user: User, *, db_alias: str | None = None) -> 
         return [dup] if dup else []
 
 
+def _issue_jonggang_event_app_open(user: User, *, db_alias: str | None = None) -> list:
+    """
+    종강 기획전 앱 접속 쿠폰.
+    - JONGGANG_EVENT_SPECIAL benefit 풀에서 매일(KST) 1장 랜덤 발급
+    - 같은 날 재접속 시 당일분만 멱등, 다음날 접속 시 새로 1장 발급
+    - 만료: 캠페인 종료일(JONGGANG_EVENT_APP_OPEN end_at)
+    """
+    alias = db_alias or router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code=JONGGANG_EVENT_COUPON_TYPE_CODE)
+        camp = Campaign.objects.using(alias).get(
+            code=JONGGANG_EVENT_APP_OPEN_CAMPAIGN_CODE,
+            active=True,
+        )
+    except CouponType.DoesNotExist:
+        logger.info(
+            "jonggang-event app-open not issued: coupon type missing (code=%s)",
+            JONGGANG_EVENT_COUPON_TYPE_CODE,
+        )
+        return []
+    except Campaign.DoesNotExist:
+        logger.info(
+            "jonggang-event app-open not issued: campaign missing/inactive (code=%s)",
+            JONGGANG_EVENT_APP_OPEN_CAMPAIGN_CODE,
+        )
+        return []
+
+    now = timezone.now()
+    if camp.start_at and now < camp.start_at:
+        return []
+    if camp.end_at and now > camp.end_at:
+        return []
+
+    kst = _kst_now()
+    date_str = kst.strftime("%Y%m%d")
+    issue_key = f"JONGGANG_EVENT_APP_OPEN:{user.id}:{date_str}"
+
+    existing = (
+        Coupon.objects.using(alias)
+        .filter(
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            issue_key=issue_key,
+        )
+        .first()
+    )
+    if existing:
+        return [existing]
+
+    excluded_ids = _get_excluded_restaurant_ids(ct.code, db_alias=alias)
+    benefit_alias = db_alias or router.db_for_read(RestaurantCouponBenefit)
+    benefits = list(
+        RestaurantCouponBenefit.objects.using(benefit_alias)
+        .filter(coupon_type=ct, active=True)
+        .exclude(restaurant_id__in=excluded_ids)
+        .order_by("restaurant_id", "sort_order")
+    )
+    if not benefits:
+        logger.info(
+            "jonggang-event app-open not issued: no active benefits (code=%s)",
+            JONGGANG_EVENT_COUPON_TYPE_CODE,
+        )
+        return []
+
+    benefit = random.choice(benefits)
+    restaurant_id = benefit.restaurant_id
+
+    benefit_snapshot = _build_benefit_snapshot(
+        ct,
+        restaurant_id,
+        benefit=benefit,
+        db_alias=alias,
+    )
+    if benefit_snapshot:
+        benefit_snapshot = {
+            **benefit_snapshot,
+            "coupon_type_title": JONGGANG_SUBTITLE,
+            "subtitle": JONGGANG_SUBTITLE,
+        }
+
+    expires_at = _resolve_expires_at_for_issue(ct, campaign=camp)
+
+    try:
+        coupon = Coupon.objects.using(alias).create(
+            code=make_coupon_code(),
+            user=user,
+            coupon_type=ct,
+            campaign=camp,
+            restaurant_id=restaurant_id,
+            expires_at=expires_at,
+            issue_key=issue_key,
+            benefit_snapshot=benefit_snapshot,
+        )
+        return [coupon]
+    except IntegrityError:
+        dup = (
+            Coupon.objects.using(alias)
+            .filter(
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                issue_key=issue_key,
+            )
+            .first()
+        )
+        return [dup] if dup else []
+
+
 def _issue_world_cup_event_app_open(user: User, *, db_alias: str | None = None) -> list:
     """
     월드컵 기획전 앱 접속 쿠폰.
@@ -2345,6 +2464,8 @@ def issue_app_open_coupon(user: User, *, include_standard: bool = True):
         issued.extend(_issue_summer_event_app_open(user, db_alias=alias))
 
     issued.extend(_issue_world_cup_event_app_open(user, db_alias=alias))
+
+    issued.extend(_issue_jonggang_event_app_open(user, db_alias=alias))
 
     if APP_OPEN_LEGACY_ENABLED:
         issued.extend(_issue_app_open_legacy(user, db_alias=alias))

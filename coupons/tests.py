@@ -28,6 +28,11 @@ from coupons.service import (
     WORLD_CUP_EVENT_COUPON_EXPIRES_AT,
     WORLD_CUP_SUBTITLE,
     WORLD_CUP_DAILY_CODE_CAMPAIGN_CODE,
+    JONGGANG_EVENT_COUPON_EXPIRES_AT,
+    JONGGANG_EVENT_COUPON_TYPE_CODE,
+    JONGGANG_EVENT_APP_OPEN_CAMPAIGN_CODE,
+    JONGGANG_SUBTITLE,
+    _issue_jonggang_event_app_open,
     MIDTERM_DAILY_CODE_START_AT,
     GAEHWALIKE_EVENT_COUPON_EXPIRES_AT,
     GAEHWALIKE_SUBTITLE,
@@ -807,6 +812,94 @@ class WorldCupDailyCodeCouponTests(TestCase):
         self.assertEqual(referral.code_used, "WRCNQOP")
         self.assertEqual(referral.campaign_code, WORLD_CUP_DAILY_CODE_CAMPAIGN_CODE)
         self.assertEqual(len(issued), 3)
+
+
+class JonggangEventAppOpenTests(TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.user_model = get_user_model()
+        from coupons import signals as coupon_signals
+        post_save.disconnect(coupon_signals.on_user_created, sender=cls.user_model)
+        cls.addClassCleanup(post_save.connect, coupon_signals.on_user_created, sender=cls.user_model)
+
+    def _seed_jonggang_pool(self, n: int = 5):
+        user = self.user_model.objects.create_user(kakao_id=98000 + n, password="pass")
+        ct, _ = CouponType.objects.get_or_create(
+            code=JONGGANG_EVENT_COUPON_TYPE_CODE,
+            defaults={
+                "title": JONGGANG_SUBTITLE,
+                "benefit_json": {},
+                "valid_days": 0,
+                "per_user_limit": 1,
+            },
+        )
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        start = datetime(2026, 6, 21, 15, 0, 0, tzinfo=ZoneInfo("UTC"))
+        end = datetime(2026, 7, 7, 14, 59, 59, tzinfo=ZoneInfo("UTC"))
+        camp, _ = Campaign.objects.get_or_create(
+            code=JONGGANG_EVENT_APP_OPEN_CAMPAIGN_CODE,
+            defaults={
+                "name": "종강 기획전 앱접속 쿠폰",
+                "type": "FLASH",
+                "active": True,
+                "start_at": start,
+                "end_at": end,
+            },
+        )
+        Campaign.objects.filter(pk=camp.pk).update(active=True, start_at=start, end_at=end)
+        base_rid = 980000
+        for i in range(n):
+            RestaurantCouponBenefit.objects.create(
+                coupon_type=ct,
+                restaurant_id=base_rid + i,
+                sort_order=0,
+                title=f"종강혜택{i}",
+                subtitle=JONGGANG_SUBTITLE,
+                benefit_json={},
+                active=True,
+            )
+        return user, ct
+
+    def test_jonggang_app_open_issues_one_coupon_per_day(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        user, ct = self._seed_jonggang_pool(n=5)
+        day1_kst = datetime(2026, 6, 22, 10, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        day1_utc = day1_kst.astimezone(ZoneInfo("UTC"))
+
+        with patch("coupons.service.timezone.now", return_value=day1_utc):
+            first = _issue_jonggang_event_app_open(user)
+            second = _issue_jonggang_event_app_open(user)
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(first[0].id, second[0].id)
+        self.assertEqual(first[0].coupon_type, ct)
+        self.assertEqual(first[0].expires_at, JONGGANG_EVENT_COUPON_EXPIRES_AT)
+        self.assertEqual((first[0].benefit_snapshot or {}).get("subtitle"), JONGGANG_SUBTITLE)
+
+        day2_kst = datetime(2026, 6, 23, 10, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        day2_utc = day2_kst.astimezone(ZoneInfo("UTC"))
+        with patch("coupons.service.timezone.now", return_value=day2_utc):
+            next_day = _issue_jonggang_event_app_open(user)
+
+        self.assertEqual(len(next_day), 1)
+        self.assertNotEqual(first[0].id, next_day[0].id)
+
+    def test_jonggang_app_open_not_issued_outside_campaign(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        user, _ = self._seed_jonggang_pool(n=3)
+        before_kst = datetime(2026, 6, 21, 23, 0, 0, tzinfo=ZoneInfo("Asia/Seoul"))
+        before_utc = before_kst.astimezone(ZoneInfo("UTC"))
+
+        with patch("coupons.service.timezone.now", return_value=before_utc):
+            self.assertEqual(_issue_jonggang_event_app_open(user), [])
 
 
 class PubJujeomEventCouponTests(TestCase):
