@@ -5,6 +5,8 @@
   ImageField를 사용하는 앱을 INSTALLED_APPS에서 제외합니다.
 """
 
+import os
+
 from .settings import *  # noqa: F403
 
 
@@ -13,4 +15,16 @@ INSTALLED_APPS = [app for app in INSTALLED_APPS if app != "trends"]  # noqa: F40
 
 # URLConf도 trends를 import하지 않도록 테스트 전용으로 교체
 ROOT_URLCONF = "wouldulike_backend.test_urls"
+
+# 로컬 SQLite 테스트: CloudSQL 전용 RunPython 마이그레이션을 건너뛰고 모델 스키마만 동기화
+if os.getenv("DJANGO_USE_LOCAL_SQLITE", "0") == "1":
+
+    class _DisableMigrations:
+        def __contains__(self, item):
+            return True
+
+        def __getitem__(self, item):
+            return None
+
+    MIGRATION_MODULES = _DisableMigrations()  # noqa: F405
 

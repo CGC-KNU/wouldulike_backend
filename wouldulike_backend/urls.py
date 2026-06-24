@@ -39,6 +39,7 @@ urlpatterns = [
     path('api/users/', include('accounts.user_urls')),
     path('api/', include('coupons.api.urls')),
     path('api/url/', GetFrontendUrlView.as_view(), name='get_frontend_url'),
+    path('api/dashboard/', include('dashboard.urls')),
     # Alias for dev login requested as /auth/dev-login/
     path('auth/dev-login/', DevLoginView.as_view()),
     # Auth aliases (avoid CSRF by ensuring DRF view is hit even without /api prefix)

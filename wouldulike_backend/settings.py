@@ -120,6 +120,7 @@ INSTALLED_APPS = [
     'storages',
     'accounts',
     'coupons',
+    'dashboard',
     'rest_framework_simplejwt.token_blacklist',
 ]
 

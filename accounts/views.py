@@ -421,6 +421,12 @@ class KakaoLoginView(APIView):
                 return Response({'detail': 'internal_error', 'code': 'token_generation_failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
             # 응답 스키마: token/access+refresh, user/id+kakao_id+nickname+profile_image_url
+            try:
+                from dashboard.models import OwnerProfile
+                is_owner = OwnerProfile.objects.filter(user=user, is_active=True).exists()
+            except Exception:
+                is_owner = False
+
             resp = {
                 'token': tokens,
                 'user': {
@@ -430,6 +436,7 @@ class KakaoLoginView(APIView):
                     'profile_image_url': profile_image_url,
                 },
                 'is_new': created,
+                'is_owner': is_owner,
             }
             if signup_coupon_code:
                 resp['signup_coupon_code'] = signup_coupon_code
