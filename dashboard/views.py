@@ -63,10 +63,11 @@ class VerifyOwnerView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # 해당 restaurant에 이미 다른 점주가 등록되어 있는지 확인
-        if OwnerProfile.objects.filter(restaurant_id=restaurant_id).exists():
+        # 해당 restaurant에 이미 점주 2명이 등록되어 있으면 제한
+        owner_count = OwnerProfile.objects.filter(restaurant_id=restaurant_id).count()
+        if owner_count >= 2:
             return Response(
-                {"success": False, "message": "이미 등록된 점주 계정이 있습니다. 관리자에게 문의하세요."},
+                {"success": False, "message": "해당 매장에는 점주 계정이 최대 2명까지만 등록됩니다."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

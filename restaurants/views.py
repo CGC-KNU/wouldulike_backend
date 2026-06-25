@@ -575,17 +575,33 @@ def get_affiliate_restaurants(request):
 
 @require_http_methods(["GET"])
 def get_affiliate_restaurant_id_name_list(request):
-    """Return affiliate restaurants as (restaurant_id, name) pairs."""
+    """Return affiliate restaurants as (restaurant_id, name) pairs.
+    Optional ?search=<query> for name substring filtering.
+    """
+    search = (request.GET.get("search") or "").strip()
     try:
         with connections["cloudsql"].cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT restaurant_id, name
-                FROM restaurants_affiliate
-                WHERE is_affiliate = TRUE
-                ORDER BY restaurant_id
-                """
-            )
+            if search:
+                cursor.execute(
+                    """
+                    SELECT restaurant_id, name
+                    FROM restaurants_affiliate
+                    WHERE is_affiliate = TRUE
+                      AND name ILIKE %s
+                    ORDER BY restaurant_id
+                    LIMIT 20
+                    """,
+                    [f"%{search}%"],
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT restaurant_id, name
+                    FROM restaurants_affiliate
+                    WHERE is_affiliate = TRUE
+                    ORDER BY restaurant_id
+                    """
+                )
             rows = cursor.fetchall()
 
         restaurants = [
