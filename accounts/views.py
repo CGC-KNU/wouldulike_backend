@@ -227,11 +227,50 @@ class KakaoLoginView(APIView):
         try:
             refresh_token = request.data.get('refresh') or request.data.get('refresh_token')
             access_token = request.data.get('access_token') or request.data.get('accessToken')
+            kakao_code = request.data.get('code')
             guest_uuid = request.data.get('guest_uuid')
-            
+
+            # 대시보드 웹뷰: authorization code → access_token 교환
+            if kakao_code and not access_token:
+                kakao_redirect_uri = os.getenv('KAKAO_REDIRECT_URI', '')
+                kakao_rest_api_key = os.getenv('KAKAO_REST_API_KEY', '')
+                try:
+                    token_res = requests.post(
+                        'https://kauth.kakao.com/oauth/token',
+                        data={
+                            'grant_type': 'authorization_code',
+                            'client_id': kakao_rest_api_key,
+                            'redirect_uri': kakao_redirect_uri,
+                            'code': kakao_code,
+                        },
+                        timeout=10,
+                    )
+                    if not token_res.ok:
+                        logger.warning(
+                            f'Kakao code exchange failed - status={token_res.status_code} body={token_res.text[:200]}'
+                        )
+                        return Response(
+                            {'detail': 'kakao_code_invalid', 'code': 'code_exchange_failed'},
+                            status=status.HTTP_401_UNAUTHORIZED,
+                        )
+                    access_token = token_res.json().get('access_token')
+                    if not access_token:
+                        logger.warning(f'Kakao code exchange: no access_token in response - {token_res.text[:200]}')
+                        return Response(
+                            {'detail': 'kakao_code_invalid', 'code': 'no_access_token'},
+                            status=status.HTTP_401_UNAUTHORIZED,
+                        )
+                except Exception as exc:
+                    logger.error(f'Kakao code exchange error: {exc}', exc_info=True)
+                    return Response(
+                        {'detail': 'kakao_api_error', 'code': 'code_exchange_error'},
+                        status=status.HTTP_502_BAD_GATEWAY,
+                    )
+
             logger.info(
                 f'Login attempt - User-Agent: {user_agent}, IP: {client_ip}, '
-                f'Has kakao_access_token: {bool(access_token)}, Has refresh_token: {bool(refresh_token)}'
+                f'Has kakao_access_token: {bool(access_token)}, Has refresh_token: {bool(refresh_token)}, '
+                f'Has kakao_code: {bool(kakao_code)}'
             )
 
             # 0) 우리 refresh token이 있으면 카카오 검증보다 우선 처리
