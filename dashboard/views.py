@@ -8,9 +8,34 @@ from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from rest_framework_simplejwt.exceptions import TokenError
 
 from coupons.models import MerchantPin, Coupon, StampEvent
+from django.db.models import Q
 from restaurants.models import AffiliateRestaurant
 from accounts.models import User
 from .models import OwnerProfile
+
+
+class OwnerRestaurantListView(APIView):
+    """
+    점주 등록 가능 식당 목록 — MerchantPin이 등록된 식당만 반환
+    GET /api/dashboard/restaurants/?search=<query>
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        search = (request.query_params.get("search") or "").strip()
+        qs = MerchantPin.objects.select_related("restaurant").filter(
+            restaurant__isnull=False
+        )
+        if search:
+            qs = qs.filter(restaurant__name__icontains=search)
+        restaurants = [
+            {
+                "restaurant_id": p.restaurant.restaurant_id,
+                "name": p.restaurant.name,
+            }
+            for p in qs[:20]
+        ]
+        return Response({"restaurants": restaurants})
 
 
 class VerifyOwnerView(APIView):
