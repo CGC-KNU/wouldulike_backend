@@ -1,17 +1,21 @@
 from django.db.models import Count
 from django.utils import timezone
+from django.contrib.auth import authenticate as django_authenticate
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from rest_framework_simplejwt.exceptions import TokenError
+import logging
 
 from coupons.models import MerchantPin, Coupon, StampEvent
 from django.db.models import Q
 from restaurants.models import AffiliateRestaurant
 from accounts.models import User
 from .models import OwnerProfile
+
+logger = logging.getLogger(__name__)
 
 
 class OwnerRestaurantListView(APIView):
@@ -162,6 +166,45 @@ class AppTokenView(APIView):
             "refresh": str(refresh),
             "restaurant_id": owner.restaurant_id,
             "tier": owner.tier,
+        })
+
+
+class AdminLoginView(APIView):
+    """
+    관리자(is_staff) 계정으로 대시보드 로그인
+    POST /api/dashboard/auth/admin-login/
+    Body: { username, password }
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        username = (request.data.get("username") or "").strip()
+        password = request.data.get("password") or ""
+
+        if not username or not password:
+            return Response(
+                {"success": False, "message": "아이디와 비밀번호를 입력해주세요."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        user = django_authenticate(request=None, username=username, password=password)
+
+        if not user or not (user.is_staff or user.is_superuser):
+            logger.warning(f"AdminLogin failed for username={username!r}")
+            return Response(
+                {"success": False, "message": "아이디 또는 비밀번호가 올바르지 않습니다."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        refresh = RefreshToken.for_user(user)
+        refresh["is_owner"] = True
+        refresh["is_admin"] = True
+
+        logger.info(f"AdminLogin success for username={username!r} user_id={user.pk}")
+        return Response({
+            "success": True,
+            "access": str(refresh.access_token),
+            "refresh": str(refresh),
         })
 
 
