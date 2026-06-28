@@ -32,7 +32,7 @@ class OwnerRestaurantListView(APIView):
         is_admin = bool(request.auth.get("is_admin", False))
 
         if is_admin:
-            qs = AffiliateRestaurant.objects.all().order_by("name")
+            qs = AffiliateRestaurant.objects.filter(is_affiliate=True).order_by("name")
             if search:
                 qs = qs.filter(name__icontains=search)
             restaurants = [
