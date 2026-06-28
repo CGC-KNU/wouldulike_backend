@@ -35,9 +35,21 @@ class OwnerRestaurantListView(APIView):
             qs = AffiliateRestaurant.objects.filter(is_affiliate=True).order_by("name")
             if search:
                 qs = qs.filter(name__icontains=search)
+            restaurant_list = list(qs[:100])
+            # 각 식당의 tier 조회 (OwnerProfile 없으면 None)
+            owner_map = {
+                op.restaurant_id: op.tier
+                for op in OwnerProfile.objects.filter(
+                    restaurant_id__in=[r.restaurant_id for r in restaurant_list]
+                )
+            }
             restaurants = [
-                {"restaurant_id": r.restaurant_id, "name": r.name}
-                for r in qs[:100]
+                {
+                    "restaurant_id": r.restaurant_id,
+                    "name": r.name,
+                    "tier": owner_map.get(r.restaurant_id),  # None이면 미등록
+                }
+                for r in restaurant_list
             ]
         else:
             qs = MerchantPin.objects.select_related("restaurant").filter(
