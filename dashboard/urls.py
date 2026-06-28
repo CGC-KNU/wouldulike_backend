@@ -7,4 +7,5 @@ urlpatterns = [
     path("auth/app-token/", views.AppTokenView.as_view()),
     path("auth/admin-login/", views.AdminLoginView.as_view()),
     path("stats/", views.DashboardStatsView.as_view()),
+    path("restaurant/", views.RestaurantInfoView.as_view()),
 ]

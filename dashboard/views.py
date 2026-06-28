@@ -223,6 +223,64 @@ class AdminLoginView(APIView):
         })
 
 
+class RestaurantInfoView(APIView):
+    """
+    점주 식당 정보 조회 및 수정
+    GET  /api/dashboard/restaurant/
+    PATCH /api/dashboard/restaurant/
+    수정 허용 필드: description, phone_number, main_menu, url
+    """
+    permission_classes = [IsAuthenticated]
+
+    EDITABLE_FIELDS = ["description", "phone_number", "main_menu", "url"]
+
+    def get(self, request):
+        try:
+            owner = request.user.owner_profile
+        except OwnerProfile.DoesNotExist:
+            return Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
+
+        r = owner.restaurant
+        return Response({
+            "restaurant_id": r.restaurant_id,
+            "name": r.name,
+            "description": r.description or "",
+            "phone_number": r.phone_number or "",
+            "main_menu": r.main_menu or "",
+            "url": r.url or "",
+            "address": r.address or "",
+            "category": r.category or "",
+        })
+
+    def patch(self, request):
+        try:
+            owner = request.user.owner_profile
+        except OwnerProfile.DoesNotExist:
+            return Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
+
+        r = owner.restaurant
+        updated = []
+
+        for field in self.EDITABLE_FIELDS:
+            if field in request.data:
+                setattr(r, field, request.data[field])
+                updated.append(field)
+
+        if not updated:
+            return Response({"detail": "변경할 내용이 없습니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            r.save(update_fields=updated)
+        except Exception as e:
+            logger.error(f"RestaurantInfoView PATCH error: {e}")
+            return Response({"detail": "저장에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({
+            "success": True,
+            "updated_fields": updated,
+        })
+
+
 class DashboardStatsView(APIView):
     """
     홈 핵심 지표 (P0)
