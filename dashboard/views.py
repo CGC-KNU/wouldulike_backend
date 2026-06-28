@@ -234,13 +234,28 @@ class RestaurantInfoView(APIView):
 
     EDITABLE_FIELDS = ["description", "phone_number", "main_menu", "url"]
 
-    def get(self, request):
-        try:
-            owner = request.user.owner_profile
-        except OwnerProfile.DoesNotExist:
-            return Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
+    def _get_restaurant(self, request):
+        """is_admin이면 ?restaurant_id 파라미터로, 점주면 OwnerProfile로 식당 조회."""
+        is_admin = bool(request.auth.get("is_admin", False))
+        if is_admin:
+            rid = request.query_params.get("restaurant_id") or request.data.get("restaurant_id")
+            if not rid:
+                return None, Response({"detail": "restaurant_id가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                return AffiliateRestaurant.objects.get(restaurant_id=int(rid)), None
+            except (AffiliateRestaurant.DoesNotExist, ValueError):
+                return None, Response({"detail": "식당을 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            try:
+                return request.user.owner_profile.restaurant, None
+            except OwnerProfile.DoesNotExist:
+                return None, Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
 
-        r = owner.restaurant
+    def get(self, request):
+        r, err = self._get_restaurant(request)
+        if err:
+            return err
+
         return Response({
             "restaurant_id": r.restaurant_id,
             "name": r.name,
@@ -253,12 +268,9 @@ class RestaurantInfoView(APIView):
         })
 
     def patch(self, request):
-        try:
-            owner = request.user.owner_profile
-        except OwnerProfile.DoesNotExist:
-            return Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
-
-        r = owner.restaurant
+        r, err = self._get_restaurant(request)
+        if err:
+            return err
         updated = []
 
         for field in self.EDITABLE_FIELDS:
@@ -289,30 +301,43 @@ class DashboardStatsView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        try:
-            owner = request.user.owner_profile
-        except OwnerProfile.DoesNotExist:
-            return Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
+        is_admin = bool(request.auth.get("is_admin", False))
 
-        restaurant_id = owner.restaurant_id
+        if is_admin:
+            rid = request.query_params.get("restaurant_id")
+            if not rid:
+                return Response({"detail": "restaurant_id가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                restaurant = AffiliateRestaurant.objects.get(restaurant_id=int(rid))
+            except (AffiliateRestaurant.DoesNotExist, ValueError):
+                return Response({"detail": "식당을 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+            restaurant_id = restaurant.restaurant_id
+            restaurant_name = restaurant.name
+            tier = "FREE"  # 관리자 뷰에서는 기본 FREE (OwnerProfile 없으므로)
+        else:
+            try:
+                owner = request.user.owner_profile
+            except OwnerProfile.DoesNotExist:
+                return Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
+            restaurant_id = owner.restaurant_id
+            restaurant_name = owner.restaurant.name
+            tier = owner.tier
+
         now = timezone.now()
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-        # 이번 달 쿠폰 처리 건수
         coupon_count = Coupon.objects.filter(
             restaurant_id=restaurant_id,
             status="REDEEMED",
             redeemed_at__gte=month_start,
         ).count()
 
-        # 이번 달 스탬프 적립 건수
         stamp_count = StampEvent.objects.filter(
             restaurant_id=restaurant_id,
             delta__gt=0,
             created_at__gte=month_start,
         ).count()
 
-        # 이번 달 재방문 (같은 달에 2회 이상 스탬프 적립한 유저 수)
         revisit_count = (
             StampEvent.objects.filter(
                 restaurant_id=restaurant_id,
@@ -325,7 +350,6 @@ class DashboardStatsView(APIView):
             .count()
         )
 
-        # 누적 단골 (전체 기간 3회 이상 방문)
         loyal_count = (
             StampEvent.objects.filter(
                 restaurant_id=restaurant_id,
@@ -339,8 +363,8 @@ class DashboardStatsView(APIView):
 
         return Response({
             "restaurant_id": restaurant_id,
-            "restaurant_name": owner.restaurant.name,
-            "tier": owner.tier,
+            "restaurant_name": restaurant_name,
+            "tier": tier,
             "month": now.strftime("%Y-%m"),
             "stats": {
                 "revisit_this_month": revisit_count,
