@@ -46,13 +46,6 @@ class AdminConfig(models.Model):
 
     class Meta:
         db_table = "dashboard_admin_config"
-        managed = False  # 테이블은 아래 SQL로 수동 생성
-        # CREATE TABLE dashboard_admin_config (
-        #   id SERIAL PRIMARY KEY,
-        #   key VARCHAR(64) UNIQUE NOT NULL,
-        #   value TEXT NOT NULL,
-        #   updated_at TIMESTAMPTZ DEFAULT NOW()
-        # );
 
     @classmethod
     def get(cls, key: str) -> "AdminConfig | None":
