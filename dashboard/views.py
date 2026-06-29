@@ -48,6 +48,7 @@ class OwnerRestaurantListView(APIView):
                     "restaurant_id": r.restaurant_id,
                     "name": r.name,
                     "tier": owner_map.get(r.restaurant_id),  # None이면 미등록
+                    "is_affiliate": r.is_affiliate,
                 }
                 for r in restaurant_list
             ]
@@ -313,6 +314,49 @@ class RestaurantInfoView(APIView):
             "success": True,
             "updated_fields": updated,
         })
+
+
+class AdminRestaurantView(APIView):
+    """
+    관리자 전용 식당 비활성화/삭제
+    PATCH /api/dashboard/admin/restaurants/<id>/  → is_affiliate 토글
+    DELETE /api/dashboard/admin/restaurants/<id>/ → 레코드 삭제
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _get_admin_restaurant(self, request, restaurant_id):
+        if not bool(request.auth.get("is_admin", False)):
+            return None, Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+        try:
+            return AffiliateRestaurant.objects.get(restaurant_id=int(restaurant_id)), None
+        except (AffiliateRestaurant.DoesNotExist, ValueError):
+            return None, Response({"detail": "식당을 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+
+    def patch(self, request, restaurant_id):
+        r, err = self._get_admin_restaurant(request, restaurant_id)
+        if err:
+            return err
+        is_affiliate = request.data.get("is_affiliate")
+        if is_affiliate is None:
+            return Response({"detail": "is_affiliate 값이 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        r.is_affiliate = bool(is_affiliate)
+        try:
+            r.save(update_fields=["is_affiliate"])
+        except Exception as e:
+            logger.error(f"AdminRestaurantView PATCH error: {e}")
+            return Response({"detail": "저장에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"success": True, "restaurant_id": r.restaurant_id, "is_affiliate": r.is_affiliate})
+
+    def delete(self, request, restaurant_id):
+        r, err = self._get_admin_restaurant(request, restaurant_id)
+        if err:
+            return err
+        try:
+            r.delete()
+        except Exception as e:
+            logger.error(f"AdminRestaurantView DELETE error: {e}")
+            return Response({"detail": "삭제에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({"success": True}, status=status.HTTP_200_OK)
 
 
 class DashboardStatsView(APIView):
