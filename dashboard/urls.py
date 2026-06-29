@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     path("restaurants/", views.OwnerRestaurantListView.as_view()),
     path("admin/restaurants/<int:restaurant_id>/", views.AdminRestaurantView.as_view()),
+    path("admin/banner-popup/", views.AdminBannerPopupView.as_view()),
     path("admin/password/", views.AdminPasswordView.as_view()),
     path("images/presign/", views.PresignedUploadView.as_view()),
     path("auth/verify-owner/", views.VerifyOwnerView.as_view()),

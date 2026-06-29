@@ -426,13 +426,20 @@ class PresignedUploadView(APIView):
             except OwnerProfile.DoesNotExist:
                 return Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
 
-        # S3 키 생성 — restaurants/{id}/{timestamp}_{원본파일명}_{uuid6}.{ext}
+        # S3 키 생성
         ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
         base_name = filename.rsplit(".", 1)[0] if "." in filename else filename
         safe_name = re.sub(r"[^\w가-힣.-]", "_", base_name)[:40]
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         uid = uuid.uuid4().hex[:6]
-        key = f"restaurants/{restaurant_id}/{timestamp}_{safe_name}_{uid}.{ext}"
+
+        upload_type = request.data.get("upload_type", "restaurant")
+        if upload_type in ("banner", "popup"):
+            if not is_admin:
+                return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+            key = f"{upload_type}s/{timestamp}_{safe_name}_{uid}.{ext}"
+        else:
+            key = f"restaurants/{restaurant_id}/{timestamp}_{safe_name}_{uid}.{ext}"
 
         bucket = os.getenv("AWS_STORAGE_BUCKET_NAME", "wouldulike-default-bucket-lunching")
         region = os.getenv("AWS_S3_REGION_NAME", "ap-northeast-2")
@@ -454,6 +461,46 @@ class PresignedUploadView(APIView):
         except ClientError as e:
             logger.error(f"PresignedUploadView error: {e}")
             return Response({"detail": "S3 URL 생성에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AdminBannerPopupView(APIView):
+    """
+    앱 배너 / 팝업 이미지 관리 (관리자 전용)
+    GET  /api/dashboard/admin/banner-popup/ → { banner_url, popup_url }
+    PATCH /api/dashboard/admin/banner-popup/ → body: { banner_url?, popup_url? }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _require_admin(self, request):
+        if not bool(request.auth.get("is_admin", False)):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+        return None
+
+    def get(self, request):
+        if err := self._require_admin(request):
+            return err
+        banner = AdminConfig.get("banner_image_url")
+        popup = AdminConfig.get("popup_image_url")
+        return Response({
+            "banner_url": banner.value if banner else None,
+            "popup_url": popup.value if popup else None,
+        })
+
+    def patch(self, request):
+        if err := self._require_admin(request):
+            return err
+        updated = []
+        for field in ("banner_url", "popup_url"):
+            if field in request.data:
+                key = field.replace("_url", "_image_url")  # banner_url → banner_image_url
+                AdminConfig.objects.update_or_create(
+                    key=key,
+                    defaults={"value": request.data[field] or ""},
+                )
+                updated.append(field)
+        if not updated:
+            return Response({"detail": "변경할 내용이 없습니다."}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"success": True, "updated": updated})
 
 
 class AdminPasswordView(APIView):
