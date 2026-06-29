@@ -9,6 +9,12 @@ from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from rest_framework_simplejwt.exceptions import TokenError
 import logging
 
+import uuid
+import re
+from datetime import datetime
+import boto3
+from botocore.exceptions import ClientError
+
 from coupons.models import MerchantPin, Coupon, StampEvent
 from django.db.models import Q
 from restaurants.models import AffiliateRestaurant
@@ -263,6 +269,7 @@ class RestaurantInfoView(APIView):
     permission_classes = [IsAuthenticated]
 
     EDITABLE_FIELDS = ["description", "phone_number", "main_menu", "url"]
+    MAX_IMAGES = 5
 
     def _get_restaurant(self, request):
         """is_admin이면 ?restaurant_id 파라미터로, 점주면 OwnerProfile로 식당 조회."""
@@ -295,6 +302,7 @@ class RestaurantInfoView(APIView):
             "url": r.url or "",
             "address": r.address or "",
             "category": r.category or "",
+            "s3_image_urls": list(r.s3_image_urls) if r.s3_image_urls else [],
         })
 
     def patch(self, request):
@@ -307,6 +315,19 @@ class RestaurantInfoView(APIView):
             if field in request.data:
                 setattr(r, field, request.data[field])
                 updated.append(field)
+
+        # s3_image_urls 별도 처리 (최대 MAX_IMAGES장)
+        if "s3_image_urls" in request.data:
+            urls = request.data["s3_image_urls"]
+            if not isinstance(urls, list):
+                return Response({"detail": "s3_image_urls는 배열이어야 합니다."}, status=status.HTTP_400_BAD_REQUEST)
+            if len(urls) > self.MAX_IMAGES:
+                return Response(
+                    {"detail": f"이미지는 최대 {self.MAX_IMAGES}장까지 등록할 수 있습니다."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            r.s3_image_urls = urls
+            updated.append("s3_image_urls")
 
         if not updated:
             return Response({"detail": "변경할 내용이 없습니다."}, status=status.HTTP_400_BAD_REQUEST)
@@ -372,6 +393,67 @@ class AdminRestaurantView(APIView):
             logger.error(f"AdminRestaurantView DELETE error: {e}")
             return Response({"detail": "삭제에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({"success": True}, status=status.HTTP_200_OK)
+
+
+class PresignedUploadView(APIView):
+    """
+    S3 Presigned PUT URL 발급 — 클라이언트가 직접 S3에 업로드
+    POST /api/dashboard/images/presign/
+    Body: { restaurant_id: int, filename: str, content_type: str }
+    Response: { upload_url: str, public_url: str }
+    """
+    permission_classes = [IsAuthenticated]
+
+    ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
+    EXPIRES_IN = 300  # 5분
+
+    def post(self, request):
+        import os
+        restaurant_id = request.data.get("restaurant_id")
+        filename = request.data.get("filename", "image.jpg")
+        content_type = request.data.get("content_type", "image/jpeg")
+
+        if content_type not in self.ALLOWED_TYPES:
+            return Response({"detail": "허용되지 않는 파일 형식입니다. (jpeg/png/webp)"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # 권한 확인 — 관리자이거나 해당 식당 점주
+        is_admin = bool(request.auth.get("is_admin", False))
+        if not is_admin:
+            try:
+                owner_restaurant_id = request.user.owner_profile.restaurant_id
+                if str(owner_restaurant_id) != str(restaurant_id):
+                    return Response({"detail": "권한이 없습니다."}, status=status.HTTP_403_FORBIDDEN)
+            except OwnerProfile.DoesNotExist:
+                return Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
+
+        # S3 키 생성 — restaurants/{id}/{timestamp}_{원본파일명}_{uuid6}.{ext}
+        ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
+        base_name = filename.rsplit(".", 1)[0] if "." in filename else filename
+        safe_name = re.sub(r"[^\w가-힣.-]", "_", base_name)[:40]
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        uid = uuid.uuid4().hex[:6]
+        key = f"restaurants/{restaurant_id}/{timestamp}_{safe_name}_{uid}.{ext}"
+
+        bucket = os.getenv("AWS_STORAGE_BUCKET_NAME", "wouldulike-default-bucket-lunching")
+        region = os.getenv("AWS_S3_REGION_NAME", "ap-northeast-2")
+
+        try:
+            s3 = boto3.client(
+                "s3",
+                region_name=region,
+                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            )
+            upload_url = s3.generate_presigned_url(
+                "put_object",
+                Params={"Bucket": bucket, "Key": key, "ContentType": content_type},
+                ExpiresIn=self.EXPIRES_IN,
+            )
+            public_url = f"https://{bucket}.s3.{region}.amazonaws.com/{key}"
+            return Response({"upload_url": upload_url, "public_url": public_url})
+        except ClientError as e:
+            logger.error(f"PresignedUploadView error: {e}")
+            return Response({"detail": "S3 URL 생성에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class AdminPasswordView(APIView):
