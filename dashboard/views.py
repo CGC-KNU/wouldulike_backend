@@ -13,7 +13,7 @@ from coupons.models import MerchantPin, Coupon, StampEvent
 from django.db.models import Q
 from restaurants.models import AffiliateRestaurant
 from accounts.models import User
-from .models import OwnerProfile
+from .models import OwnerProfile, AdminConfig
 
 logger = logging.getLogger(__name__)
 
@@ -221,7 +221,14 @@ class AdminLoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if username != admin_username or password != admin_password:
+        # DB에 저장된 비밀번호가 있으면 우선 사용, 없으면 환경변수로 폴백
+        db_pw = AdminConfig.get("main_password_hash")
+        if db_pw:
+            valid = (username == admin_username and AdminConfig.check_password("main_password_hash", password))
+        else:
+            valid = (username == admin_username and password == admin_password)
+
+        if not valid:
             logger.warning(f"AdminLogin failed for username={username!r}")
             return Response(
                 {"success": False, "message": "아이디 또는 비밀번호가 올바르지 않습니다."},
@@ -351,12 +358,66 @@ class AdminRestaurantView(APIView):
         r, err = self._get_admin_restaurant(request, restaurant_id)
         if err:
             return err
+
+        # 2차 비밀번호 검증
+        secondary_pw = request.data.get("secondary_password", "")
+        if not secondary_pw:
+            return Response({"detail": "2차 비밀번호가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        if not AdminConfig.check_password("secondary_password_hash", secondary_pw):
+            return Response({"detail": "2차 비밀번호가 올바르지 않습니다."}, status=status.HTTP_401_UNAUTHORIZED)
+
         try:
             r.delete()
         except Exception as e:
             logger.error(f"AdminRestaurantView DELETE error: {e}")
             return Response({"detail": "삭제에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         return Response({"success": True}, status=status.HTTP_200_OK)
+
+
+class AdminPasswordView(APIView):
+    """
+    관리자 비밀번호 변경
+    PATCH /api/dashboard/admin/password/
+    Body: { type: "main"|"secondary", current_password: str, new_password: str }
+    - type=main: 현재 비밀번호(환경변수 or DB) 검증 후 DB에 새 비밀번호 저장
+    - type=secondary: 현재 2차 비밀번호(있으면) 검증 후 DB에 저장 (최초 설정 시 current_password 불필요)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        import os
+        if not bool(request.auth.get("is_admin", False)):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+
+        pw_type = request.data.get("type")
+        current_password = request.data.get("current_password", "")
+        new_password = request.data.get("new_password", "")
+
+        if pw_type not in ("main", "secondary"):
+            return Response({"detail": "type은 'main' 또는 'secondary'이어야 합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        if not new_password or len(new_password) < 4:
+            return Response({"detail": "새 비밀번호는 4자 이상이어야 합니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if pw_type == "main":
+            # 현재 비밀번호 검증 (DB 우선, 없으면 환경변수)
+            db_pw = AdminConfig.get("main_password_hash")
+            if db_pw:
+                valid = AdminConfig.check_password("main_password_hash", current_password)
+            else:
+                valid = current_password == os.getenv("DASHBOARD_ADMIN_PASSWORD", "")
+            if not valid:
+                return Response({"detail": "현재 비밀번호가 올바르지 않습니다."}, status=status.HTTP_401_UNAUTHORIZED)
+            AdminConfig.set_password("main_password_hash", new_password)
+
+        else:  # secondary
+            existing = AdminConfig.get("secondary_password_hash")
+            if existing:
+                if not AdminConfig.check_password("secondary_password_hash", current_password):
+                    return Response({"detail": "현재 2차 비밀번호가 올바르지 않습니다."}, status=status.HTTP_401_UNAUTHORIZED)
+            # 최초 설정 시에는 current_password 없어도 OK
+            AdminConfig.set_password("secondary_password_hash", new_password)
+
+        return Response({"success": True})
 
 
 class DashboardStatsView(APIView):

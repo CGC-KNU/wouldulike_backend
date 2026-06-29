@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from django.contrib.auth.hashers import make_password, check_password as django_check_password
 
 
 class OwnerProfile(models.Model):
@@ -35,3 +36,38 @@ class OwnerProfile(models.Model):
 
     def __str__(self):
         return f"Owner:{self.user_id} → Restaurant:{self.restaurant_id} ({self.tier})"
+
+
+class AdminConfig(models.Model):
+    """관리자 설정 key-value store (비밀번호 해시 등)"""
+    key = models.CharField(max_length=64, unique=True)
+    value = models.TextField()
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "dashboard_admin_config"
+        managed = False  # 테이블은 아래 SQL로 수동 생성
+        # CREATE TABLE dashboard_admin_config (
+        #   id SERIAL PRIMARY KEY,
+        #   key VARCHAR(64) UNIQUE NOT NULL,
+        #   value TEXT NOT NULL,
+        #   updated_at TIMESTAMPTZ DEFAULT NOW()
+        # );
+
+    @classmethod
+    def get(cls, key: str) -> "AdminConfig | None":
+        return cls.objects.filter(key=key).first()
+
+    @classmethod
+    def set_password(cls, key: str, raw_password: str):
+        cls.objects.update_or_create(key=key, defaults={"value": make_password(raw_password)})
+
+    @classmethod
+    def check_password(cls, key: str, raw_password: str) -> bool:
+        obj = cls.get(key)
+        if not obj:
+            return False
+        return django_check_password(raw_password, obj.value)
+
+    def __str__(self):
+        return f"AdminConfig:{self.key}"
