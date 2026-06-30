@@ -171,7 +171,8 @@ _CLOUDSQL_DATABASE = {
     "PASSWORD": os.getenv("cloudsql_db_password"),
     "HOST": os.getenv("cloudsql_db_host"),
     "PORT": os.getenv("cloudsql_db_port"),
-    "CONN_MAX_AGE": 90,
+    # CONN_MAX_AGE=0: 요청 종료 후 즉시 연결 반환 → 동시 연결 수 절감
+    "CONN_MAX_AGE": 0,
     "OPTIONS": {
         "options": "-c client_encoding=utf8",
     },
@@ -186,7 +187,7 @@ DATABASES = {
         "PASSWORD": os.getenv("default_db_password"),
         "HOST": os.getenv("default_db_host"),
         "PORT": os.getenv("default_db_port"),
-        "CONN_MAX_AGE": 90,
+        "CONN_MAX_AGE": 0,
     },
     "rds": {
         # 유형 데이터 (레거시: AWS RDS, 라우터 호환용 alias)
@@ -196,7 +197,7 @@ DATABASES = {
         "PASSWORD": os.getenv("rds_db_password"),
         "HOST": os.getenv("rds_db_host"),
         "PORT": os.getenv("rds_db_port"),
-        "CONN_MAX_AGE": 90,
+        "CONN_MAX_AGE": 0,
         "OPTIONS": {
             "options": "-c client_encoding=utf8",
         },
