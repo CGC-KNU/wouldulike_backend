@@ -546,6 +546,63 @@ class AdminBannerPopupView(APIView):
         return Response({"success": True, "updated": updated})
 
 
+class AdminBannerPopupS3ScanView(APIView):
+    """
+    S3 banners/ / popups/ 폴더에 실제 업로드된 파일 목록 반환 (복구용)
+    GET /api/dashboard/admin/banner-popup/s3-scan/
+    Response: { banners: [url, ...], popups: [url, ...] }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not bool(request.auth.get("is_admin", False)):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+        import os
+        bucket = os.getenv("AWS_STORAGE_BUCKET_NAME", "wouldulike-default-bucket-lunching")
+        region = os.getenv("AWS_S3_REGION_NAME", "ap-northeast-2")
+        try:
+            s3 = boto3.client(
+                "s3",
+                region_name=region,
+                aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            )
+            result = {}
+            for prefix in ("banners/", "popups/"):
+                resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
+                urls = [
+                    f"https://{bucket}.s3.{region}.amazonaws.com/{obj['Key']}"
+                    for obj in resp.get("Contents", [])
+                    if obj.get("Size", 0) > 0
+                ]
+                result[prefix.rstrip("/")] = urls
+            return Response(result)
+        except ClientError as e:
+            logger.error(f"AdminBannerPopupS3ScanView error: {e}")
+            return Response({"detail": "S3 조회에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+class AdminConfigDebugView(APIView):
+    """
+    AdminConfig 테이블 전체 키 목록 반환 (진단용)
+    GET /api/dashboard/admin/config-debug/
+    Response: { records: [{key, value_preview}] }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not bool(request.auth.get("is_admin", False)):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+        records = [
+            {
+                "key": obj.key,
+                "value_preview": (obj.value or "")[:200] if obj.value else None,
+            }
+            for obj in AdminConfig.objects.all().order_by("key")
+        ]
+        return Response({"records": records, "count": len(records)})
+
+
 class AdminPasswordView(APIView):
     """
     관리자 비밀번호 변경
