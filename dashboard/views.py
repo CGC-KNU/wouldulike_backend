@@ -477,10 +477,25 @@ class AdminBannerPopupView(APIView):
         return None
 
     def _load_urls(self, key):
+        """
+        key: 현재 키 (예: banner_image_urls)
+        하위 호환: 이전 버전에서 단수형 키(banner_image_url)에 단일 URL로 저장한 경우도 처리
+        """
         import json
         obj = AdminConfig.get(key)
         if not obj or not obj.value:
-            return []
+            # 구버전 단수 키 fallback (banner_image_urls → banner_image_url)
+            old_key = key[:-1] if key.endswith("s") else key
+            if old_key != key:
+                obj = AdminConfig.get(old_key)
+            if not obj or not obj.value:
+                return []
+            # 단수 키에 저장된 값: JSON 배열이면 그대로, 단일 URL이면 배열로 감쌈
+            try:
+                val = json.loads(obj.value)
+                return val if isinstance(val, list) else ([val] if val else [])
+            except (json.JSONDecodeError, TypeError):
+                return [obj.value] if obj.value else []
         try:
             val = json.loads(obj.value)
             return val if isinstance(val, list) else ([val] if val else [])
@@ -490,9 +505,19 @@ class AdminBannerPopupView(APIView):
     def get(self, request):
         if err := self._require_admin(request):
             return err
+        import json
+        banner_urls = self._load_urls("banner_image_urls")
+        popup_urls = self._load_urls("popup_image_urls")
+        # 구버전 단수 키 데이터가 있으면 복수 키로 자동 마이그레이션
+        for key, urls in (("banner_image_urls", banner_urls), ("popup_image_urls", popup_urls)):
+            if urls and not AdminConfig.get(key):
+                AdminConfig.objects.update_or_create(
+                    key=key,
+                    defaults={"value": json.dumps(urls, ensure_ascii=False)},
+                )
         return Response({
-            "banner_urls": self._load_urls("banner_image_urls"),
-            "popup_urls": self._load_urls("popup_image_urls"),
+            "banner_urls": banner_urls,
+            "popup_urls": popup_urls,
         })
 
     def patch(self, request):
