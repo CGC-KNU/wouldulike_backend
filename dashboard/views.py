@@ -465,9 +465,9 @@ class PresignedUploadView(APIView):
 
 class AdminBannerPopupView(APIView):
     """
-    앱 배너 / 팝업 이미지 관리 (관리자 전용)
-    GET  /api/dashboard/admin/banner-popup/ → { banner_url, popup_url }
-    PATCH /api/dashboard/admin/banner-popup/ → body: { banner_url?, popup_url? }
+    앱 배너 / 팝업 이미지 관리 (관리자 전용) — URL 배열로 저장
+    GET  /api/dashboard/admin/banner-popup/ → { banner_urls: [...], popup_urls: [...] }
+    PATCH /api/dashboard/admin/banner-popup/ → body: { banner_urls?: [...], popup_urls?: [...] }
     """
     permission_classes = [IsAuthenticated]
 
@@ -476,26 +476,44 @@ class AdminBannerPopupView(APIView):
             return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
         return None
 
+    def _load_urls(self, key):
+        import json
+        obj = AdminConfig.get(key)
+        if not obj or not obj.value:
+            return []
+        try:
+            val = json.loads(obj.value)
+            return val if isinstance(val, list) else ([val] if val else [])
+        except (json.JSONDecodeError, TypeError):
+            return [obj.value] if obj.value else []
+
     def get(self, request):
         if err := self._require_admin(request):
             return err
-        banner = AdminConfig.get("banner_image_url")
-        popup = AdminConfig.get("popup_image_url")
         return Response({
-            "banner_url": banner.value if banner else None,
-            "popup_url": popup.value if popup else None,
+            "banner_urls": self._load_urls("banner_image_urls"),
+            "popup_urls": self._load_urls("popup_image_urls"),
         })
 
     def patch(self, request):
         if err := self._require_admin(request):
             return err
+        import json
         updated = []
-        for field in ("banner_url", "popup_url"):
+        for field, key in (
+            ("banner_urls", "banner_image_urls"),
+            ("popup_urls", "popup_image_urls"),
+        ):
             if field in request.data:
-                key = field.replace("_url", "_image_url")  # banner_url → banner_image_url
+                urls = request.data[field]
+                if not isinstance(urls, list):
+                    return Response(
+                        {"detail": f"{field}는 배열이어야 합니다."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 AdminConfig.objects.update_or_create(
                     key=key,
-                    defaults={"value": request.data[field] or ""},
+                    defaults={"value": json.dumps(urls, ensure_ascii=False)},
                 )
                 updated.append(field)
         if not updated:
