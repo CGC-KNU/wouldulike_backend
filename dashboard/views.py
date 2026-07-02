@@ -19,6 +19,7 @@ from coupons.models import MerchantPin, Coupon, StampEvent
 from django.db.models import Q
 from restaurants.models import AffiliateRestaurant
 from accounts.models import User
+from trends.models import Trend, PopupCampaign
 from .models import OwnerProfile, AdminConfig
 
 logger = logging.getLogger(__name__)
@@ -434,10 +435,11 @@ class PresignedUploadView(APIView):
         uid = uuid.uuid4().hex[:6]
 
         upload_type = request.data.get("upload_type", "restaurant")
-        if upload_type in ("banner", "popup"):
+        if upload_type in ("banner", "popup", "trend"):
             if not is_admin:
                 return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
-            key = f"{upload_type}s/{timestamp}_{safe_name}_{uid}.{ext}"
+            prefix = "trend_images" if upload_type == "trend" else f"{upload_type}s"
+            key = f"{prefix}/{timestamp}_{safe_name}_{uid}.{ext}"
         else:
             key = f"restaurants/{restaurant_id}/{timestamp}_{safe_name}_{uid}.{ext}"
 
@@ -544,6 +546,234 @@ class AdminBannerPopupView(APIView):
         if not updated:
             return Response({"detail": "변경할 내용이 없습니다."}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"success": True, "updated": updated})
+
+
+class AdminTrendView(APIView):
+    """
+    배너(트렌드) CRUD — 관리자 전용  (trends.Trend 모델)
+    GET    /api/dashboard/admin/trends/
+    POST   /api/dashboard/admin/trends/
+    PATCH  /api/dashboard/admin/trends/<pk>/
+    DELETE /api/dashboard/admin/trends/<pk>/
+    """
+    permission_classes = [IsAuthenticated]
+    BUCKET = "wouldulike-default-bucket-lunching"
+    REGION = "ap-northeast-2"
+
+    def _require_admin(self, request):
+        if not bool(request.auth.get("is_admin", False)):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+        return None
+
+    def _image_url(self, trend):
+        if not trend.image or not trend.image.name:
+            return None
+        name = trend.image.name
+        if name.startswith(("http://", "https://")):
+            return name
+        return f"https://{self.BUCKET}.s3.{self.REGION}.amazonaws.com/{name}"
+
+    def _serialize(self, t):
+        return {
+            "id": t.id,
+            "title": t.title,
+            "description": t.description or "",
+            "image_url": self._image_url(t),
+            "blog_link": t.blog_link,
+            "display_order": t.display_order,
+            "created_at": t.created_at.isoformat(),
+        }
+
+    def get(self, request, pk=None):
+        if err := self._require_admin(request):
+            return err
+        if pk:
+            try:
+                return Response(self._serialize(Trend.objects.get(pk=pk)))
+            except Trend.DoesNotExist:
+                return Response({"detail": "없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        return Response([self._serialize(t) for t in Trend.objects.all().order_by("display_order", "-created_at")])
+
+    def post(self, request, pk=None):
+        if err := self._require_admin(request):
+            return err
+        data = request.data
+        title = (data.get("title") or "").strip()
+        if not title:
+            return Response({"detail": "title이 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            t = Trend.objects.create(
+                title=title,
+                description=(data.get("description") or "").strip(),
+                image=(data.get("image_url") or "").strip(),
+                blog_link=(data.get("blog_link") or "").strip(),
+                display_order=int(data.get("display_order", 0) or 0),
+            )
+            return Response(self._serialize(t), status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.error(f"AdminTrendView POST error: {e}")
+            return Response({"detail": "생성에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def patch(self, request, pk=None):
+        if err := self._require_admin(request):
+            return err
+        if not pk:
+            return Response({"detail": "pk가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            t = Trend.objects.get(pk=pk)
+        except Trend.DoesNotExist:
+            return Response({"detail": "없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        data = request.data
+        updated = []
+        for field in ("title", "description", "blog_link"):
+            if field in data:
+                setattr(t, field, data[field])
+                updated.append(field)
+        if "image_url" in data and data["image_url"]:
+            t.image = data["image_url"]
+            updated.append("image")
+        if "display_order" in data:
+            t.display_order = int(data["display_order"] or 0)
+            updated.append("display_order")
+        if updated:
+            t.save(update_fields=updated)
+        return Response(self._serialize(t))
+
+    def delete(self, request, pk=None):
+        if err := self._require_admin(request):
+            return err
+        if not pk:
+            return Response({"detail": "pk가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            Trend.objects.get(pk=pk).delete()
+            return Response({"success": True})
+        except Trend.DoesNotExist:
+            return Response({"detail": "없습니다."}, status=status.HTTP_404_NOT_FOUND)
+
+
+class AdminPopupCampaignView(APIView):
+    """
+    팝업 캠페인 CRUD — 관리자 전용  (trends.PopupCampaign 모델)
+    GET    /api/dashboard/admin/popup-campaigns/
+    POST   /api/dashboard/admin/popup-campaigns/
+    PATCH  /api/dashboard/admin/popup-campaigns/<pk>/
+    DELETE /api/dashboard/admin/popup-campaigns/<pk>/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _require_admin(self, request):
+        if not bool(request.auth.get("is_admin", False)):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+        return None
+
+    def _serialize(self, p):
+        return {
+            "id": p.id,
+            "title": p.title,
+            "image_url": p.image_url,
+            "instagram_url": p.instagram_url,
+            "start_at": p.start_at.isoformat(),
+            "end_at": p.end_at.isoformat(),
+            "is_active": p.is_active,
+            "display_order": p.display_order,
+            "created_at": p.created_at.isoformat(),
+        }
+
+    @staticmethod
+    def _parse_dt(s):
+        from django.utils import timezone as tz
+        from datetime import datetime
+        for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+            try:
+                return tz.make_aware(datetime.strptime(str(s).strip(), fmt), tz.utc)
+            except ValueError:
+                continue
+        raise ValueError(f"날짜 형식 오류: {s}  (YYYY-MM-DDTHH:MM 형식을 사용하세요)")
+
+    def get(self, request, pk=None):
+        if err := self._require_admin(request):
+            return err
+        if pk:
+            try:
+                return Response(self._serialize(PopupCampaign.objects.get(pk=pk)))
+            except PopupCampaign.DoesNotExist:
+                return Response({"detail": "없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        return Response([self._serialize(p) for p in PopupCampaign.objects.all().order_by("display_order", "-created_at")])
+
+    def post(self, request, pk=None):
+        if err := self._require_admin(request):
+            return err
+        data = request.data
+        title = (data.get("title") or "").strip()
+        image_url = (data.get("image_url") or "").strip()
+        start_at = data.get("start_at")
+        end_at = data.get("end_at")
+        if not title or not image_url or not start_at or not end_at:
+            return Response({"detail": "title, image_url, start_at, end_at이 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            start = self._parse_dt(start_at)
+            end = self._parse_dt(end_at)
+            if end <= start:
+                return Response({"detail": "end_at은 start_at보다 이후여야 합니다."}, status=status.HTTP_400_BAD_REQUEST)
+            p = PopupCampaign.objects.create(
+                title=title,
+                image_url=image_url,
+                instagram_url=(data.get("instagram_url") or "").strip(),
+                start_at=start,
+                end_at=end,
+                is_active=bool(data.get("is_active", True)),
+                display_order=int(data.get("display_order", 0) or 0),
+            )
+            return Response(self._serialize(p), status=status.HTTP_201_CREATED)
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"AdminPopupCampaignView POST error: {e}")
+            return Response({"detail": "생성에 실패했습니다."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+    def patch(self, request, pk=None):
+        if err := self._require_admin(request):
+            return err
+        if not pk:
+            return Response({"detail": "pk가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            p = PopupCampaign.objects.get(pk=pk)
+        except PopupCampaign.DoesNotExist:
+            return Response({"detail": "없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        data = request.data
+        updated = []
+        for field in ("title", "image_url", "instagram_url", "is_active"):
+            if field in data:
+                setattr(p, field, data[field])
+                updated.append(field)
+        if "display_order" in data:
+            p.display_order = int(data["display_order"] or 0)
+            updated.append("display_order")
+        try:
+            if "start_at" in data:
+                p.start_at = self._parse_dt(data["start_at"])
+                updated.append("start_at")
+            if "end_at" in data:
+                p.end_at = self._parse_dt(data["end_at"])
+                updated.append("end_at")
+        except ValueError as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        if p.end_at <= p.start_at:
+            return Response({"detail": "end_at은 start_at보다 이후여야 합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        if updated:
+            p.save(update_fields=updated)
+        return Response(self._serialize(p))
+
+    def delete(self, request, pk=None):
+        if err := self._require_admin(request):
+            return err
+        if not pk:
+            return Response({"detail": "pk가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            PopupCampaign.objects.get(pk=pk).delete()
+            return Response({"success": True})
+        except PopupCampaign.DoesNotExist:
+            return Response({"detail": "없습니다."}, status=status.HTTP_404_NOT_FOUND)
 
 
 class AdminBannerPopupS3ScanView(APIView):
