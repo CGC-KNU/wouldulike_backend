@@ -1025,7 +1025,7 @@ class RestaurantCouponBenefitsView(APIView):
             "id": b.id,
             "coupon_type_code": b.coupon_type.code,
             "coupon_type_title": b.coupon_type.title,
-            "benefit_json": b.coupon_type.benefit_json,
+            "benefit_json": b.benefit_json or b.coupon_type.benefit_json,
             "title": b.title,
             "subtitle": b.subtitle,
             "notes": b.notes,
