@@ -15,7 +15,8 @@ from datetime import datetime
 import boto3
 from botocore.exceptions import ClientError
 
-from coupons.models import MerchantPin, Coupon, StampEvent
+from coupons.models import MerchantPin, Coupon, StampEvent, CouponType, RestaurantCouponBenefit, StampRewardRule
+from django.db import models as db_models
 from django.db.models import Q
 from restaurants.models import AffiliateRestaurant
 from accounts.models import User
@@ -959,3 +960,242 @@ class DashboardStatsView(APIView):
                 "stamp_earned_this_month": stamp_count,
             },
         })
+
+
+# ──────────────────────────────────────────────────────────
+# 쿠폰 타입 목록
+# ──────────────────────────────────────────────────────────
+class CouponTypesView(APIView):
+    """
+    GET /api/dashboard/coupon-types/
+    사용 가능한 CouponType 목록 반환 (admin·점주 공용)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        is_admin = bool(request.auth.get("is_admin", False))
+        if not is_admin:
+            try:
+                _ = request.user.owner_profile
+            except OwnerProfile.DoesNotExist:
+                return Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
+
+        types = CouponType.objects.all().order_by("code")
+        return Response([
+            {
+                "id": ct.id,
+                "code": ct.code,
+                "title": ct.title,
+                "benefit_json": ct.benefit_json,
+                "valid_days": ct.valid_days,
+            }
+            for ct in types
+        ])
+
+
+# ──────────────────────────────────────────────────────────
+# 식당별 쿠폰 혜택 (RestaurantCouponBenefit) CRUD
+# ──────────────────────────────────────────────────────────
+class RestaurantCouponBenefitsView(APIView):
+    """
+    GET/POST   /api/dashboard/coupon-benefits/
+    PATCH/DELETE /api/dashboard/coupon-benefits/<pk>/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _get_rid(self, request):
+        """admin: ?restaurant_id 파라미터, 점주: owner_profile에서."""
+        is_admin = bool(request.auth.get("is_admin", False))
+        if is_admin:
+            rid = request.query_params.get("restaurant_id") or request.data.get("restaurant_id")
+            if not rid:
+                return None, Response({"detail": "restaurant_id가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                return int(rid), None
+            except (TypeError, ValueError):
+                return None, Response({"detail": "restaurant_id는 정수여야 합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            try:
+                return request.user.owner_profile.restaurant_id, None
+            except OwnerProfile.DoesNotExist:
+                return None, Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
+
+    def _serialize(self, b):
+        return {
+            "id": b.id,
+            "coupon_type_code": b.coupon_type.code,
+            "coupon_type_title": b.coupon_type.title,
+            "benefit_json": b.coupon_type.benefit_json,
+            "title": b.title,
+            "subtitle": b.subtitle,
+            "notes": b.notes,
+            "sort_order": b.sort_order,
+            "active": b.active,
+            "updated_at": b.updated_at.isoformat(),
+        }
+
+    def get(self, request, pk=None):
+        rid, err = self._get_rid(request)
+        if err:
+            return err
+        benefits = (
+            RestaurantCouponBenefit.objects
+            .select_related("coupon_type")
+            .filter(restaurant_id=rid)
+            .order_by("sort_order", "id")
+        )
+        return Response([self._serialize(b) for b in benefits])
+
+    def post(self, request, pk=None):
+        rid, err = self._get_rid(request)
+        if err:
+            return err
+
+        coupon_type_code = (request.data.get("coupon_type_code") or "").strip()
+        title = (request.data.get("title") or "").strip()
+        if not coupon_type_code or not title:
+            return Response({"detail": "coupon_type_code와 title은 필수입니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            ct = CouponType.objects.get(code=coupon_type_code)
+        except CouponType.DoesNotExist:
+            return Response({"detail": "존재하지 않는 쿠폰 타입입니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # sort_order: 해당 coupon_type × restaurant 조합의 최대값 + 1
+        sort_order = request.data.get("sort_order")
+        if sort_order is None:
+            agg = RestaurantCouponBenefit.objects.filter(
+                restaurant_id=rid, coupon_type=ct
+            ).aggregate(m=db_models.Max("sort_order"))
+            sort_order = (agg["m"] or 0) + 1
+
+        try:
+            benefit = RestaurantCouponBenefit.objects.create(
+                coupon_type=ct,
+                restaurant_id=rid,
+                sort_order=int(sort_order),
+                title=title,
+                subtitle=request.data.get("subtitle", ""),
+                notes=request.data.get("notes", ""),
+                active=bool(request.data.get("active", True)),
+            )
+        except Exception as e:
+            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(self._serialize(benefit), status=status.HTTP_201_CREATED)
+
+    def patch(self, request, pk=None):
+        if not pk:
+            return Response({"detail": "pk가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        rid, err = self._get_rid(request)
+        if err:
+            return err
+
+        try:
+            benefit = RestaurantCouponBenefit.objects.select_related("coupon_type").get(
+                pk=pk, restaurant_id=rid
+            )
+        except RestaurantCouponBenefit.DoesNotExist:
+            return Response({"detail": "찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+
+        for field in ("title", "subtitle", "notes", "sort_order", "active"):
+            if field in request.data:
+                val = request.data[field]
+                if field == "sort_order":
+                    val = int(val)
+                elif field == "active":
+                    val = bool(val)
+                setattr(benefit, field, val)
+
+        benefit.save()
+        return Response(self._serialize(benefit))
+
+    def delete(self, request, pk=None):
+        if not pk:
+            return Response({"detail": "pk가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        rid, err = self._get_rid(request)
+        if err:
+            return err
+
+        try:
+            benefit = RestaurantCouponBenefit.objects.get(pk=pk, restaurant_id=rid)
+        except RestaurantCouponBenefit.DoesNotExist:
+            return Response({"detail": "찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+
+        benefit.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# ──────────────────────────────────────────────────────────
+# 식당별 스탬프 보상 규칙 (StampRewardRule) 조회 & 저장
+# ──────────────────────────────────────────────────────────
+class StampRewardRuleView(APIView):
+    """
+    GET   /api/dashboard/stamp-rule/
+    PATCH /api/dashboard/stamp-rule/    (없으면 생성, 있으면 업데이트)
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _get_rid(self, request):
+        is_admin = bool(request.auth.get("is_admin", False))
+        if is_admin:
+            rid = request.query_params.get("restaurant_id") or request.data.get("restaurant_id")
+            if not rid:
+                return None, Response({"detail": "restaurant_id가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+            try:
+                return int(rid), None
+            except (TypeError, ValueError):
+                return None, Response({"detail": "restaurant_id는 정수여야 합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            try:
+                return request.user.owner_profile.restaurant_id, None
+            except OwnerProfile.DoesNotExist:
+                return None, Response({"detail": "점주 계정이 아닙니다."}, status=status.HTTP_403_FORBIDDEN)
+
+    def _serialize(self, rule):
+        return {
+            "id": rule.id,
+            "restaurant_id": rule.restaurant_id,
+            "rule_type": rule.rule_type,
+            "config_json": rule.config_json,
+            "active": rule.active,
+            "updated_at": rule.updated_at.isoformat(),
+        }
+
+    def get(self, request):
+        rid, err = self._get_rid(request)
+        if err:
+            return err
+        try:
+            rule = StampRewardRule.objects.get(restaurant_id=rid)
+            return Response(self._serialize(rule))
+        except StampRewardRule.DoesNotExist:
+            return Response({"exists": False}, status=status.HTTP_404_NOT_FOUND)
+
+    def patch(self, request):
+        rid, err = self._get_rid(request)
+        if err:
+            return err
+
+        rule_type = request.data.get("rule_type", "THRESHOLD")
+        if rule_type not in ("THRESHOLD", "VISIT"):
+            return Response({"detail": "rule_type은 THRESHOLD 또는 VISIT이어야 합니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        config_json = request.data.get("config_json")
+        if not isinstance(config_json, dict):
+            return Response({"detail": "config_json은 객체여야 합니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        active = bool(request.data.get("active", True))
+
+        rule, created = StampRewardRule.objects.update_or_create(
+            restaurant_id=rid,
+            defaults={
+                "rule_type": rule_type,
+                "config_json": config_json,
+                "active": active,
+            },
+        )
+        return Response(
+            self._serialize(rule),
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )

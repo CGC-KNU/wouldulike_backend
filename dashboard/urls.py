@@ -18,4 +18,8 @@ urlpatterns = [
     path("auth/admin-login/", views.AdminLoginView.as_view()),
     path("stats/", views.DashboardStatsView.as_view()),
     path("restaurant/", views.RestaurantInfoView.as_view()),
+    path("coupon-types/", views.CouponTypesView.as_view()),
+    path("coupon-benefits/", views.RestaurantCouponBenefitsView.as_view()),
+    path("coupon-benefits/<int:pk>/", views.RestaurantCouponBenefitsView.as_view()),
+    path("stamp-rule/", views.StampRewardRuleView.as_view()),
 ]
