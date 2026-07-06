@@ -16,6 +16,9 @@ import boto3
 from botocore.exceptions import ClientError
 
 from coupons.models import MerchantPin, Coupon, StampEvent, CouponType, RestaurantCouponBenefit, StampRewardRule
+from notifications.models import Notification
+from notifications.utils import send_notification
+from guests.models import GuestUser
 from django.db import models as db_models
 from django.db.models import Q
 from restaurants.models import AffiliateRestaurant
@@ -1199,3 +1202,157 @@ class StampRewardRuleView(APIView):
             self._serialize(rule),
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
+
+
+# ──────────────────────────────────────────────────────────────
+# 관리자 알림 관리 API
+# ──────────────────────────────────────────────────────────────
+TEST_KAKAO_ID = 4424485763  # 개발자 테스트 전용 카카오 ID
+
+
+class AdminNotificationsView(APIView):
+    """관리자 알림 예약 CRUD + 즉시발송"""
+
+    def _check_admin(self, request):
+        if not request.auth or not request.auth.get("is_admin"):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+        return None
+
+    def _serialize(self, n):
+        lines = (n.content or "").splitlines()
+        return {
+            "id": n.id,
+            "title": lines[0] if lines else "",
+            "body": "\n".join(lines[1:]) if len(lines) > 1 else "",
+            "content": n.content,
+            "scheduled_time": n.scheduled_time.isoformat(),
+            "sent": n.sent,
+            "sent_at": n.sent_at.isoformat() if n.sent_at else None,
+            "target_kakao_ids": n.target_kakao_ids,
+            "test_only": n.target_kakao_ids == [TEST_KAKAO_ID],
+            "created_at": n.created_at.isoformat(),
+        }
+
+    def get(self, request, pk=None):
+        err = self._check_admin(request)
+        if err:
+            return err
+        notifications = Notification.objects.order_by("-scheduled_time")[:50]
+        return Response([self._serialize(n) for n in notifications])
+
+    def post(self, request, pk=None):
+        err = self._check_admin(request)
+        if err:
+            return err
+
+        title = (request.data.get("title") or "").strip()
+        body = (request.data.get("body") or "").strip()
+        scheduled_time_str = request.data.get("scheduled_time")
+        test_only = bool(request.data.get("test_only", True))  # 기본값: 테스트 모드
+
+        if not title:
+            return Response({"detail": "제목(title)은 필수입니다."}, status=status.HTTP_400_BAD_REQUEST)
+        if not scheduled_time_str:
+            return Response({"detail": "scheduled_time은 필수입니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            from datetime import datetime
+            # ISO 8601 파싱 (타임존 포함/미포함 모두 처리)
+            scheduled_time = datetime.fromisoformat(scheduled_time_str.replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            return Response({"detail": "scheduled_time 형식이 올바르지 않습니다. (ISO 8601)"}, status=status.HTTP_400_BAD_REQUEST)
+
+        content = f"{title}\n{body}" if body else title
+        target_kakao_ids = [TEST_KAKAO_ID] if test_only else None
+
+        notification = Notification.objects.create(
+            content=content,
+            scheduled_time=scheduled_time,
+            target_kakao_ids=target_kakao_ids,
+        )
+        return Response(self._serialize(notification), status=status.HTTP_201_CREATED)
+
+    def delete(self, request, pk=None):
+        err = self._check_admin(request)
+        if err:
+            return err
+        if not pk:
+            return Response({"detail": "pk가 필요합니다."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            notification = Notification.objects.get(id=pk)
+        except Notification.DoesNotExist:
+            return Response({"detail": "알림을 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+        if notification.sent:
+            return Response({"detail": "이미 발송된 알림은 삭제할 수 없습니다."}, status=status.HTTP_400_BAD_REQUEST)
+        notification.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AdminNotificationSendNowView(APIView):
+    """특정 알림 즉시 발송 (테스트 전용: target_kakao_ids 필수)"""
+
+    def _check_admin(self, request):
+        if not request.auth or not request.auth.get("is_admin"):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=status.HTTP_403_FORBIDDEN)
+        return None
+
+    def post(self, request, pk=None):
+        err = self._check_admin(request)
+        if err:
+            return err
+        try:
+            notification = Notification.objects.get(id=pk)
+        except Notification.DoesNotExist:
+            return Response({"detail": "알림을 찾을 수 없습니다."}, status=status.HTTP_404_NOT_FOUND)
+
+        if notification.sent:
+            return Response({"detail": "이미 발송된 알림입니다."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # target_kakao_ids 없으면 전체 발송 → 위험하므로 API에서는 금지
+        if not notification.target_kakao_ids:
+            return Response(
+                {"detail": "즉시발송은 target_kakao_ids가 설정된 알림에만 허용됩니다."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # FCM 토큰 수집
+        user_tokens = list(
+            User.objects.filter(kakao_id__in=notification.target_kakao_ids)
+            .exclude(fcm_token__isnull=True)
+            .exclude(fcm_token="")
+            .values_list("fcm_token", flat=True)
+        )
+        guest_tokens = list(
+            GuestUser.objects.filter(linked_user__kakao_id__in=notification.target_kakao_ids)
+            .exclude(fcm_token__isnull=True)
+            .exclude(fcm_token="")
+            .values_list("fcm_token", flat=True)
+        )
+        tokens = list(set(user_tokens + guest_tokens))
+
+        if not tokens:
+            return Response(
+                {"detail": "대상 사용자의 FCM 토큰이 없습니다."},
+                status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            )
+
+        # 알림 발송
+        lines = (notification.content or "").splitlines()
+        title = lines[0] if lines else None
+        result = send_notification(tokens, notification.content, title=title)
+
+        # 발송 완료 처리
+        notification.sent = True
+        notification.sent_at = timezone.now()
+        notification.save(update_fields=["sent", "sent_at"])
+
+        return Response({
+            "success": result.get("success", 0) if result else 0,
+            "failure": result.get("failure", 0) if result else 0,
+            "tokens_tried": len(tokens),
+            "notification": {
+                "id": notification.id,
+                "content": notification.content,
+                "sent_at": notification.sent_at.isoformat(),
+            },
+        })

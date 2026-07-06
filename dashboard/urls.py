@@ -22,4 +22,7 @@ urlpatterns = [
     path("coupon-benefits/", views.RestaurantCouponBenefitsView.as_view()),
     path("coupon-benefits/<int:pk>/", views.RestaurantCouponBenefitsView.as_view()),
     path("stamp-rule/", views.StampRewardRuleView.as_view()),
+    path("admin/notifications/", views.AdminNotificationsView.as_view()),
+    path("admin/notifications/<int:pk>/", views.AdminNotificationsView.as_view()),
+    path("admin/notifications/<int:pk>/send-now/", views.AdminNotificationSendNowView.as_view()),
 ]
