@@ -100,6 +100,11 @@ def _compose_notification_title_and_body(
     explicit_title = (title or "").strip()
 
     if explicit_title:
+        # 본문 첫 줄이 제목과 동일하면 제거 (중복 방지)
+        non_empty_lines = [l.strip() for l in normalized_message.splitlines() if l.strip()]
+        if non_empty_lines and non_empty_lines[0] == explicit_title:
+            body = "\n".join(non_empty_lines[1:]).strip()
+            return explicit_title, body or explicit_title
         return explicit_title, normalized_message
 
     if not normalized_message:
