@@ -16,7 +16,9 @@ import boto3
 from botocore.exceptions import ClientError
 
 from coupons.models import MerchantPin, Coupon, StampEvent, CouponType, RestaurantCouponBenefit, StampRewardRule
-from notifications.models import Notification
+from datetime import date as date_type, timedelta
+from notifications.models import Notification, RestaurantNotificationSchedule
+from accounts.models import UserRestaurantWishlist
 from notifications.utils import send_notification
 from guests.models import GuestUser
 from django.db import models as db_models
@@ -1356,3 +1358,166 @@ class AdminNotificationSendNowView(APIView):
                 "sent_at": notification.sent_at.isoformat(),
             },
         })
+
+
+# ─────────────────────────────────────────────────────────
+# 식당 알림 예약 (점주 / 관리자 공통 유틸)
+# ─────────────────────────────────────────────────────────
+
+def _slot_to_utc(d, slot: str):
+    """KST 정오(12:00) = UTC 03:00 / KST 저녁(18:00) = UTC 09:00"""
+    from django.utils.timezone import make_aware
+    import pytz
+    hour_utc = 3 if slot == "noon" else 9
+    naive = datetime(d.year, d.month, d.day, hour_utc, 0, 0)
+    return make_aware(naive, pytz.UTC)
+
+
+def _serialize_schedule(s):
+    return {
+        "id": s.id,
+        "restaurant_id": s.restaurant_id,
+        "restaurant_name": s.restaurant_name,
+        "date": s.date.isoformat(),
+        "slot": s.slot,
+        "content": s.content,
+        "scheduled_datetime": s.scheduled_datetime.isoformat(),
+        "sent": s.sent,
+        "sent_at": s.sent_at.isoformat() if s.sent_at else None,
+        "created_by_id": s.created_by_id,
+    }
+
+
+class OwnerNotificationScheduleView(APIView):
+    """점주: 자신의 식당 알림 예약 조회 · 생성 · 삭제"""
+
+    def _get_restaurant_id(self, request):
+        if not request.auth or not request.auth.get("is_owner"):
+            return None, Response({"detail": "점주 권한이 필요합니다."}, status=403)
+        rid = request.auth.get("restaurant_id")
+        if not rid:
+            return None, Response({"detail": "restaurant_id를 찾을 수 없습니다."}, status=403)
+        return int(rid), None
+
+    def get(self, request):
+        rid, err = self._get_restaurant_id(request)
+        if err:
+            return err
+        year = int(request.query_params.get("year", date_type.today().year))
+        month = int(request.query_params.get("month", date_type.today().month))
+        qs = RestaurantNotificationSchedule.objects.filter(
+            restaurant_id=rid, date__year=year, date__month=month
+        ).order_by("scheduled_datetime")
+        return Response([_serialize_schedule(s) for s in qs])
+
+    def post(self, request):
+        rid, err = self._get_restaurant_id(request)
+        if err:
+            return err
+        slot = request.data.get("slot")
+        date_str = request.data.get("date")
+        content = (request.data.get("content") or "").strip()
+
+        if slot not in ("noon", "evening"):
+            return Response({"detail": "slot은 noon 또는 evening이어야 합니다."}, status=400)
+        if not date_str or not content:
+            return Response({"detail": "date와 content가 필요합니다."}, status=400)
+        try:
+            d = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({"detail": "날짜 형식이 올바르지 않습니다 (YYYY-MM-DD)."}, status=400)
+        if d < date_type.today():
+            return Response({"detail": "과거 날짜는 예약할 수 없습니다."}, status=400)
+
+        try:
+            restaurant = AffiliateRestaurant.objects.get(restaurant_id=rid)
+            name = restaurant.name
+        except AffiliateRestaurant.DoesNotExist:
+            name = f"식당#{rid}"
+
+        try:
+            s = RestaurantNotificationSchedule.objects.create(
+                restaurant_id=rid,
+                restaurant_name=name,
+                date=d,
+                slot=slot,
+                content=content,
+                scheduled_datetime=_slot_to_utc(d, slot),
+                created_by=request.user,
+            )
+        except Exception:
+            return Response({"detail": "이미 해당 날짜/시간대에 예약이 존재합니다."}, status=409)
+        return Response(_serialize_schedule(s), status=201)
+
+    def delete(self, request, pk=None):
+        rid, err = self._get_restaurant_id(request)
+        if err:
+            return err
+        try:
+            s = RestaurantNotificationSchedule.objects.get(pk=pk, restaurant_id=rid)
+        except RestaurantNotificationSchedule.DoesNotExist:
+            return Response({"detail": "예약을 찾을 수 없습니다."}, status=404)
+        if s.sent:
+            return Response({"detail": "이미 발송된 알림은 취소할 수 없습니다."}, status=400)
+        s.delete()
+        return Response(status=204)
+
+
+class AdminRestaurantNotificationView(APIView):
+    """관리자: 모든 식당 알림 예약 조회 · 수정 · 삭제"""
+
+    def _check_admin(self, request):
+        if not request.auth or not request.auth.get("is_admin"):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=403)
+        return None
+
+    def get(self, request):
+        err = self._check_admin(request)
+        if err:
+            return err
+        year = int(request.query_params.get("year", date_type.today().year))
+        month = int(request.query_params.get("month", date_type.today().month))
+        qs = RestaurantNotificationSchedule.objects.filter(
+            date__year=year, date__month=month
+        ).order_by("scheduled_datetime")
+        return Response([_serialize_schedule(s) for s in qs])
+
+    def put(self, request, pk=None):
+        err = self._check_admin(request)
+        if err:
+            return err
+        try:
+            s = RestaurantNotificationSchedule.objects.get(pk=pk)
+        except RestaurantNotificationSchedule.DoesNotExist:
+            return Response({"detail": "예약을 찾을 수 없습니다."}, status=404)
+        if s.sent:
+            return Response({"detail": "이미 발송된 알림은 수정할 수 없습니다."}, status=400)
+        if "content" in request.data:
+            s.content = (request.data["content"] or "").strip()
+        if "date" in request.data or "slot" in request.data:
+            date_str = request.data.get("date", s.date.isoformat())
+            slot = request.data.get("slot", s.slot)
+            if slot not in ("noon", "evening"):
+                return Response({"detail": "slot 값이 올바르지 않습니다."}, status=400)
+            try:
+                d = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                return Response({"detail": "날짜 형식이 올바르지 않습니다."}, status=400)
+            s.date = d
+            s.slot = slot
+            s.scheduled_datetime = _slot_to_utc(d, slot)
+        s.save()
+        return Response(_serialize_schedule(s))
+
+    def delete(self, request, pk=None):
+        err = self._check_admin(request)
+        if err:
+            return err
+        try:
+            s = RestaurantNotificationSchedule.objects.get(pk=pk)
+        except RestaurantNotificationSchedule.DoesNotExist:
+            return Response({"detail": "예약을 찾을 수 없습니다."}, status=404)
+        if s.sent:
+            return Response({"detail": "이미 발송된 알림은 취소할 수 없습니다."}, status=400)
+        s.delete()
+        return Response(status=204)

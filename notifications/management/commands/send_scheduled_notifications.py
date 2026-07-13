@@ -3,8 +3,9 @@ from django.utils import timezone
 from django.contrib.auth import get_user_model
 
 from guests.models import GuestUser
-from notifications.models import Notification
+from notifications.models import Notification, RestaurantNotificationSchedule
 from notifications.utils import send_notification
+from accounts.models import UserRestaurantWishlist
 
 
 User = get_user_model()
@@ -329,3 +330,78 @@ class Command(BaseCommand):
                     f"(failed: {failure_count}, partial: {partial_count})"
                 )
             )
+
+        # ── 식당 알림 예약 처리 ──────────────────────────────────────────
+        self._send_restaurant_schedules(dry_run=dry_run)
+
+    def _send_restaurant_schedules(self, dry_run=False):
+        """찜한 사용자 대상 식당별 알림 예약 처리"""
+        now = timezone.now()
+        schedules = RestaurantNotificationSchedule.objects.filter(
+            scheduled_datetime__lte=now,
+            sent=False,
+        ).order_by("scheduled_datetime")
+
+        if not schedules.exists():
+            return
+
+        self.stdout.write(f"\nFound {schedules.count()} restaurant schedule(s) to send")
+
+        for schedule in schedules:
+            # 해당 식당을 찜한 사용자들의 FCM 토큰 수집
+            wishlist_user_ids = list(
+                UserRestaurantWishlist.objects.filter(
+                    restaurant_id=schedule.restaurant_id
+                ).values_list("user_id", flat=True)
+            )
+
+            user_tokens = list(
+                User.objects.filter(id__in=wishlist_user_ids)
+                .exclude(fcm_token__isnull=True)
+                .exclude(fcm_token="")
+                .values_list("fcm_token", flat=True)
+            )
+            guest_tokens = list(
+                GuestUser.objects.filter(linked_user_id__in=wishlist_user_ids)
+                .exclude(fcm_token__isnull=True)
+                .exclude(fcm_token="")
+                .values_list("fcm_token", flat=True)
+            )
+            tokens = list(set(user_tokens + guest_tokens))
+
+            self.stdout.write(
+                f"  Restaurant schedule {schedule.id} [{schedule.restaurant_name} / "
+                f"{schedule.date} {schedule.slot}]: {len(wishlist_user_ids)} wishlist users, "
+                f"{len(tokens)} unique tokens"
+            )
+
+            if not tokens:
+                self.stdout.write(
+                    self.style.WARNING(
+                        f"  Schedule {schedule.id}: 찜한 사용자의 FCM 토큰 없음, 발송 건너뜀"
+                    )
+                )
+                if not dry_run:
+                    schedule.sent = True
+                    schedule.sent_at = timezone.now()
+                    schedule.save(update_fields=["sent", "sent_at"])
+                continue
+
+            if not dry_run:
+                lines = (schedule.content or "").splitlines()
+                title = lines[0] if lines else schedule.restaurant_name
+                result = send_notification(tokens, schedule.content, title=title)
+                success = result.get("success", 0) if result else 0
+                failure = result.get("failure", 0) if result else 0
+                self.stdout.write(
+                    self.style.SUCCESS(
+                        f"  Schedule {schedule.id} 발송 완료 — 성공: {success}, 실패: {failure}"
+                    )
+                )
+                schedule.sent = True
+                schedule.sent_at = timezone.now()
+                schedule.save(update_fields=["sent", "sent_at"])
+            else:
+                self.stdout.write(
+                    f"  [DRY-RUN] Schedule {schedule.id}: {len(tokens)}개 토큰 대상 발송 예정"
+                )

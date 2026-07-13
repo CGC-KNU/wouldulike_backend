@@ -92,3 +92,28 @@ class SocialAccount(models.Model):
 
     def __str__(self):
         return f"{self.provider}:{self.provider_user_id}"
+
+
+class UserRestaurantWishlist(models.Model):
+    """사용자가 찜한 식당 — 식당 알림 발송 대상 조회용 정규화 테이블"""
+
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name="restaurant_wishlist",
+    )
+    restaurant_id = models.IntegerField(db_index=True)
+    restaurant_name = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "accounts_user_restaurant_wishlist"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "restaurant_id"],
+                name="unique_user_restaurant_wishlist",
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.user_id} ♡ {self.restaurant_name}"

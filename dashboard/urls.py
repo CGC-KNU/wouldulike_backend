@@ -25,4 +25,9 @@ urlpatterns = [
     path("admin/notifications/", views.AdminNotificationsView.as_view()),
     path("admin/notifications/<int:pk>/", views.AdminNotificationsView.as_view()),
     path("admin/notifications/<int:pk>/send-now/", views.AdminNotificationSendNowView.as_view()),
+    # 식당 알림 예약
+    path("owner/notification-schedule/", views.OwnerNotificationScheduleView.as_view()),
+    path("owner/notification-schedule/<int:pk>/", views.OwnerNotificationScheduleView.as_view()),
+    path("admin/restaurant-notifications/", views.AdminRestaurantNotificationView.as_view()),
+    path("admin/restaurant-notifications/<int:pk>/", views.AdminRestaurantNotificationView.as_view()),
 ]
