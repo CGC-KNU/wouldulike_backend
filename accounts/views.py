@@ -187,6 +187,23 @@ class UserFavoritesView(APIView):
             favorites.append(restaurant_id)
             _save_user_favorites(user, favorites)
 
+        # UserRestaurantWishlist 동기화
+        try:
+            from accounts.models import UserRestaurantWishlist
+            from restaurants.models import AffiliateRestaurant
+            rid_int = int(restaurant_id)
+            try:
+                r_name = AffiliateRestaurant.objects.get(restaurant_id=rid_int).name
+            except AffiliateRestaurant.DoesNotExist:
+                r_name = f"식당#{rid_int}"
+            UserRestaurantWishlist.objects.get_or_create(
+                user=user,
+                restaurant_id=rid_int,
+                defaults={"restaurant_name": r_name},
+            )
+        except Exception:
+            logger.exception("UserRestaurantWishlist sync failed on add (restaurant_id=%s)", restaurant_id)
+
         return Response(
             {"ok": True, "added": restaurant_id, "favorites": favorites},
             status=status.HTTP_200_OK,
@@ -207,6 +224,15 @@ class UserFavoriteDeleteView(APIView):
         if restaurant_id in favorites:
             favorites = [fav for fav in favorites if fav != restaurant_id]
             _save_user_favorites(user, favorites)
+
+        # UserRestaurantWishlist 동기화
+        try:
+            from accounts.models import UserRestaurantWishlist
+            UserRestaurantWishlist.objects.filter(
+                user=user, restaurant_id=int(restaurant_id)
+            ).delete()
+        except Exception:
+            logger.exception("UserRestaurantWishlist sync failed on remove (restaurant_id=%s)", restaurant_id)
 
         return Response(
             {"ok": True, "removed": restaurant_id, "favorites": favorites},

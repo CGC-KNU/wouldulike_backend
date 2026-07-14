@@ -953,9 +953,12 @@ class DashboardStatsView(APIView):
             .count()
         )
 
-        wishlist_count = UserRestaurantWishlist.objects.filter(
-            restaurant_id=restaurant_id
-        ).count()
+        try:
+            wishlist_count = UserRestaurantWishlist.objects.filter(
+                restaurant_id=restaurant_id
+            ).count()
+        except Exception:
+            wishlist_count = 0  # 마이그레이션 미실행 시 안전하게 0 반환
 
         return Response({
             "restaurant_id": restaurant_id,
