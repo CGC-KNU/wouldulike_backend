@@ -953,6 +953,10 @@ class DashboardStatsView(APIView):
             .count()
         )
 
+        wishlist_count = UserRestaurantWishlist.objects.filter(
+            restaurant_id=restaurant_id
+        ).count()
+
         return Response({
             "restaurant_id": restaurant_id,
             "restaurant_name": restaurant_name,
@@ -963,6 +967,7 @@ class DashboardStatsView(APIView):
                 "loyal_total": loyal_count,
                 "coupon_redeemed_this_month": coupon_count,
                 "stamp_earned_this_month": stamp_count,
+                "wishlist_count": wishlist_count,
             },
         })
 
