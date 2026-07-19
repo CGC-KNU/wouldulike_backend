@@ -26,7 +26,7 @@ from django.db.models import Q
 from restaurants.models import AffiliateRestaurant
 from accounts.models import User
 from trends.models import Trend, PopupCampaign
-from .models import OwnerProfile, AdminConfig
+from .models import OwnerProfile, AdminConfig, RestaurantCampaignApplication, RestaurantCampaignWeekConfig, RestaurantPlanCampaignLimit
 
 logger = logging.getLogger(__name__)
 
@@ -1529,3 +1529,495 @@ class AdminRestaurantNotificationView(APIView):
             return Response({"detail": "이미 발송된 알림은 취소할 수 없습니다."}, status=400)
         s.delete()
         return Response(status=204)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 식당 캠페인 — 유틸
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _week_monday(d: date_type) -> date_type:
+    """날짜가 속한 주의 월요일 반환."""
+    return d - timedelta(days=d.weekday())
+
+
+def _serialize_campaign(app: RestaurantCampaignApplication) -> dict:
+    week_end = app.week_start + timedelta(days=6)
+    return {
+        "id": app.id,
+        "restaurant_id": app.restaurant_id,
+        "restaurant_name": app.restaurant_name,
+        "week_start": app.week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "coupon_title": app.coupon_title,
+        "coupon_subtitle": app.coupon_subtitle,
+        "coupon_notes": app.coupon_notes,
+        "benefit_type": app.benefit_type,
+        "benefit_value": app.benefit_value,
+        "benefit_label": app.benefit_label(),
+        "campaign_description": app.campaign_description,
+        "status": app.status,
+        "admin_notes": app.admin_notes,
+        "created_at": app.created_at.isoformat(),
+        "updated_at": app.updated_at.isoformat(),
+        "reviewed_at": app.reviewed_at.isoformat() if app.reviewed_at else None,
+    }
+
+
+def _get_week_slot_counts(week_start: date_type) -> dict:
+    """해당 주의 슬롯 현황 반환."""
+    max_slots = RestaurantCampaignWeekConfig.get_max_slots(week_start)
+    occupied = RestaurantCampaignApplication.objects.filter(
+        week_start=week_start,
+        status__in=[
+            RestaurantCampaignApplication.STATUS_PENDING,
+            RestaurantCampaignApplication.STATUS_APPROVED,
+            RestaurantCampaignApplication.STATUS_REJECTED_HOLD,
+        ],
+    ).count()
+    return {
+        "max_slots": max_slots,
+        "occupied_slots": occupied,
+        "available_slots": max(0, max_slots - occupied),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 점주 — 캠페인 신청 / 이력
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class OwnerCampaignView(APIView):
+    """GET: 이력 조회 / POST: 신청"""
+
+    def _check_owner(self, request):
+        try:
+            payload = request.auth
+            if not payload.get("is_owner"):
+                return Response({"detail": "점주 권한이 필요합니다."}, status=403), None, None
+            restaurant_id = payload.get("restaurant_id")
+            if not restaurant_id:
+                return Response({"detail": "restaurant_id 없음."}, status=403), None, None
+            return None, int(restaurant_id), request.user
+        except Exception:
+            return Response({"detail": "인증 오류."}, status=401), None, None
+
+    def get(self, request):
+        err, restaurant_id, _ = self._check_owner(request)
+        if err:
+            return err
+        qs = RestaurantCampaignApplication.objects.filter(restaurant_id=restaurant_id)
+        return Response([_serialize_campaign(a) for a in qs])
+
+    def post(self, request):
+        err, restaurant_id, user = self._check_owner(request)
+        if err:
+            return err
+
+        week_start_str = request.data.get("week_start")
+        if not week_start_str:
+            return Response({"detail": "week_start 필드가 필요합니다."}, status=400)
+        try:
+            week_start = _week_monday(date_type.fromisoformat(week_start_str))
+        except ValueError:
+            return Response({"detail": "week_start 형식이 올바르지 않습니다 (YYYY-MM-DD)."}, status=400)
+
+        today = date_type.today()
+        if week_start <= today + timedelta(days=6):
+            return Response({"detail": "캠페인은 1주일 이상 전에 신청해야 합니다."}, status=400)
+
+        # 중복 신청 확인 (REJECTED / CANCELLED 는 재신청 가능)
+        existing = RestaurantCampaignApplication.objects.filter(
+            restaurant_id=restaurant_id, week_start=week_start,
+        ).exclude(status__in=[
+            RestaurantCampaignApplication.STATUS_REJECTED,
+            RestaurantCampaignApplication.STATUS_CANCELLED,
+        ]).first()
+        if existing:
+            return Response({"detail": "해당 주에 이미 신청 내역이 있습니다.", "existing_id": existing.id}, status=409)
+
+        slot_info = _get_week_slot_counts(week_start)
+        if slot_info["available_slots"] <= 0:
+            return Response({"detail": "해당 주의 캠페인 슬롯이 마감되었습니다.", **slot_info}, status=400)
+
+        # 플랜 월간 한도 확인
+        try:
+            profile = OwnerProfile.objects.get(user=user)
+            tier = profile.tier
+        except OwnerProfile.DoesNotExist:
+            tier = "FREE"
+
+        plan_limit = RestaurantPlanCampaignLimit.objects.filter(plan_name=tier).first()
+        if plan_limit and plan_limit.max_per_month > 0:
+            import calendar
+            year, month = today.year, today.month
+            last_day = calendar.monthrange(year, month)[1]
+            month_start = date_type(year, month, 1)
+            month_end = date_type(year, month, last_day)
+            month_count = RestaurantCampaignApplication.objects.filter(
+                restaurant_id=restaurant_id,
+                week_start__gte=month_start,
+                week_start__lte=month_end,
+            ).exclude(status=RestaurantCampaignApplication.STATUS_CANCELLED).count()
+            if month_count >= plan_limit.max_per_month:
+                return Response({
+                    "detail": f"이번 달 캠페인 신청 한도({plan_limit.max_per_month}회)를 초과했습니다.",
+                    "plan": tier, "max_per_month": plan_limit.max_per_month,
+                }, status=400)
+
+        coupon_title = (request.data.get("coupon_title") or "").strip()
+        if not coupon_title:
+            return Response({"detail": "쿠폰 제목(coupon_title)은 필수입니다."}, status=400)
+
+        benefit_type = request.data.get("benefit_type", "OTHER")
+        if benefit_type not in dict(RestaurantCampaignApplication.BENEFIT_TYPE_CHOICES):
+            return Response({"detail": "benefit_type 값이 올바르지 않습니다."}, status=400)
+
+        restaurant_name = (request.data.get("restaurant_name") or "").strip()
+        if not restaurant_name:
+            try:
+                restaurant_name = AffiliateRestaurant.objects.get(restaurant_id=restaurant_id).name
+            except AffiliateRestaurant.DoesNotExist:
+                restaurant_name = f"식당#{restaurant_id}"
+
+        # REJECTED / CANCELLED 재신청이면 기존 레코드 업데이트, 없으면 생성
+        old = RestaurantCampaignApplication.objects.filter(
+            restaurant_id=restaurant_id, week_start=week_start,
+            status__in=[
+                RestaurantCampaignApplication.STATUS_REJECTED,
+                RestaurantCampaignApplication.STATUS_CANCELLED,
+            ],
+        ).first()
+
+        common_fields = dict(
+            restaurant_name=restaurant_name,
+            coupon_title=coupon_title,
+            coupon_subtitle=(request.data.get("coupon_subtitle") or "").strip(),
+            coupon_notes=(request.data.get("coupon_notes") or "").strip(),
+            benefit_type=benefit_type,
+            benefit_value=request.data.get("benefit_value"),
+            campaign_description=(request.data.get("campaign_description") or "").strip(),
+            status=RestaurantCampaignApplication.STATUS_PENDING,
+            admin_notes="",
+            applied_by=user,
+            reviewed_by=None,
+            reviewed_at=None,
+        )
+
+        if old:
+            for k, v in common_fields.items():
+                setattr(old, k, v)
+            old.save()
+            app = old
+        else:
+            app = RestaurantCampaignApplication.objects.create(
+                restaurant_id=restaurant_id,
+                week_start=week_start,
+                **common_fields,
+            )
+
+        return Response(_serialize_campaign(app), status=201)
+
+
+class OwnerCampaignDetailView(APIView):
+    """GET: 상세 / DELETE: 취소"""
+
+    def _get_app(self, request, pk):
+        try:
+            payload = request.auth
+            if not payload.get("is_owner"):
+                return None, Response({"detail": "점주 권한이 필요합니다."}, status=403)
+            restaurant_id = int(payload.get("restaurant_id", 0))
+            app = RestaurantCampaignApplication.objects.get(pk=pk, restaurant_id=restaurant_id)
+            return app, None
+        except RestaurantCampaignApplication.DoesNotExist:
+            return None, Response({"detail": "캠페인을 찾을 수 없습니다."}, status=404)
+        except Exception:
+            return None, Response({"detail": "인증 오류."}, status=401)
+
+    def get(self, request, pk):
+        app, err = self._get_app(request, pk)
+        if err:
+            return err
+        return Response(_serialize_campaign(app))
+
+    def delete(self, request, pk):
+        app, err = self._get_app(request, pk)
+        if err:
+            return err
+        if app.status == RestaurantCampaignApplication.STATUS_APPROVED:
+            return Response({"detail": "승인된 캠페인은 취소할 수 없습니다. 관리자에게 문의하세요."}, status=400)
+        app.status = RestaurantCampaignApplication.STATUS_CANCELLED
+        app.save(update_fields=["status", "updated_at"])
+        return Response({"detail": "취소되었습니다."})
+
+
+class OwnerCampaignSlotView(APIView):
+    """향후 12주 슬롯 현황 + 신청 가능 여부 반환."""
+
+    def get(self, request):
+        try:
+            if not request.auth.get("is_owner") and not request.auth.get("is_admin"):
+                return Response({"detail": "권한이 필요합니다."}, status=403)
+        except Exception:
+            return Response({"detail": "인증 오류."}, status=401)
+
+        today = date_type.today()
+        weeks = []
+        for i in range(1, 13):
+            ws = _week_monday(today + timedelta(weeks=i))
+            info = _get_week_slot_counts(ws)
+            deadline = ws - timedelta(days=7)
+            info.update({
+                "week_start": ws.isoformat(),
+                "week_end": (ws + timedelta(days=6)).isoformat(),
+                "can_apply": info["available_slots"] > 0 and today < deadline,
+                "deadline": deadline.isoformat(),
+            })
+            weeks.append(info)
+        return Response(weeks)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 관리자 — 캠페인 캘린더 / 승인·반려 / 주간 설정 / 플랜 한도
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class AdminCampaignCalendarView(APIView):
+    """GET: year/month 기준 월간 캠페인 현황 (주 단위 그룹)."""
+
+    def get(self, request):
+        try:
+            if not request.auth.get("is_admin"):
+                return Response({"detail": "관리자 권한이 필요합니다."}, status=403)
+        except Exception:
+            return Response({"detail": "인증 오류."}, status=401)
+
+        try:
+            year = int(request.query_params.get("year", date_type.today().year))
+            month = int(request.query_params.get("month", date_type.today().month))
+        except ValueError:
+            return Response({"detail": "year/month 형식 오류."}, status=400)
+
+        from calendar import monthrange
+        first_day = date_type(year, month, 1)
+        last_day = date_type(year, month, monthrange(year, month)[1])
+        week_start = _week_monday(first_day)
+        weeks = []
+        while week_start <= last_day:
+            slot_info = _get_week_slot_counts(week_start)
+            apps = RestaurantCampaignApplication.objects.filter(week_start=week_start)
+            weeks.append({
+                "week_start": week_start.isoformat(),
+                "week_end": (week_start + timedelta(days=6)).isoformat(),
+                **slot_info,
+                "applications": [_serialize_campaign(a) for a in apps],
+            })
+            week_start += timedelta(weeks=1)
+
+        return Response(weeks)
+
+
+class AdminCampaignDetailView(APIView):
+    """GET: 상세 / PATCH: 승인·반려·수정 / DELETE: 삭제."""
+
+    def _check_admin(self, request):
+        try:
+            if not request.auth.get("is_admin"):
+                return Response({"detail": "관리자 권한이 필요합니다."}, status=403)
+        except Exception:
+            return Response({"detail": "인증 오류."}, status=401)
+        return None
+
+    def _get_app(self, pk):
+        try:
+            return RestaurantCampaignApplication.objects.get(pk=pk), None
+        except RestaurantCampaignApplication.DoesNotExist:
+            return None, Response({"detail": "캠페인을 찾을 수 없습니다."}, status=404)
+
+    def get(self, request, pk):
+        err = self._check_admin(request)
+        if err:
+            return err
+        app, err = self._get_app(pk)
+        if err:
+            return err
+        return Response(_serialize_campaign(app))
+
+    def patch(self, request, pk):
+        err = self._check_admin(request)
+        if err:
+            return err
+        app, err = self._get_app(pk)
+        if err:
+            return err
+
+        action = request.data.get("action")
+        now = timezone.now()
+        reviewer = request.user
+
+        if action == "approve":
+            if app.status not in (
+                RestaurantCampaignApplication.STATUS_PENDING,
+                RestaurantCampaignApplication.STATUS_REJECTED_HOLD,
+            ):
+                return Response({"detail": f"'{app.status}' 상태에서는 승인할 수 없습니다."}, status=400)
+            app.status = RestaurantCampaignApplication.STATUS_APPROVED
+            app.reviewed_by = reviewer
+            app.reviewed_at = now
+            if "admin_notes" in request.data:
+                app.admin_notes = (request.data["admin_notes"] or "").strip()
+            app.save()
+
+        elif action == "reject":
+            app.status = RestaurantCampaignApplication.STATUS_REJECTED
+            app.reviewed_by = reviewer
+            app.reviewed_at = now
+            app.admin_notes = (request.data.get("admin_notes") or "").strip()
+            app.save()
+
+        elif action == "reject_hold":
+            app.status = RestaurantCampaignApplication.STATUS_REJECTED_HOLD
+            app.reviewed_by = reviewer
+            app.reviewed_at = now
+            app.admin_notes = (request.data.get("admin_notes") or "").strip()
+            app.save()
+
+        elif action == "update" or action is None:
+            editable = ["coupon_title", "coupon_subtitle", "coupon_notes",
+                        "benefit_type", "benefit_value", "campaign_description", "admin_notes"]
+            for field in editable:
+                if field in request.data:
+                    val = request.data[field]
+                    if isinstance(val, str):
+                        val = val.strip()
+                    setattr(app, field, val)
+            app.save()
+        else:
+            return Response({"detail": f"알 수 없는 action: {action}"}, status=400)
+
+        return Response(_serialize_campaign(app))
+
+    def delete(self, request, pk):
+        err = self._check_admin(request)
+        if err:
+            return err
+        app, err = self._get_app(pk)
+        if err:
+            return err
+        app.delete()
+        return Response(status=204)
+
+
+class AdminCampaignWeekConfigView(APIView):
+    """GET: 주간 설정 목록 / PUT: 슬롯 수 설정."""
+
+    def _check_admin(self, request):
+        try:
+            if not request.auth.get("is_admin"):
+                return Response({"detail": "관리자 권한이 필요합니다."}, status=403)
+        except Exception:
+            return Response({"detail": "인증 오류."}, status=401)
+        return None
+
+    def get(self, request):
+        err = self._check_admin(request)
+        if err:
+            return err
+        configs = list(RestaurantCampaignWeekConfig.objects.all().order_by("week_start"))
+        return Response([
+            {
+                "id": c.id,
+                "week_start": c.week_start.isoformat() if c.week_start else None,
+                "max_slots": c.max_slots,
+                "is_default": c.week_start is None,
+            }
+            for c in configs
+        ])
+
+    def put(self, request):
+        err = self._check_admin(request)
+        if err:
+            return err
+
+        week_start_str = request.data.get("week_start")
+        max_slots = request.data.get("max_slots")
+        if max_slots is None:
+            return Response({"detail": "max_slots 필드가 필요합니다."}, status=400)
+        try:
+            max_slots = int(max_slots)
+        except (ValueError, TypeError):
+            return Response({"detail": "max_slots는 정수여야 합니다."}, status=400)
+
+        week_start = None
+        if week_start_str:
+            try:
+                week_start = _week_monday(date_type.fromisoformat(week_start_str))
+                today = date_type.today()
+                if week_start <= today <= week_start + timedelta(days=6):
+                    return Response({"detail": "진행 중인 캠페인 주의 슬롯 수는 변경할 수 없습니다."}, status=400)
+            except ValueError:
+                return Response({"detail": "week_start 형식 오류."}, status=400)
+
+        cfg, _ = RestaurantCampaignWeekConfig.objects.update_or_create(
+            week_start=week_start, defaults={"max_slots": max_slots}
+        )
+        return Response({
+            "id": cfg.id,
+            "week_start": cfg.week_start.isoformat() if cfg.week_start else None,
+            "max_slots": cfg.max_slots,
+            "is_default": cfg.week_start is None,
+        })
+
+
+class AdminPlanCampaignLimitView(APIView):
+    """GET: 플랜별 월간 한도 / PUT: 수정."""
+
+    def _check_admin(self, request):
+        try:
+            if not request.auth.get("is_admin"):
+                return Response({"detail": "관리자 권한이 필요합니다."}, status=403)
+        except Exception:
+            return Response({"detail": "인증 오류."}, status=401)
+        return None
+
+    def get(self, request):
+        err = self._check_admin(request)
+        if err:
+            return err
+        limits = {lim.plan_name: lim.max_per_month for lim in RestaurantPlanCampaignLimit.objects.all()}
+        for plan in ["FREE", "BOOST", "CONTENT"]:
+            limits.setdefault(plan, 0)
+        return Response(limits)
+
+    def put(self, request):
+        err = self._check_admin(request)
+        if err:
+            return err
+        for plan in ["FREE", "BOOST", "CONTENT"]:
+            if plan in request.data:
+                try:
+                    val = int(request.data[plan])
+                except (ValueError, TypeError):
+                    return Response({"detail": f"{plan} 값이 올바르지 않습니다."}, status=400)
+                RestaurantPlanCampaignLimit.objects.update_or_create(
+                    plan_name=plan, defaults={"max_per_month": val}
+                )
+        return Response({"detail": "저장되었습니다."})
+
+
+class AdminCampaignHistoryView(APIView):
+    """관리자 — 전체 캠페인 이력."""
+
+    def get(self, request):
+        try:
+            if not request.auth.get("is_admin"):
+                return Response({"detail": "관리자 권한이 필요합니다."}, status=403)
+        except Exception:
+            return Response({"detail": "인증 오류."}, status=401)
+
+        qs = RestaurantCampaignApplication.objects.all()
+        rid = request.query_params.get("restaurant_id")
+        if rid:
+            qs = qs.filter(restaurant_id=rid)
+        st = request.query_params.get("status")
+        if st:
+            qs = qs.filter(status=st)
+        return Response([_serialize_campaign(a) for a in qs[:200]])

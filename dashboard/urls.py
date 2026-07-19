@@ -30,4 +30,13 @@ urlpatterns = [
     path("owner/notification-schedule/<int:pk>/", views.OwnerNotificationScheduleView.as_view()),
     path("admin/restaurant-notifications/", views.AdminRestaurantNotificationView.as_view()),
     path("admin/restaurant-notifications/<int:pk>/", views.AdminRestaurantNotificationView.as_view()),
+    # 식당 캠페인
+    path("owner/campaigns/", views.OwnerCampaignView.as_view()),
+    path("owner/campaigns/<int:pk>/", views.OwnerCampaignDetailView.as_view()),
+    path("owner/campaigns/slots/", views.OwnerCampaignSlotView.as_view()),
+    path("admin/campaigns/", views.AdminCampaignCalendarView.as_view()),
+    path("admin/campaigns/<int:pk>/", views.AdminCampaignDetailView.as_view()),
+    path("admin/campaigns/history/", views.AdminCampaignHistoryView.as_view()),
+    path("admin/campaigns/week-config/", views.AdminCampaignWeekConfigView.as_view()),
+    path("admin/campaigns/plan-limits/", views.AdminPlanCampaignLimitView.as_view()),
 ]

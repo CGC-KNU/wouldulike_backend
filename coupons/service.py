@@ -2440,6 +2440,123 @@ def claim_world_cup_daily_code_coupon(user: User, coupon_code: str) -> dict:
     }
 
 
+def _issue_restaurant_campaigns(user: User, *, db_alias: str | None = None) -> list:
+    """
+    현재 진행 중인 식당 캠페인(APPROVED, 이번 주) 대상으로 사용자에게 쿠폰 발급.
+    - 식당별 캠페인 1장 / 사용자 / 주 (issue_key로 중복 방지)
+    - CouponType code: RESTAURANT_CAMPAIGN (DB에 미리 생성 필요)
+    - Campaign code: RESTAURANT_CAMPAIGN_EVENT (DB에 미리 생성 필요)
+    - 위 레코드가 없으면 warning 로그 후 skip
+    """
+    alias = db_alias or router.db_for_write(Coupon)
+    try:
+        ct = CouponType.objects.using(alias).get(code="RESTAURANT_CAMPAIGN")
+    except CouponType.DoesNotExist:
+        logger.warning("_issue_restaurant_campaigns: CouponType RESTAURANT_CAMPAIGN not found — create it in admin")
+        return []
+    try:
+        camp = Campaign.objects.using(alias).get(code="RESTAURANT_CAMPAIGN_EVENT", active=True)
+    except Campaign.DoesNotExist:
+        logger.warning("_issue_restaurant_campaigns: Campaign RESTAURANT_CAMPAIGN_EVENT not found or inactive")
+        return []
+
+    try:
+        from django.utils import timezone as tz
+        from dashboard.models import RestaurantCampaignApplication
+
+        today_kst = tz.now().astimezone(__import__("zoneinfo").ZoneInfo("Asia/Seoul")).date()
+        # 이번 주 월요일
+        week_start = today_kst - __import__("datetime").timedelta(days=today_kst.weekday())
+
+        active_apps = list(
+            RestaurantCampaignApplication.objects.filter(
+                week_start=week_start,
+                status=RestaurantCampaignApplication.STATUS_APPROVED,
+            )
+        )
+    except Exception as e:
+        logger.warning("_issue_restaurant_campaigns: failed to query active campaigns: %s", e)
+        return []
+
+    if not active_apps:
+        return []
+
+    # 이미 이번 주에 이 유저에게 발급된 캠페인 키 조회
+    week_prefix = f"RCAMPAIGN:{week_start.strftime('%Y%m%d')}:{user.id}:"
+    existing_keys = set(
+        Coupon.objects.using(alias)
+        .filter(user=user, coupon_type=ct, campaign=camp, issue_key__startswith=week_prefix)
+        .values_list("issue_key", flat=True)
+    )
+
+    issued: list = []
+    for app in active_apps:
+        issue_key = f"{week_prefix}{app.id}"
+        if issue_key in existing_keys:
+            # 이미 발급됨
+            dup = Coupon.objects.using(alias).filter(
+                user=user, coupon_type=ct, campaign=camp, issue_key=issue_key
+            ).first()
+            if dup:
+                issued.append(dup)
+            continue
+
+        # benefit_snapshot: 캠페인 신청 내용 기반
+        benefit_snapshot = {
+            "coupon_type_code": ct.code,
+            "coupon_type_title": app.coupon_title,
+            "restaurant_id": app.restaurant_id,
+            "restaurant_name": app.restaurant_name,
+            "title": app.coupon_title,
+            "subtitle": app.coupon_subtitle or f"[캠페인 쿠폰] {app.restaurant_name}",
+            "notes": app.coupon_notes,
+            "benefit": {
+                "type": app.benefit_type.lower(),
+                "value": app.benefit_value,
+                "label": app.benefit_label(),
+            },
+            "campaign_description": app.campaign_description,
+            "campaign_application_id": app.id,
+        }
+
+        # 만료: 해당 주 일요일 23:59:59 KST
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo  # type: ignore
+        kst = ZoneInfo("Asia/Seoul")
+        import datetime as _dt
+        week_end = week_start + _dt.timedelta(days=6)
+        expires_at = _dt.datetime.combine(week_end, _dt.time(23, 59, 59), tzinfo=kst)
+
+        try:
+            coupon = Coupon.objects.using(alias).create(
+                code=make_coupon_code(),
+                user=user,
+                coupon_type=ct,
+                campaign=camp,
+                restaurant_id=app.restaurant_id,
+                expires_at=expires_at,
+                issue_key=issue_key,
+                benefit_snapshot=benefit_snapshot,
+            )
+            issued.append(coupon)
+            existing_keys.add(issue_key)
+            logger.info(
+                "restaurant_campaign coupon issued: user=%s app_id=%s restaurant=%s",
+                user.id, app.id, app.restaurant_name,
+            )
+        except IntegrityError:
+            dup = Coupon.objects.using(alias).filter(
+                user=user, coupon_type=ct, campaign=camp, issue_key=issue_key
+            ).first()
+            if dup:
+                issued.append(dup)
+                existing_keys.add(issue_key)
+
+    return issued
+
+
 def issue_app_open_coupon(user: User, *, include_standard: bool = True):
     """
     앱 접속(로그인/토큰 갱신/쿠폰함 등) 시점에 발급되는 쿠폰.
@@ -2472,6 +2589,9 @@ def issue_app_open_coupon(user: User, *, include_standard: bool = True):
 
     if APP_OPEN_MON_WED_ENABLED:
         issued.extend(_issue_app_open_mon_wed(user, db_alias=alias))
+
+    # 식당 캠페인 — 이번 주 승인된 캠페인 대상 쿠폰
+    issued.extend(_issue_restaurant_campaigns(user, db_alias=alias))
 
     return issued
 
