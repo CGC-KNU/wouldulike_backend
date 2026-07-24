@@ -66,6 +66,22 @@ class AdminConfig(models.Model):
         return f"AdminConfig:{self.key}"
 
 
+class AdminAccount(models.Model):
+    """추가 관리자 계정 (최대 MAX_ACCOUNTS명). 환경변수 슈퍼어드민과 별개로 로그인 가능."""
+    MAX_ACCOUNTS = 8
+
+    username = models.CharField(max_length=64, unique=True)
+    password_hash = models.TextField()
+    is_active = models.BooleanField(default=True, help_text="비활성화 시 로그인 불가")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "dashboard_admin_account"
+
+    def __str__(self):
+        return f"AdminAccount:{self.username}"
+
+
 # ─── 식당 캠페인 ───────────────────────────────────────────────────────────────
 
 class RestaurantCampaignApplication(models.Model):

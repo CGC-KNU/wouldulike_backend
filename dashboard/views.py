@@ -26,7 +26,7 @@ from django.db.models import Q
 from restaurants.models import AffiliateRestaurant
 from accounts.models import User
 from trends.models import Trend, PopupCampaign
-from .models import OwnerProfile, AdminConfig, RestaurantCampaignApplication, RestaurantCampaignWeekConfig, RestaurantPlanCampaignLimit
+from .models import OwnerProfile, AdminConfig, AdminAccount, RestaurantCampaignApplication, RestaurantCampaignWeekConfig, RestaurantPlanCampaignLimit
 
 logger = logging.getLogger(__name__)
 
@@ -207,23 +207,28 @@ class AppTokenView(APIView):
 
 class AdminLoginView(APIView):
     """
-    환경변수 기반 관리자 로그인 (DASHBOARD_ADMIN_USERNAME / DASHBOARD_ADMIN_PASSWORD)
+    관리자 로그인. AdminAccount DB 계정 우선, 없으면 환경변수 슈퍼어드민으로 폴백.
     POST /api/dashboard/auth/admin-login/
     Body: { username, password }
     """
     permission_classes = [AllowAny]
 
+    def _issue_token(self, username: str, is_superadmin: bool = False):
+        """JWT 발급 (kakao_id=0 고정 더미 유저)."""
+        user, _ = User.objects.get_or_create(
+            kakao_id=0,
+            defaults={"username": "0", "is_staff": True, "is_superuser": True},
+        )
+        refresh = RefreshToken.for_user(user)
+        refresh["is_owner"] = True
+        refresh["is_admin"] = True
+        refresh["is_superadmin"] = is_superadmin
+        refresh["admin_username"] = username
+        return {"success": True, "access": str(refresh.access_token), "refresh": str(refresh)}
+
     def post(self, request):
         import os
-        admin_username = os.getenv("DASHBOARD_ADMIN_USERNAME", "")
-        admin_password = os.getenv("DASHBOARD_ADMIN_PASSWORD", "")
-
-        if not admin_username or not admin_password:
-            logger.error("AdminLogin: DASHBOARD_ADMIN_USERNAME/PASSWORD not set")
-            return Response(
-                {"success": False, "message": "관리자 계정이 설정되지 않았습니다."},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE,
-            )
+        from django.contrib.auth.hashers import check_password as _check
 
         username = (request.data.get("username") or "").strip()
         password = request.data.get("password") or ""
@@ -234,12 +239,42 @@ class AdminLoginView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # DB에 저장된 비밀번호가 있으면 우선 사용, 없으면 환경변수로 폴백
+        # 1. AdminAccount DB 계정 확인
+        try:
+            acc = AdminAccount.objects.get(username=username)
+            if not _check(password, acc.password_hash):
+                logger.warning(f"AdminLogin (DB account) wrong password: {username!r}")
+                return Response(
+                    {"success": False, "message": "아이디 또는 비밀번호가 올바르지 않습니다."},
+                    status=status.HTTP_401_UNAUTHORIZED,
+                )
+            if not acc.is_active:
+                logger.warning(f"AdminLogin (DB account) inactive: {username!r}")
+                return Response(
+                    {"success": False, "message": "비활성화된 계정입니다. 슈퍼어드민에게 문의하세요."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            logger.info(f"AdminLogin (DB account) success: {username!r}")
+            return Response(self._issue_token(username, is_superadmin=False))
+        except AdminAccount.DoesNotExist:
+            pass
+
+        # 2. 환경변수 슈퍼어드민 폴백
+        env_username = os.getenv("DASHBOARD_ADMIN_USERNAME", "")
+        env_password = os.getenv("DASHBOARD_ADMIN_PASSWORD", "")
+
+        if not env_username or not env_password:
+            logger.error("AdminLogin: DASHBOARD_ADMIN_USERNAME/PASSWORD not set")
+            return Response(
+                {"success": False, "message": "아이디 또는 비밀번호가 올바르지 않습니다."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
         db_pw = AdminConfig.get("main_password_hash")
         if db_pw:
-            valid = (username == admin_username and AdminConfig.check_password("main_password_hash", password))
+            valid = (username == env_username and AdminConfig.check_password("main_password_hash", password))
         else:
-            valid = (username == admin_username and password == admin_password)
+            valid = (username == env_username and password == env_password)
 
         if not valid:
             logger.warning(f"AdminLogin failed for username={username!r}")
@@ -248,22 +283,147 @@ class AdminLoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        # JWT 발급용 더미 관리자 유저 (kakao_id=0 으로 고정)
-        user, _ = User.objects.get_or_create(
-            kakao_id=0,
-            defaults={"username": "0", "is_staff": True, "is_superuser": True},
+        logger.info(f"AdminLogin (env superadmin) success: {username!r}")
+        return Response(self._issue_token(username, is_superadmin=True))
+
+
+class AdminMeView(APIView):
+    """
+    현재 로그인한 관리자 정보 반환.
+    GET /api/dashboard/admin/me/
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not request.auth.get("is_admin"):
+            return Response({"detail": "관리자 권한이 필요합니다."}, status=403)
+        return Response({
+            "username": request.auth.get("admin_username", ""),
+            "is_superadmin": bool(request.auth.get("is_superadmin", False)),
+        })
+
+
+class AdminVerifySecondaryView(APIView):
+    """
+    슈퍼어드민 2차 비밀번호 확인.
+    POST /api/dashboard/admin/verify-secondary/
+    Body: { password }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not request.auth.get("is_superadmin"):
+            return Response({"detail": "슈퍼어드민 권한이 필요합니다."}, status=403)
+
+        password = request.data.get("password") or ""
+        if not password:
+            return Response({"valid": False, "detail": "비밀번호를 입력해주세요."}, status=400)
+
+        # secondary_password_hash가 설정돼 있는지 확인
+        if not AdminConfig.get("secondary_password_hash"):
+            return Response({"valid": False, "not_set": True, "detail": "2차 비밀번호가 설정되지 않았습니다."}, status=400)
+
+        valid = AdminConfig.check_password("secondary_password_hash", password)
+        if valid:
+            return Response({"valid": True})
+        return Response({"valid": False, "detail": "2차 비밀번호가 올바르지 않습니다."}, status=401)
+
+
+class AdminAccountView(APIView):
+    """
+    관리자 계정 관리 — 슈퍼어드민 전용 (최대 8명)
+    GET    /api/dashboard/admin/accounts/            — 목록
+    POST   /api/dashboard/admin/accounts/            — 생성
+    DELETE /api/dashboard/admin/accounts/<username>/ — 삭제
+    PATCH  /api/dashboard/admin/accounts/<username>/ — 비밀번호 초기화 or is_active 토글
+    """
+    permission_classes = [IsAuthenticated]
+
+    def _check_superadmin(self, request):
+        try:
+            if not request.auth.get("is_superadmin"):
+                return Response({"detail": "슈퍼어드민 권한이 필요합니다."}, status=403)
+        except Exception:
+            return Response({"detail": "인증 오류."}, status=401)
+        return None
+
+    def get(self, request):
+        err = self._check_superadmin(request)
+        if err:
+            return err
+        accounts = AdminAccount.objects.all().order_by("created_at")
+        return Response([
+            {
+                "username": a.username,
+                "is_active": a.is_active,
+                "created_at": a.created_at.isoformat(),
+            }
+            for a in accounts
+        ])
+
+    def post(self, request):
+        err = self._check_superadmin(request)
+        if err:
+            return err
+
+        if AdminAccount.objects.count() >= AdminAccount.MAX_ACCOUNTS:
+            return Response(
+                {"detail": f"최대 {AdminAccount.MAX_ACCOUNTS}개 계정까지 생성 가능합니다."},
+                status=400,
+            )
+
+        username = (request.data.get("username") or "").strip()
+        password = request.data.get("password") or ""
+
+        if not username or not password:
+            return Response({"detail": "아이디와 비밀번호를 입력해주세요."}, status=400)
+        if len(password) < 4:
+            return Response({"detail": "비밀번호는 4자 이상이어야 합니다."}, status=400)
+        if AdminAccount.objects.filter(username=username).exists():
+            return Response({"detail": "이미 사용 중인 아이디입니다."}, status=409)
+
+        from django.contrib.auth.hashers import make_password as _mp
+        acc = AdminAccount.objects.create(username=username, password_hash=_mp(password))
+        return Response(
+            {"username": acc.username, "is_active": acc.is_active, "created_at": acc.created_at.isoformat()},
+            status=201,
         )
 
-        refresh = RefreshToken.for_user(user)
-        refresh["is_owner"] = True
-        refresh["is_admin"] = True
+    def delete(self, request, username=None):
+        err = self._check_superadmin(request)
+        if err:
+            return err
+        try:
+            AdminAccount.objects.get(username=username).delete()
+        except AdminAccount.DoesNotExist:
+            return Response({"detail": "계정을 찾을 수 없습니다."}, status=404)
+        return Response(status=204)
 
-        logger.info(f"AdminLogin success for username={username!r}")
-        return Response({
-            "success": True,
-            "access": str(refresh.access_token),
-            "refresh": str(refresh),
-        })
+    def patch(self, request, username=None):
+        """비밀번호 초기화 or is_active 토글."""
+        err = self._check_superadmin(request)
+        if err:
+            return err
+        try:
+            acc = AdminAccount.objects.get(username=username)
+        except AdminAccount.DoesNotExist:
+            return Response({"detail": "계정을 찾을 수 없습니다."}, status=404)
+
+        # is_active 토글
+        if "is_active" in request.data:
+            acc.is_active = bool(request.data["is_active"])
+            acc.save()
+            return Response({"username": acc.username, "is_active": acc.is_active})
+
+        # 비밀번호 초기화
+        new_pw = request.data.get("new_password") or ""
+        if len(new_pw) < 4:
+            return Response({"detail": "비밀번호는 4자 이상이어야 합니다."}, status=400)
+
+        from django.contrib.auth.hashers import make_password as _mp
+        acc.password_hash = _mp(new_pw)
+        acc.save()
+        return Response({"username": acc.username, "is_active": acc.is_active})
 
 
 class RestaurantInfoView(APIView):
