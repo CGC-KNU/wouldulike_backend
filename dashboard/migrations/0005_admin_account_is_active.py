@@ -1,16 +1,14 @@
-from django.db import migrations, models
+"""
+파일명 충돌 방지용 no-op migration.
+실제 is_active 필드 추가는 0006_admin_account_is_active.py 에서 진행합니다.
+"""
+from django.db import migrations
 
 
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("dashboard", "0004_admin_account"),
+        ("dashboard", "0005_admin_account"),
     ]
 
-    operations = [
-        migrations.AddField(
-            model_name="adminaccount",
-            name="is_active",
-            field=models.BooleanField(default=True, help_text="비활성화 시 로그인 불가"),
-        ),
-    ]
+    operations = []
